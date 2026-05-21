@@ -652,7 +652,7 @@ async fn add_security_headers(mut response: Response) -> Response {
     insert_static_header(
         headers,
         "content-security-policy",
-        "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'",
+        "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'none'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'",
     );
     insert_static_header(headers, "cross-origin-embedder-policy", "require-corp");
     insert_static_header(headers, "cross-origin-opener-policy", "same-origin");

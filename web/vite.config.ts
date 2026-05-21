@@ -28,6 +28,13 @@ interface RunResponse extends CommandResult {
 
 const RUN_TIMEOUT_MS = 5_000
 const MAX_BODY_BYTES = 1_000_000
+const CROSS_ORIGIN_ISOLATION_HEADERS = {
+  "Cross-Origin-Opener-Policy": "same-origin",
+  "Cross-Origin-Embedder-Policy": "require-corp",
+  "Cross-Origin-Resource-Policy": "same-origin",
+  "Content-Security-Policy":
+    "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'none'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'",
+}
 
 const WASMBUILD_ARGS = [
   "run",
@@ -56,6 +63,7 @@ const exampleRouteFallback = (): Plugin => ({
       }
 
       const html = await readFile(resolve("index.html"), "utf8")
+      setCrossOriginIsolationHeaders(response)
       response.setHeader("Content-Type", "text/html")
       response.end(await server.transformIndexHtml(request.url ?? "/", html))
     })
@@ -67,6 +75,7 @@ const exampleRouteFallback = (): Plugin => ({
         return
       }
 
+      setCrossOriginIsolationHeaders(response)
       response.setHeader("Content-Type", "text/html")
       response.end(await readFile(resolve("dist/index.html"), "utf8"))
     })
@@ -118,6 +127,22 @@ const wasmAutoRebuild = (): Plugin => {
     },
   }
 }
+
+const crossOriginIsolationHeaders = (): Plugin => ({
+  name: "cross-origin-isolation-headers",
+  configureServer: (server) => {
+    server.middlewares.use((_request, response, next) => {
+      setCrossOriginIsolationHeaders(response)
+      next()
+    })
+  },
+  configurePreviewServer: (server) => {
+    server.middlewares.use((_request, response, next) => {
+      setCrossOriginIsolationHeaders(response)
+      next()
+    })
+  },
+})
 
 const localRunApi = (): Plugin => ({
   name: "local-run-api",
@@ -258,11 +283,18 @@ const sendJson = (response: ServerResponse, status: number, body: unknown) => {
   response.end(JSON.stringify(body))
 }
 
+const setCrossOriginIsolationHeaders = (response: ServerResponse) => {
+  for (const [name, value] of Object.entries(CROSS_ORIGIN_ISOLATION_HEADERS)) {
+    response.setHeader(name, value)
+  }
+}
+
 // https://vite.dev/config/
 export default defineConfig({
   appType: "spa",
   resolve: { dedupe: ["preact", "preact/hooks", "preact/jsx-runtime"] },
   plugins: [
+    crossOriginIsolationHeaders(),
     wasmAutoRebuild(),
     localRunApi(),
     exampleRouteFallback(),

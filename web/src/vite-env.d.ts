@@ -10,3 +10,23 @@ interface ImportMeta {
     options?: ImportMetaGlobOptions,
   ): Record<string, T>
 }
+
+declare module "*?worker" {
+  const WorkerFactory: { new (): Worker }
+  export default WorkerFactory
+}
+
+declare module "*?worker&url" {
+  const url: string
+  export default url
+}
+
+declare module "*?url" {
+  const url: string
+  export default url
+}
+
+declare module "*.js" {
+  const value: unknown
+  export default value
+}

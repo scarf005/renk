@@ -32,6 +32,7 @@ type SourcePanel = "rusk" | "ruk"
 type EditSide = "source" | "rust"
 type OutputMode = "rust" | "syntax-tree"
 type RunState = "idle" | "running"
+type BrowserRunState = "idle" | "loading" | "ready" | "running" | "error"
 
 type RunResponse = {
   ok: boolean
@@ -50,11 +51,12 @@ type RunResponse = {
 const env = (import.meta as ImportMeta & {
   env: { DEV: boolean; VITE_RUN_API?: string }
 }).env
-const canRunRust = env.DEV || env.VITE_RUN_API === "1"
+const canRunRust = env.VITE_RUN_API === "1"
 const BYTES_PER_KIB = 1024
 const RUN_SOURCE_LIMIT_KIB = 64
 const RUN_SOURCE_LIMIT_BYTES = RUN_SOURCE_LIMIT_KIB * BYTES_PER_KIB
 const RUN_SOURCE_LIMIT_LABEL = `${RUN_SOURCE_LIMIT_KIB} KiB`
+const RUBRC_DOWNLOAD_LABEL = "57 MB"
 
 const sourcePanel = signal<SourcePanel>("rusk")
 const editSide = signal<EditSide>("source")
@@ -66,6 +68,8 @@ const outputMode = signal<OutputMode>("rust")
 const runOutput = signal("")
 const runResult = signal<RunResponse | null>(null)
 const runState = signal<RunState>("idle")
+const browserRunState = signal<BrowserRunState>("idle")
+let browserRunner: Promise<typeof import("./rubrc/runner.ts")> | null = null
 
 const converted = computed(() => {
   const started = performance.now()
@@ -299,14 +303,7 @@ export function App() {
 
   const runRust = async () => {
     if (converted.value.error || runState.value === "running") return
-    if (
-      new TextEncoder().encode(converted.value.rust).length >
-        RUN_SOURCE_LIMIT_BYTES
-    ) {
-      runOutput.value =
-        `Rust source exceeds ${RUN_SOURCE_LIMIT_LABEL} run limit`
-      return
-    }
+    if (!validateRunSource()) return
 
     runState.value = "running"
     runResult.value = null
@@ -328,6 +325,62 @@ export function App() {
     } finally {
       runState.value = "idle"
     }
+  }
+
+  const loadBrowserRunner = async () => {
+    if (
+      browserRunState.value === "loading" || browserRunState.value === "running"
+    ) return
+    browserRunState.value = "loading"
+    runResult.value = null
+    try {
+      const runner = await getBrowserRunner()
+      await runner.loadRubrc((message) => runOutput.value = message)
+      browserRunState.value = "ready"
+      runOutput.value = "Rubrc ready"
+    } catch (error) {
+      browserRunState.value = "error"
+      runOutput.value = stringifyError(error)
+    }
+  }
+
+  const runRustInBrowser = async () => {
+    if (converted.value.error || browserRunState.value === "running") return
+    if (browserRunState.value !== "ready") {
+      await loadBrowserRunner()
+      return
+    }
+    if (!validateRunSource()) return
+
+    browserRunState.value = "running"
+    runResult.value = null
+    runOutput.value = "Running in browser..."
+    try {
+      const runner = await getBrowserRunner()
+      const result = await runner.runRustInBrowser(
+        converted.value.rust,
+        (message) => runOutput.value = message,
+      )
+      runResult.value = result
+      runOutput.value = formatRunOutput(result)
+    } catch (error) {
+      browserRunState.value = "error"
+      runOutput.value = stringifyError(error)
+    } finally {
+      if (browserRunState.value === "running") browserRunState.value = "ready"
+    }
+  }
+
+  const validateRunSource = () => {
+    if (
+      new TextEncoder().encode(converted.value.rust).length >
+        RUN_SOURCE_LIMIT_BYTES
+    ) {
+      runOutput.value =
+        `Rust source exceeds ${RUN_SOURCE_LIMIT_LABEL} run limit`
+      return false
+    }
+    return true
   }
 
   return (
@@ -450,6 +503,18 @@ export function App() {
                     {runState.value === "running" ? "Running" : "▶ Run"}
                   </button>
                 )}
+                {!canRunRust && outputMode.value === "rust" && (
+                  <button
+                    type="button"
+                    onClick={runRustInBrowser}
+                    disabled={browserRunState.value === "loading" ||
+                      browserRunState.value === "running" ||
+                      !!converted.value.error}
+                    class="text-xs uppercase font-bold px-3 py-1 border-2 border-black bg-white hover:bg-black hover:text-white disabled:opacity-50 disabled:hover:bg-white disabled:hover:text-black"
+                  >
+                    {browserRunButtonText(browserRunState.value)}
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={copyOutput}
@@ -494,6 +559,18 @@ export function App() {
       </Main>
     </Layout>
   )
+}
+
+function getBrowserRunner() {
+  browserRunner ??= import("./rubrc/runner.ts")
+  return browserRunner
+}
+
+function browserRunButtonText(state: BrowserRunState): string {
+  if (state === "loading") return "Downloading Rubrc"
+  if (state === "ready") return "Run in Browser"
+  if (state === "running") return "Running"
+  return `Download Rubrc (${RUBRC_DOWNLOAD_LABEL})`
 }
 
 function countLines(value: string): number {
