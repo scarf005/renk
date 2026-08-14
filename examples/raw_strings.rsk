@@ -5,5 +5,5 @@ pub fn contains_digit(value: &str) -> bool:
     value.chars().any(|character| character.is_ascii_digit())
 
 pub fn main():
-    println!("{}", pattern())
-    println!("{}", contains_digit("rusk1"))
+    println!("{pattern()}")
+    println!("{contains_digit("rusk1")}")

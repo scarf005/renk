@@ -1,5 +1,5 @@
 macro_rules! make_message:
-    ($name:expr) => format!("hello {}", $name)
+    ($name:expr) => format!("hello {$name}")
 
 macro_rules! log_count:
     ($values:expr) => dbg!($values.len())
@@ -14,5 +14,5 @@ pub fn assert_non_empty(values: &[i32]):
     assert!(!values.is_empty())
 
 pub fn main():
-    println!("{}", make_message("Ada"))
+    println!("{make_message("Ada")}")
     assert_non_empty(&[1])

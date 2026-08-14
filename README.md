@@ -18,7 +18,7 @@ impl User:
 
 pub fn main():
     let user = User.new(1, "Ada".to_string())
-    println!("{}", user.display_name())
+    println!("{user.display_name()}")
 ```
 
 Generated Rust:

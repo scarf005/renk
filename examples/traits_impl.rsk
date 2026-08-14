@@ -8,7 +8,7 @@ impl Named for User:
     fn name(&self) -> &str = &self.name
 
 pub fn greet(user: &impl Named):
-    println!("hello {}", user.name())
+    println!("hello {user.name()}")
 
 pub fn main():
     let user = User{ name: "Ada".to_string() }

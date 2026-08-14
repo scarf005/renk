@@ -1787,10 +1787,345 @@ fn closing_delimiters(text: &str) -> String {
 }
 
 fn lower_basic_expr(text: &str) -> String {
+    let text = lower_format_macros(text);
     replace_dotted_paths(
-        &replace_square_generics(text, GenericMode::Expr),
+        &replace_square_generics(&text, GenericMode::Expr),
         PathMode::Expr,
     )
+}
+
+fn lower_format_macros(text: &str) -> String {
+    let mut output = String::with_capacity(text.len());
+    let mut index = 0usize;
+    while index < text.len() {
+        let Some(character) = text[index..].chars().next() else {
+            break;
+        };
+        if matches!(character, '"' | '\'') {
+            let end = quoted_string_end(text, index);
+            output.push_str(&text[index..=end]);
+            index = end + 1;
+            continue;
+        }
+        if is_ident_start(character) {
+            let name_end = index + character.len_utf8();
+            let name_end = read_ident_at(text, name_end);
+            let name = &text[index..name_end];
+            let mut cursor = name_end;
+            skip_whitespace(text, &mut cursor);
+            if matches!(name, "println" | "format") && text[cursor..].starts_with('!') {
+                cursor += 1;
+                skip_whitespace(text, &mut cursor);
+                if text[cursor..].starts_with('(')
+                    && let Some(close) = matching_delimiter(text, cursor, '(', ')', true)
+                    && let Some(invocation) = lower_format_invocation(&text[cursor + 1..close])
+                {
+                    output.push_str(name);
+                    output.push_str(&text[name_end..cursor + 1]);
+                    output.push_str(&invocation);
+                    output.push(')');
+                    index = close + 1;
+                    continue;
+                }
+            }
+        }
+        output.push(character);
+        index += character.len_utf8();
+    }
+    output
+}
+
+fn lower_format_invocation(arguments: &str) -> Option<String> {
+    let arguments = split_macro_arguments(arguments, true);
+    let format_literal = arguments.first()?.trim();
+    let (content_start, content_end) = format_literal_bounds(format_literal)?;
+    let content = &format_literal[content_start..content_end];
+    let (content, expressions) = lower_format_string(content)?;
+    if expressions.is_empty() {
+        return None;
+    }
+
+    let mut lowered_arguments = Vec::with_capacity(arguments.len() + expressions.len());
+    lowered_arguments.push(format!(
+        "{}{}{}",
+        &format_literal[..content_start],
+        content,
+        &format_literal[content_end..]
+    ));
+    lowered_arguments.extend(
+        arguments
+            .iter()
+            .skip(1)
+            .map(|argument| argument.trim().to_string()),
+    );
+    let explicit_count = lowered_arguments.len() - 1;
+    for (index, expression) in expressions.into_iter().enumerate() {
+        let placeholder = if explicit_count == 0 {
+            "".to_string()
+        } else {
+            format!("{}", explicit_count + index)
+        };
+        let marker = format!("__rusk_inline_{}__", index);
+        lowered_arguments[0] = lowered_arguments[0].replace(&marker, &placeholder);
+        lowered_arguments.push(expression);
+    }
+    Some(lowered_arguments.join(", "))
+}
+
+fn lower_format_string(content: &str) -> Option<(String, Vec<String>)> {
+    let mut lowered = String::with_capacity(content.len());
+    let mut expressions = Vec::new();
+    let mut index = 0usize;
+    while index < content.len() {
+        let character = content[index..].chars().next()?;
+        if character == '{' {
+            if content[index + 1..].starts_with('{') {
+                lowered.push_str("{{");
+                index += 2;
+                continue;
+            }
+            let close = find_format_placeholder_end(content, index + 1)?;
+            let body = &content[index + 1..close];
+            let body = body.trim();
+            if is_standard_format_placeholder(body) {
+                lowered.push('{');
+                lowered.push_str(body);
+                lowered.push('}');
+            } else {
+                let (expression, specifier) = split_format_specifier(body);
+                let expression_index = expressions.len();
+                expressions.push(expression.to_string());
+                lowered.push('{');
+                lowered.push_str(&format!("__rusk_inline_{}__", expression_index));
+                if let Some(specifier) = specifier {
+                    lowered.push(':');
+                    lowered.push_str(specifier);
+                }
+                lowered.push('}');
+            }
+            index = close + 1;
+        } else if character == '}' && content[index + 1..].starts_with('}') {
+            lowered.push_str("}}");
+            index += 2;
+        } else {
+            lowered.push(character);
+            index += character.len_utf8();
+        }
+    }
+    Some((lowered, expressions))
+}
+
+fn is_standard_format_placeholder(body: &str) -> bool {
+    body.is_empty()
+        || body.starts_with(':')
+        || body.split_once(':').is_some_and(|(position, _)| {
+            !position.trim().is_empty() && position.trim().chars().all(|c| c.is_ascii_digit())
+        })
+        || body.chars().all(|c| c.is_ascii_digit())
+}
+
+fn split_format_specifier(body: &str) -> (&str, Option<&str>) {
+    let mut round = 0usize;
+    let mut square = 0usize;
+    let mut curly = 0usize;
+    let mut index = 0usize;
+    while index < body.len() {
+        let character = body[index..].chars().next().unwrap();
+        match character {
+            '(' => round += 1,
+            ')' => round = round.saturating_sub(1),
+            '[' => square += 1,
+            ']' => square = square.saturating_sub(1),
+            '{' => curly += 1,
+            '}' => curly = curly.saturating_sub(1),
+            '"' | '\'' => index = quoted_string_end(body, index),
+            ':' if round == 0
+                && square == 0
+                && curly == 0
+                && !body[index + 1..].starts_with(':')
+                && (index == 0 || !body[..index].ends_with(':')) =>
+            {
+                return (body[..index].trim(), Some(body[index + 1..].trim()));
+            }
+            _ => {}
+        }
+        index += character.len_utf8();
+    }
+    (body.trim(), None)
+}
+
+fn find_format_placeholder_end(text: &str, start: usize) -> Option<usize> {
+    let mut depth = 1usize;
+    let mut index = start;
+    while index < text.len() {
+        let character = text[index..].chars().next()?;
+        match character {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(index);
+                }
+            }
+            '"' | '\'' => index = quoted_string_end(text, index),
+            _ => {}
+        }
+        index += character.len_utf8();
+    }
+    None
+}
+
+fn format_literal_bounds(text: &str) -> Option<(usize, usize)> {
+    let quote = text.find('"')?;
+    if text[..quote]
+        .chars()
+        .any(|character| !matches!(character, 'b' | 'c' | 'r' | '#'))
+    {
+        return None;
+    }
+    let raw_hashes = text[..quote]
+        .chars()
+        .filter(|character| *character == '#')
+        .count();
+    let end = if raw_hashes > 0 {
+        let closing = format!("\"{}", "#".repeat(raw_hashes));
+        text[quote + 1..].find(&closing)? + quote + 1
+    } else {
+        format_string_end(text, quote)?
+    };
+    if !text[end + 1..].trim().is_empty() {
+        return None;
+    }
+    Some((quote + 1, end))
+}
+
+fn format_string_end(text: &str, start: usize) -> Option<usize> {
+    let mut placeholder_depth = 0usize;
+    let mut escaped = false;
+    let mut index = start + 1;
+    while index < text.len() {
+        let character = text[index..].chars().next()?;
+        if placeholder_depth > 0 {
+            match character {
+                '"' | '\'' => index = quoted_string_end(text, index),
+                '{' => placeholder_depth += 1,
+                '}' => placeholder_depth -= 1,
+                _ => {}
+            }
+        } else if escaped {
+            escaped = false;
+        } else {
+            match character {
+                '\\' => escaped = true,
+                '{' if text[index + 1..].starts_with('{') => index += 1,
+                '{' => placeholder_depth = 1,
+                '"' => return Some(index),
+                '}' if text[index + 1..].starts_with('}') => index += 1,
+                _ => {}
+            }
+        }
+        index += character.len_utf8();
+    }
+    None
+}
+
+fn split_macro_arguments(text: &str, format_macro: bool) -> Vec<&str> {
+    let mut arguments = Vec::new();
+    let mut start = 0usize;
+    let mut index = 0usize;
+    let mut round = 0usize;
+    let mut square = 0usize;
+    let mut curly = 0usize;
+    while index < text.len() {
+        let character = text[index..].chars().next().unwrap();
+        match character {
+            '(' => round += 1,
+            ')' => round = round.saturating_sub(1),
+            '[' => square += 1,
+            ']' => square = square.saturating_sub(1),
+            '{' => curly += 1,
+            '}' => curly = curly.saturating_sub(1),
+            '"' if format_macro => index = format_string_end(text, index).unwrap_or(index),
+            '"' | '\'' => index = quoted_string_end(text, index),
+            ',' if round == 0 && square == 0 && curly == 0 => {
+                arguments.push(&text[start..index]);
+                start = index + 1;
+            }
+            _ => {}
+        }
+        index += character.len_utf8();
+    }
+    if !text[start..].trim().is_empty() {
+        arguments.push(&text[start..]);
+    }
+    arguments
+}
+
+fn matching_delimiter(
+    text: &str,
+    open: usize,
+    opening: char,
+    closing: char,
+    format_macro: bool,
+) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut index = open;
+    while index < text.len() {
+        let character = text[index..].chars().next()?;
+        match character {
+            '"' if format_macro => index = format_string_end(text, index)?,
+            '"' | '\'' => index = quoted_string_end(text, index),
+            character if character == opening => depth += 1,
+            character if character == closing => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    return Some(index);
+                }
+            }
+            _ => {}
+        }
+        index += character.len_utf8();
+    }
+    None
+}
+
+fn quoted_string_end(text: &str, start: usize) -> usize {
+    let quote = text[start..].chars().next().unwrap();
+    let mut escaped = false;
+    let mut index = start + quote.len_utf8();
+    while index < text.len() {
+        let character = text[index..].chars().next().unwrap();
+        if escaped {
+            escaped = false;
+        } else if character == '\\' {
+            escaped = true;
+        } else if character == quote {
+            return index;
+        }
+        index += character.len_utf8();
+    }
+    text.len().saturating_sub(1)
+}
+
+fn read_ident_at(text: &str, mut index: usize) -> usize {
+    while index < text.len() {
+        let character = text[index..].chars().next().unwrap();
+        if !is_ident_continue(character) {
+            break;
+        }
+        index += character.len_utf8();
+    }
+    index
+}
+
+fn skip_whitespace(text: &str, index: &mut usize) {
+    while *index < text.len() {
+        let character = text[*index..].chars().next().unwrap();
+        if !character.is_whitespace() {
+            break;
+        }
+        *index += character.len_utf8();
+    }
 }
 
 fn lower_if_then_else(text: &str) -> Option<String> {
@@ -2586,6 +2921,65 @@ pub fn demo() -> String:
 }
 pub fn demo() -> String {
     make_message!("Ada")
+}
+"#
+        );
+    }
+
+    #[test]
+    fn lowers_inline_expressions_in_format_macros() {
+        let source = r#"
+struct User:
+    name: String
+
+impl User:
+    fn display_name(&self) -> &str = &self.name
+
+fn render(user: &User, suffix: &str) -> String:
+    format!("{} {user.display_name()} {user.display_name():?}", suffix)
+
+fn show(user: &User):
+    println!("{user.display_name()}")
+    println!("{{user}} {user.display_name()}")
+"#;
+
+        assert_eq!(
+            rust(source),
+            r#"struct User {
+    name: String,
+}
+impl User {
+    fn display_name(&self) -> &str {
+        &self.name
+    }
+}
+fn render(user: &User, suffix: &str) -> String {
+    format!("{} {1} {2:?}", suffix, user.display_name(), user.display_name())
+}
+fn show(user: &User) {
+    println!("{}", user.display_name());
+    println!("{{user}} {}", user.display_name());
+}
+"#
+        );
+    }
+
+    #[test]
+    fn lowers_inline_expression_with_string_literal_argument() {
+        let source = r#"
+fn swap(pair: (String, usize)) -> (usize, String) = (pair.1, pair.0)
+
+fn main():
+    println!("{swap(("items".to_string(), 3)):?}")
+"#;
+
+        assert_eq!(
+            rust(source),
+            r#"fn swap(pair: (String, usize)) -> (usize, String) {
+    (pair.1, pair.0)
+}
+fn main() {
+    println!("{:?}", swap(("items".to_string(), 3)));
 }
 "#
         );

@@ -15,4 +15,4 @@ pub fn read[P: AsRef[Path]](path: P) -> io.Result[Vec[u8]]:
 pub fn main():
     let path = std.env.current_exe().expect("current executable path")
     let bytes = read(path).expect("read current executable")
-    println!("{}", bytes.len())
+    println!("{bytes.len()}")
