@@ -3011,7 +3011,7 @@ impl User {
     fn lowers_explicit_semicolons_and_match_arms() {
         let source = r#"
 fn parse(line: &str) -> Result[i32, String]:
-    match line.parse[i32]():
+    match line.parse.[i32]():
         Ok(value):
             println!("{}", value);
             Ok(value)
@@ -3076,7 +3076,7 @@ fn log(value: Result<i32, String>) {
 fn test(iter: Iter):
     Foo.new();
     Foo::bar();
-    iter.collect::<Vec[_]>();
+    iter.collect::<Vec<_>>();
     std.io.read();
 "#;
 
@@ -3192,7 +3192,7 @@ fn discarded_units(values: &[i32]) -> Vec[()] = values
     .map(|value| {
         bump(*value);
     })
-    .collect[Vec[()]]()
+    .collect.[Vec.[()]]()
 "#;
 
         assert_eq!(
@@ -3253,7 +3253,7 @@ pub fn normalized_names(lines: Vec[String]) -> Vec[String] = lines
         let trimmed = line.trim()
         if trimmed.is_empty() then None else Some(trimmed.to_ascii_lowercase())
     })
-    .collect[Vec[String]]()
+    .collect.[Vec.[String]]()
 "#;
 
         assert_eq!(
@@ -3382,7 +3382,7 @@ fn id(value: i32) -> i32 {
             ruk_to_rust(&ruk).unwrap(),
             ensure_trailing_newline(rust_source.trim_start())
         );
-        assert!(ruk_to_rusk(&ruk).unwrap().contains("let user = User.new"));
+        assert!(ruk_to_rusk(&ruk).unwrap().contains("let user = User::new"));
         assert!(
             rusk_to_ruk("fn main():\n    println!(\"hello\")\n")
                 .unwrap()
@@ -3549,7 +3549,7 @@ impl User:
         &self.name
 
 pub fn main():
-    let user = User.new(1, "Ada".to_string())
+    let user = User::new(1, "Ada".to_string())
     println!("{}", user.display_name());
 "#
         );
@@ -3619,14 +3619,14 @@ pub fn parse(raw: &str) -> Option<(i32, i32)> {
             r#"pub struct Boxed[T]:
     pub value: T
 
-impl[T] Boxed[T]:
+impl[T] Boxed.[T]:
     pub fn new(value: T) -> Self:
         Self { value }
 
-pub fn parse(raw: &str) -> Option[(i32, i32)]:
+pub fn parse(raw: &str) -> Option.[(i32, i32)]:
     let (left, right) = raw.split_once(',')?
-    let left = left.trim().parse[i32]().ok()?
-    let right = right.trim().parse[i32]().ok()?
+    let left = left.trim().parse.[i32]().ok()?
+    let right = right.trim().parse.[i32]().ok()?
     if left < right then Some((left, right)) else None
 "#
         );
