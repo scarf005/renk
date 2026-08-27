@@ -3588,11 +3588,11 @@ pub fn parse(raw: &str) -> Option<(i32, i32)> {
             r#"pub struct Boxed[T]:
     pub value: T
 
-impl[T] Boxed.[T]:
+impl[T] Boxed[T]:
     pub fn new(value: T) -> Self:
         Self { value }
 
-pub fn parse(raw: &str) -> Option.[(i32, i32)]:
+pub fn parse(raw: &str) -> Option[(i32, i32)]:
     let (left, right) = raw.split_once(',')?
     let left = left.trim().parse.[i32]().ok()?
     let right = right.trim().parse.[i32]().ok()?
