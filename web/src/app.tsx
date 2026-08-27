@@ -158,6 +158,12 @@ export function App() {
     runResult.value = null
   }
 
+  const setSourceCode = (value: string) => {
+    editSide.value = "source"
+    sourceCode.value = value
+    clearRun()
+  }
+
   useEffect(() => {
     try {
       autoRun.value = globalThis.localStorage.getItem(AUTO_RUN_STORAGE_KEY) === "1"
