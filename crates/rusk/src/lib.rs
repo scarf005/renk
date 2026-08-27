@@ -2309,12 +2309,6 @@ fn keyword_at(chars: &[char], index: usize, keyword: &str) -> bool {
             .is_none_or(|character| !is_ident_continue(*character))
 }
 
-fn is_keyword_boundary(text: &str, index: usize, len: usize) -> bool {
-    let before = text[..index].chars().next_back();
-    let after = text[index + len..].chars().next();
-    before.is_none_or(|character| !is_ident_continue(character))
-        && after.is_none_or(|character| !is_ident_continue(character))
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum GenericMode {
@@ -3747,12 +3741,12 @@ pub fn normalized_names(lines: Vec<String>) -> Vec<String> {
     }
 
     #[test]
-    fn rejects_inline_function_body_with_unsupported_children() {
-        let error = transpile("fn id(value: i32) -> i32 = value\n    + 1\n").unwrap_err();
-        assert_eq!(error.line, 1);
+    fn allows_inline_function_body_with_operator_continuation() {
         assert_eq!(
-            error.message,
-            "inline function bodies cannot own indented blocks; move the body below `:` or use method-chain continuations"
+            transpile("fn id(value: i32) -> i32 = value\n    + 1\n")
+                .unwrap()
+                .rust,
+            "fn id(value: i32) -> i32 {\n    value\n        + 1\n}\n"
         );
     }
 
