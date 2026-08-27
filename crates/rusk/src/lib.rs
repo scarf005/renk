@@ -3161,7 +3161,7 @@ fn discarded_units(values: &[i32]) -> Vec[()] = values
     .map(|value| {
         bump(*value);
     })
-    .collect.[Vec.[()]]()
+    .collect.[Vec[()]]()
 "#;
 
         assert_eq!(
