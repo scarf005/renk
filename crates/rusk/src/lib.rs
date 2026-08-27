@@ -3628,8 +3628,8 @@ pub fn normalized_names(lines: Vec<String>) -> Vec<String> {
 
     #[test]
     fn formats_without_reflowing_line_break_style() {
-        let inline = "pub fn even_squares(values: Vec[i32]) -> Vec[i32]:\n    values.into_iter().filter(|value| value % 2 == 0).map(|value| value * value).collect[Vec[i32]]()\n";
-        let broken = "pub fn even_squares(values: Vec[i32]) -> Vec[i32] = values\n    .into_iter()\n    .filter(|value| value % 2 == 0)\n    .map(|value| value * value)\n    .collect[Vec[i32]]()\n";
+        let inline = "pub fn even_squares(values: Vec[i32]) -> Vec[i32]:\n    values.into_iter().filter(|value| value % 2 == 0).map(|value| value * value).collect.[Vec[i32]]()\n";
+        let broken = "pub fn even_squares(values: Vec[i32]) -> Vec[i32] = values\n    .into_iter()\n    .filter(|value| value % 2 == 0)\n    .map(|value| value * value)\n    .collect.[Vec[i32]]()\n";
 
         assert_eq!(
             format_source(inline, FormatOptions { line_width: 80 }).unwrap(),
