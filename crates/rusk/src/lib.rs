@@ -1638,21 +1638,25 @@ fn emit_macro_arm(node: &Node, emitter: &mut Emitter) {
         let (expr, _) = strip_explicit_semicolon(expr);
         if expr.is_empty() {
             emitter.push(node, format!("{}{} => {{", indent, pattern));
-            emit_nodes(&node.children, Context::Block, emitter);
+            emit_raw_macro_nodes(&node.children, emitter);
             emitter.push_generated(format!("{}}};", indent));
         } else if expr.trim_start().starts_with('{') && expr.trim_end().ends_with('}') {
-            emitter.push(
-                node,
-                format!("{}{} => {};", indent, pattern, lower_expr(expr)),
-            );
+            emitter.push(node, format!("{}{} => {};", indent, pattern, expr));
         } else {
-            emitter.push(
-                node,
-                format!("{}{} => {{ {} }};", indent, pattern, lower_expr(expr)),
-            );
+            emitter.push(node, format!("{}{} => {{ {} }};", indent, pattern, expr));
         }
     } else {
-        emitter.push(node, format!("{}{};", indent, lower_expr(text)));
+        emitter.push(node, format!("{}{};", indent, text));
+    }
+}
+
+fn emit_raw_macro_nodes(nodes: &[Node], emitter: &mut Emitter) {
+    for node in nodes {
+        emitter.push(
+            node,
+            format!("{}{}", spaces(node.indent), node.text.trim()),
+        );
+        emit_raw_macro_nodes(&node.children, emitter);
     }
 }
 
@@ -1730,10 +1734,9 @@ fn lower_attribute(text: &str) -> Option<String> {
 }
 
 fn process_attribute_body(text: &str) -> String {
-    replace_dotted_paths(
-        &replace_square_generics(text, GenericMode::Type),
-        PathMode::Type,
-    )
+    // Attribute payloads are proc-macro/token-tree input. Keep them as Rust
+    // tokens instead of guessing whether punctuation is Rusk syntax.
+    text.to_string()
 }
 
 fn lower_signature(text: &str) -> String {
