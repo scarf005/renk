@@ -2768,6 +2768,7 @@ fn is_match(text: &str) -> bool {
 }
 
 fn is_control(text: &str) -> bool {
+    let text = strip_control_label(text);
     (text.starts_with("if ") && !is_inline_if_expression(text))
         || (text.starts_with("else if ") && !is_inline_if_expression(text))
         || (text.starts_with("else") && !text.starts_with("else if "))
@@ -2776,6 +2777,21 @@ fn is_control(text: &str) -> bool {
         || text.starts_with("for ")
         || text == "unsafe"
         || text == "async"
+}
+
+fn strip_control_label(text: &str) -> &str {
+    let text = text.trim_start();
+    let Some(rest) = text.strip_prefix('\'') else {
+        return text;
+    };
+    let Some(colon) = rest.find(':') else {
+        return text;
+    };
+    let label = &rest[..colon];
+    if label.is_empty() || !label.chars().all(is_ident_continue) {
+        return text;
+    }
+    rest[colon + 1..].trim_start()
 }
 
 fn is_inline_if_expression(text: &str) -> bool {
@@ -2813,7 +2829,16 @@ fn are_continuations(nodes: &[Node]) -> bool {
     !nodes.is_empty()
         && nodes
             .iter()
-            .all(|node| node.text.trim_start().starts_with('.'))
+            .all(|node| is_expression_continuation(node.text.trim_start()))
+}
+
+fn is_expression_continuation(text: &str) -> bool {
+    [
+        ".[", ".", "::", "(", "[", "?", "+", "-", "*", "/", "%", "&&", "||", "&",
+        "|", "^", "<<", ">>", "==", "!=", "<=", ">=", "<", ">",
+    ]
+    .iter()
+    .any(|prefix| text.starts_with(prefix))
 }
 
 fn is_jump_statement(text: &str) -> bool {
