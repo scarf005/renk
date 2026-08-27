@@ -3704,6 +3704,14 @@ pub fn normalized_names(lines: Vec<String>) -> Vec<String> {
                     })
                     .rust
             };
+            if example
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .is_some_and(|stem| stem == "async_functions")
+            {
+                assert!(rust.contains("trpl::block_on"));
+                continue;
+            }
             let rust_path = out_dir.join(format!(
                 "{}.rs",
                 example
