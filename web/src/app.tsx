@@ -55,6 +55,8 @@ const BYTES_PER_KIB = 1024
 const RUN_SOURCE_LIMIT_KIB = 64
 const RUN_SOURCE_LIMIT_BYTES = RUN_SOURCE_LIMIT_KIB * BYTES_PER_KIB
 const RUN_SOURCE_LIMIT_LABEL = `${RUN_SOURCE_LIMIT_KIB} KiB`
+const AUTO_RUN_STORAGE_KEY = "rusk:auto-run"
+const AUTO_RUN_DELAY_MS = 1_000
 
 const sourcePanel = signal<SourcePanel>("rusk")
 const editSide = signal<EditSide>("source")
@@ -143,6 +145,8 @@ const stats = computed(() => ({
 export function App() {
   const [location, navigate] = useLocation()
   const copied = useSignal(false)
+  const settingsOpen = useSignal(false)
+  const autoRun = useSignal(false)
   const sourceRef = useRef<HTMLElement>(null)
   const outputRef = useRef<HTMLElement>(null)
   const isScrollingRef = useRef(false)
@@ -153,10 +157,21 @@ export function App() {
     runResult.value = null
   }
 
-  const setSourceCode = (value: string) => {
-    editSide.value = "source"
-    sourceCode.value = value
-    clearRun()
+  useEffect(() => {
+    try {
+      autoRun.value = globalThis.localStorage.getItem(AUTO_RUN_STORAGE_KEY) === "1"
+    } catch (_) {
+      // Storage can be unavailable in hardened/private browser contexts.
+    }
+  }, [])
+
+  const setAutoRun = (enabled: boolean) => {
+    autoRun.value = enabled
+    try {
+      globalThis.localStorage.setItem(AUTO_RUN_STORAGE_KEY, enabled ? "1" : "0")
+    } catch (_) {
+      // Keep the in-memory setting even when persistence is unavailable.
+    }
   }
 
   const setRustCode = (value: string) => {
@@ -353,6 +368,20 @@ export function App() {
     }
   }
 
+  useEffect(() => {
+    if (!canRunRust || !autoRun.value || converted.value.error) return
+    const timer = globalThis.setTimeout(() => {
+      void runRust()
+    }, AUTO_RUN_DELAY_MS)
+    return () => globalThis.clearTimeout(timer)
+  }, [
+    autoRun.value,
+    sourceCode.value,
+    rustCode.value,
+    sourcePanel.value,
+    editSide.value,
+  ])
+
   return (
     <Layout>
       <Header>
@@ -394,6 +423,29 @@ export function App() {
         </div>
 
         <div class="flex-none w-full lg:w-auto flex flex-row border-b-2 lg:border-b-0 border-black bg-white">
+          <div class="relative flex-none border-r-2 border-black">
+            <button
+              type="button"
+              onClick={() => settingsOpen.value = !settingsOpen.value}
+              class="h-full px-4 py-3 text-xs md:text-sm font-bold uppercase bg-white hover:bg-black hover:text-white"
+              aria-expanded={settingsOpen.value}
+            >
+              Set
+            </button>
+            {settingsOpen.value && (
+              <div class="absolute right-0 top-full z-30 w-52 border-2 border-black bg-white p-2">
+                <button
+                  type="button"
+                  disabled={!canRunRust}
+                  onClick={() => setAutoRun(!autoRun.value)}
+                  class="w-full flex items-center justify-between gap-3 px-2 py-2 text-xs font-bold uppercase text-left hover:bg-black hover:text-white disabled:opacity-40 disabled:hover:bg-white disabled:hover:text-black"
+                >
+                  <span>Auto Run</span>
+                  <span>{autoRun.value ? "On · 1s" : "Off · 1s"}</span>
+                </button>
+              </div>
+            )}
+          </div>
           <div
             class="flex-1 lg:flex-none relative border-r-2 border-black"
             onWheel={(event) => {
