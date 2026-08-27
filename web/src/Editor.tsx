@@ -40,27 +40,67 @@ import {
 
 type CodeLanguage = "rusk" | "ruk" | "rust" | "json" | "text"
 
-type RuskState = { inString: boolean }
+type RuskStringFrame = { depth: number; interpolated: boolean }
+type RuskState = {
+  strings: RuskStringFrame[]
+  interpolationDepth: number
+  pendingFormatString: boolean
+}
 
 const rusk = StreamLanguage.define<RuskState>({
   name: "rusk",
   languageData: {
     commentTokens: { line: "//", block: { open: "/*", close: "*/" } },
   },
-  startState: () => ({ inString: false }),
+  startState: () => ({
+    strings: [],
+    interpolationDepth: 0,
+    pendingFormatString: false,
+  }),
   token: (stream, state) => {
     if (stream.sol()) stream.eatSpace()
 
-    if (state.inString) {
+    const string = state.strings.at(-1)
+    const inString = string?.depth === state.interpolationDepth
+    if (string && inString) {
+      if (string.interpolated && stream.match("{{")) return "string"
+      if (string.interpolated && stream.match("{")) {
+        state.interpolationDepth += 1
+        return "punctuation"
+      }
+      if (stream.match('"')) {
+        state.strings.pop()
+        return "string"
+      }
+
       while (!stream.eol()) {
-        const next = stream.next()
-        if (next === "\\") stream.next()
-        if (next === '"') {
-          state.inString = false
+        if (stream.peek() === "\\") {
+          stream.next()
+          stream.next()
+          continue
+        }
+        if (stream.peek() === '"') break
+        if (string.interpolated && stream.peek() === "{") {
+          if (stream.match("{{", false)) {
+            stream.match("{{")
+            continue
+          }
           break
         }
+        stream.next()
       }
       return "string"
+    }
+
+    if (state.interpolationDepth > 0) {
+      if (stream.match("{")) {
+        state.interpolationDepth += 1
+        return "punctuation"
+      }
+      if (stream.match("}")) {
+        state.interpolationDepth -= 1
+        return "punctuation"
+      }
     }
 
     if (stream.eatSpace()) return null
@@ -70,7 +110,11 @@ const rusk = StreamLanguage.define<RuskState>({
     }
     if (stream.match(/^#!?\[[^\]]*\]/)) return "meta"
     if (stream.match('"')) {
-      state.inString = true
+      state.strings.push({
+        depth: state.interpolationDepth,
+        interpolated: state.pendingFormatString,
+      })
+      state.pendingFormatString = false
       return "string"
     }
     if (stream.match(/^\d[\d_]*/)) return "number"
@@ -89,7 +133,15 @@ const rusk = StreamLanguage.define<RuskState>({
       return "typeName"
     }
     if (stream.match(/^[A-Z][A-Za-z0-9_]*/)) return "typeName"
-    if (stream.match(/^[a-z_][A-Za-z0-9_]*(?=!)/)) return "variableName.special"
+    if (stream.match(/^(println|format)(?=!)/)) {
+      state.pendingFormatString = true
+      return "variableName.special"
+    }
+    if (stream.match(/^[a-z_][A-Za-z0-9_]*(?=!)/)) {
+      state.pendingFormatString = false
+      return "variableName.special"
+    }
+    if (stream.match(/^[a-z_][A-Za-z0-9_]*/)) return "variableName"
     if (stream.match(/^[+\-*\/%=<>!&|.:]+/)) return "operator"
 
     stream.next()
