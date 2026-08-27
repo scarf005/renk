@@ -5,8 +5,6 @@ ARG RUSTUP_TOOLCHAIN=stable
 ARG RUSTUP_INIT_SHA256=6c30b75a75b28a96fd913a037c8581b580080b6ee9b8169a3c0feb1af7fe8caf
 ARG DENO_VERSION=2.5.6
 ARG DENO_SHA256=fd4f6abc1b6a134fa9a4dba56519f1631f44c88e04e4e3e9a8ff5975dfa66e1a
-ARG TRPL_VERSION=0.3.0
-
 FROM ${FEDORA_MINIMAL_IMAGE} AS rust-base
 ARG RUSTUP_TOOLCHAIN
 ARG RUSTUP_INIT_SHA256
@@ -32,15 +30,8 @@ RUN curl -fsSL "https://github.com/denoland/deno/releases/download/v${DENO_VERSI
     && rm /tmp/deno.zip
 COPY . .
 RUN cargo build --release -p rusk --bin rusk --bin rusk-web
+RUN cargo build --manifest-path runner/Cargo.toml --release
 RUN cd web && VITE_RUN_API=1 deno task build
-
-FROM rust-base AS trpl-runtime
-ARG TRPL_VERSION
-WORKDIR /tmp/trpl-runtime
-RUN mkdir -p src \
-    && printf '[package]\nname = "rusk-trpl-runtime"\nversion = "0.0.0"\nedition = "2024"\n\n[dependencies]\ntrpl = "=%s"\n' "${TRPL_VERSION}" > Cargo.toml \
-    && printf 'pub fn verify() { trpl::block_on(async {}); }\n' > src/lib.rs \
-    && cargo build --release --lib
 
 FROM rust-base AS runtime-rust
 RUN rm -rf \
@@ -57,7 +48,7 @@ ENV CARGO_HOME=/usr/local/cargo \
     PATH=/usr/local/cargo/bin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
     RUSK_WEB_ADDR=0.0.0.0:8080 \
     RUSK_WEB_DIST=/app/web/dist \
-    RUSK_RUN_DEPS=/app/trpl-runtime/release/deps \
+    RUSK_RUN_DEPS=/app/runner/target/release/deps \
     RUSK_RUN_TIMEOUT_MS=5000 \
     RUSK_REQUEST_TIMEOUT_MS=10000 \
     RUSK_MAX_REQUESTS=32 \
@@ -71,7 +62,7 @@ WORKDIR /app
 COPY --from=build /app/target/release/rusk /usr/local/bin/rusk
 COPY --from=build /app/target/release/rusk-web /usr/local/bin/rusk-web
 COPY --from=build /app/web/dist /app/web/dist
-COPY --from=trpl-runtime /tmp/trpl-runtime/target/release /app/trpl-runtime/release
+COPY --from=build /app/runner/target/release /app/runner/target/release
 USER 10001:10001
 EXPOSE 8080
 ENTRYPOINT ["/usr/bin/tini", "--"]
