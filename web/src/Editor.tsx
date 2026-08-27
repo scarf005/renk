@@ -16,6 +16,7 @@ import {
   foldKeymap,
   indentOnInput,
   StreamLanguage,
+  StringStream,
   syntaxHighlighting,
 } from "@codemirror/language"
 import {
@@ -40,27 +41,125 @@ import {
 
 type CodeLanguage = "rusk" | "ruk" | "rust" | "json" | "text"
 
-type RuskState = { inString: boolean }
+type RuskStringFrame = { depth: number; interpolated: boolean }
+type RuskState = {
+  strings: RuskStringFrame[]
+  interpolationDepth: number
+  pendingFormatString: boolean
+}
+
+const RUST_INTERPOLATION_KEYWORDS = new Set([
+  "as", "async", "await", "break", "const", "continue", "crate", "dyn",
+  "else", "enum", "extern", "fn", "for", "if", "impl", "in", "let",
+  "loop", "match", "mod", "move", "mut", "pub", "ref", "return", "self",
+  "Self", "static", "struct", "super", "trait", "type", "unsafe", "use",
+  "where", "while", "yield", "try", "gen",
+])
+
+const RUST_PRIMITIVES = new Set([
+  "bool", "char", "str", "usize", "isize", "u8", "u16", "u32", "u64",
+  "u128", "i8", "i16", "i32", "i64", "i128", "f32", "f64",
+])
+
+const tokenRustInterpolation = (stream: StringStream): string | null => {
+  if (stream.eatSpace()) return null
+  if (stream.match("//")) {
+    stream.skipToEnd()
+    return "comment"
+  }
+  if (stream.match(/^(true|false)\b/)) return "bool"
+  if (
+    stream.match(
+      /^(?:0x[\da-fA-F_]+|0o[0-7_]+|0b[01_]+|\d[\d_]*(?:\.\d[\d_]*)?(?:[eE][+-]?\d[\d_]*)?)(?:[iu](?:8|16|32|64|128|size)|f(?:32|64))?/,
+    )
+  ) return "number"
+  if (stream.match(/^b?'(?:\\.|[^'\\])'/)) return "string"
+  if (stream.match(/^'[A-Za-z_][A-Za-z0-9_]*/)) return "variableName.special"
+  if (stream.match(/^[A-Za-z_][A-Za-z0-9_]*/)) {
+    const token = stream.current()
+    if (RUST_INTERPOLATION_KEYWORDS.has(token)) return "keyword"
+    if (RUST_PRIMITIVES.has(token)) return "typeName"
+    if (/^[A-Z]/.test(token)) return "typeName"
+
+    const before = stream.string.slice(0, stream.start).trimEnd()
+    const after = stream.string.slice(stream.pos)
+    if (before.endsWith(".")) {
+      return /^\s*\(/.test(after) ? "variableName.function" : "propertyName"
+    }
+    if (/^\s*!/.test(after)) return "variableName.special"
+    return /^\s*\(/.test(after) ? "variableName.function" : "variableName"
+  }
+  if (stream.match(/^[+\-*\/%=<>!&|^?:.@]+/)) return "operator"
+  if (stream.match(/^[()[\],;]/)) return "bracket"
+
+  stream.next()
+  return null
+}
 
 const rusk = StreamLanguage.define<RuskState>({
   name: "rusk",
   languageData: {
     commentTokens: { line: "//", block: { open: "/*", close: "*/" } },
   },
-  startState: () => ({ inString: false }),
+  startState: () => ({
+    strings: [],
+    interpolationDepth: 0,
+    pendingFormatString: false,
+  }),
   token: (stream, state) => {
     if (stream.sol()) stream.eatSpace()
 
-    if (state.inString) {
+    const string = state.strings.at(-1)
+    const inString = string?.depth === state.interpolationDepth
+    if (string && inString) {
+      if (string.interpolated && stream.match("{{")) return "string"
+      if (string.interpolated && stream.match("{")) {
+        state.interpolationDepth += 1
+        return "string.special"
+      }
+      if (stream.match('"')) {
+        state.strings.pop()
+        return "string"
+      }
+
       while (!stream.eol()) {
-        const next = stream.next()
-        if (next === "\\") stream.next()
-        if (next === '"') {
-          state.inString = false
+        if (stream.peek() === "\\") {
+          stream.next()
+          stream.next()
+          continue
+        }
+        if (stream.peek() === '"') break
+        if (string.interpolated && stream.peek() === "{") {
+          if (stream.match("{{", false)) {
+            stream.match("{{")
+            continue
+          }
           break
         }
+        stream.next()
       }
       return "string"
+    }
+
+    if (state.interpolationDepth > 0) {
+      if (stream.match("{")) {
+        state.interpolationDepth += 1
+        return "bracket"
+      }
+      if (stream.match("}")) {
+        const closesInterpolation = state.interpolationDepth === 1
+        state.interpolationDepth -= 1
+        return closesInterpolation ? "string.special" : "bracket"
+      }
+      if (stream.eatSpace()) return null
+      if (stream.match('"')) {
+        state.strings.push({
+          depth: state.interpolationDepth,
+          interpolated: false,
+        })
+        return "string"
+      }
+      return tokenRustInterpolation(stream)
     }
 
     if (stream.eatSpace()) return null
@@ -70,7 +169,11 @@ const rusk = StreamLanguage.define<RuskState>({
     }
     if (stream.match(/^#!?\[[^\]]*\]/)) return "meta"
     if (stream.match('"')) {
-      state.inString = true
+      state.strings.push({
+        depth: state.interpolationDepth,
+        interpolated: state.pendingFormatString,
+      })
+      state.pendingFormatString = false
       return "string"
     }
     if (stream.match(/^\d[\d_]*/)) return "number"
@@ -89,7 +192,15 @@ const rusk = StreamLanguage.define<RuskState>({
       return "typeName"
     }
     if (stream.match(/^[A-Z][A-Za-z0-9_]*/)) return "typeName"
-    if (stream.match(/^[a-z_][A-Za-z0-9_]*(?=!)/)) return "variableName.special"
+    if (stream.match(/^(println|format)(?=!)/)) {
+      state.pendingFormatString = true
+      return "variableName.special"
+    }
+    if (stream.match(/^[a-z_][A-Za-z0-9_]*(?=!)/)) {
+      state.pendingFormatString = false
+      return "variableName.special"
+    }
+    if (stream.match(/^[a-z_][A-Za-z0-9_]*/)) return "variableName"
     if (stream.match(/^[+\-*\/%=<>!&|.:]+/)) return "operator"
 
     stream.next()
