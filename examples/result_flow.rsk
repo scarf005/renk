@@ -1,4 +1,4 @@
-pub fn parse_port(raw: &str) -> Result.[u16, std.num.ParseIntError]:
+pub fn parse_port(raw: &str) -> Result[u16, std.num.ParseIntError]:
     let port = raw.parse.[u16]()?
     Ok(port)
 
