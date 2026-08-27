@@ -3222,7 +3222,7 @@ pub fn normalized_names(lines: Vec[String]) -> Vec[String] = lines
         let trimmed = line.trim()
         if trimmed.is_empty() then None else Some(trimmed.to_ascii_lowercase())
     })
-    .collect.[Vec.[String]]()
+    .collect.[Vec[String]]()
 "#;
 
         assert_eq!(
