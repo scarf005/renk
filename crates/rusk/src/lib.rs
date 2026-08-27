@@ -739,8 +739,7 @@ fn is_raw_rust_block_header(header: &str, kind: RustBlockKind) -> bool {
 
 fn lower_rust_syntax(text: &str) -> String {
     let text = replace_rust_turbofish(text);
-    let text = replace_angle_generics_with_square(&text);
-    text.replace("::", ".")
+    replace_angle_generics_with_square(&text)
 }
 
 fn replace_rust_turbofish(text: &str) -> String {
@@ -748,13 +747,20 @@ fn replace_rust_turbofish(text: &str) -> String {
     let mut output = String::new();
     let mut index = 0usize;
     while index < chars.len() {
+        if let Some(end) = opaque_span_end(&chars, index)
+            .or_else(|| macro_invocation_end(&chars, index))
+        {
+            output.extend(chars[index..=end].iter());
+            index = end + 1;
+            continue;
+        }
         if index + 2 < chars.len()
             && chars[index] == ':'
             && chars[index + 1] == ':'
             && chars[index + 2] == '<'
             && let Some(close) = matching_bracket(&chars, index + 2, '<', '>')
         {
-            output.push('[');
+            output.push_str(".[");
             output.push_str(&replace_angle_generics_with_square(
                 &chars[index + 3..close].iter().collect::<String>(),
             ));
@@ -773,6 +779,13 @@ fn replace_angle_generics_with_square(text: &str) -> String {
     let mut output = String::new();
     let mut index = 0usize;
     while index < chars.len() {
+        if let Some(end) = opaque_span_end(&chars, index)
+            .or_else(|| macro_invocation_end(&chars, index))
+        {
+            output.extend(chars[index..=end].iter());
+            index = end + 1;
+            continue;
+        }
         if chars[index] == '<'
             && has_ident_before(&chars, index)
             && let Some(close) = matching_bracket(&chars, index, '<', '>')
@@ -1638,21 +1651,25 @@ fn emit_macro_arm(node: &Node, emitter: &mut Emitter) {
         let (expr, _) = strip_explicit_semicolon(expr);
         if expr.is_empty() {
             emitter.push(node, format!("{}{} => {{", indent, pattern));
-            emit_nodes(&node.children, Context::Block, emitter);
+            emit_raw_macro_nodes(&node.children, emitter);
             emitter.push_generated(format!("{}}};", indent));
         } else if expr.trim_start().starts_with('{') && expr.trim_end().ends_with('}') {
-            emitter.push(
-                node,
-                format!("{}{} => {};", indent, pattern, lower_expr(expr)),
-            );
+            emitter.push(node, format!("{}{} => {};", indent, pattern, expr));
         } else {
-            emitter.push(
-                node,
-                format!("{}{} => {{ {} }};", indent, pattern, lower_expr(expr)),
-            );
+            emitter.push(node, format!("{}{} => {{ {} }};", indent, pattern, expr));
         }
     } else {
-        emitter.push(node, format!("{}{};", indent, lower_expr(text)));
+        emitter.push(node, format!("{}{};", indent, text));
+    }
+}
+
+fn emit_raw_macro_nodes(nodes: &[Node], emitter: &mut Emitter) {
+    for node in nodes {
+        emitter.push(
+            node,
+            format!("{}{}", spaces(node.indent), node.text.trim()),
+        );
+        emit_raw_macro_nodes(&node.children, emitter);
     }
 }
 
@@ -1730,10 +1747,9 @@ fn lower_attribute(text: &str) -> Option<String> {
 }
 
 fn process_attribute_body(text: &str) -> String {
-    replace_dotted_paths(
-        &replace_square_generics(text, GenericMode::Type),
-        PathMode::Type,
-    )
+    // Attribute payloads are proc-macro/token-tree input. Keep them as Rust
+    // tokens instead of guessing whether punctuation is Rusk syntax.
+    text.to_string()
 }
 
 fn lower_signature(text: &str) -> String {
@@ -1867,7 +1883,7 @@ fn lower_format_invocation(arguments: &str) -> Option<String> {
         };
         let marker = format!("__rusk_inline_{}__", index);
         lowered_arguments[0] = lowered_arguments[0].replace(&marker, &placeholder);
-        lowered_arguments.push(expression);
+        lowered_arguments.push(lower_expr(&expression));
     }
     Some(lowered_arguments.join(", "))
 }
@@ -2169,14 +2185,23 @@ fn lower_if_then_else(text: &str) -> Option<String> {
 }
 
 fn find_else_for_then_body(text: &str) -> Option<usize> {
+    let chars = text.chars().collect::<Vec<_>>();
+    let byte_offsets = text.char_indices().map(|(offset, _)| offset).collect::<Vec<_>>();
     let mut round = 0usize;
     let mut square = 0usize;
     let mut curly = 0usize;
     let mut nested_if_count = 0usize;
     let mut index = 0usize;
 
-    while index < text.len() {
-        let character = text[index..].chars().next()?;
+    while index < chars.len() {
+        if let Some(end) = opaque_span_end(&chars, index)
+            .or_else(|| macro_invocation_end(&chars, index))
+        {
+            index = end + 1;
+            continue;
+        }
+
+        let character = chars[index];
         match character {
             '(' => round += 1,
             ')' => round = round.saturating_sub(1),
@@ -2188,32 +2213,39 @@ fn find_else_for_then_body(text: &str) -> Option<usize> {
         }
 
         if round == 0 && square == 0 && curly == 0 {
-            if text[index..].starts_with("if") && is_keyword_boundary(text, index, "if".len()) {
+            if keyword_at(&chars, index, "if") {
                 nested_if_count += 1;
-            } else if text[index..].starts_with("else")
-                && is_keyword_boundary(text, index, "else".len())
-            {
+            } else if keyword_at(&chars, index, "else") {
                 if nested_if_count == 0 {
-                    return Some(index);
+                    return byte_offsets.get(index).copied();
                 }
                 nested_if_count -= 1;
             }
         }
 
-        index += character.len_utf8();
+        index += 1;
     }
 
     None
 }
 
 fn find_top_level_keyword(text: &str, keyword: &str) -> Option<usize> {
+    let chars = text.chars().collect::<Vec<_>>();
+    let byte_offsets = text.char_indices().map(|(offset, _)| offset).collect::<Vec<_>>();
     let mut round = 0usize;
     let mut square = 0usize;
     let mut curly = 0usize;
     let mut index = 0usize;
 
-    while index < text.len() {
-        let character = text[index..].chars().next()?;
+    while index < chars.len() {
+        if let Some(end) = opaque_span_end(&chars, index)
+            .or_else(|| macro_invocation_end(&chars, index))
+        {
+            index = end + 1;
+            continue;
+        }
+
+        let character = chars[index];
         match character {
             '(' => round += 1,
             ')' => round = round.saturating_sub(1),
@@ -2227,24 +2259,31 @@ fn find_top_level_keyword(text: &str, keyword: &str) -> Option<usize> {
         if round == 0
             && square == 0
             && curly == 0
-            && text[index..].starts_with(keyword)
-            && is_keyword_boundary(text, index, keyword.len())
+            && keyword_at(&chars, index, keyword)
+            && !chars[..index].iter().collect::<String>().trim().is_empty()
         {
-            return Some(index);
+            return byte_offsets.get(index).copied();
         }
 
-        index += character.len_utf8();
+        index += 1;
     }
 
     None
 }
 
-fn is_keyword_boundary(text: &str, index: usize, len: usize) -> bool {
-    let before = text[..index].chars().next_back();
-    let after = text[index + len..].chars().next();
-    before.is_none_or(|character| !is_ident_continue(character))
-        && after.is_none_or(|character| !is_ident_continue(character))
+fn keyword_at(chars: &[char], index: usize, keyword: &str) -> bool {
+    let keyword = keyword.chars().collect::<Vec<_>>();
+    let end = index + keyword.len();
+    chars.get(index..end) == Some(keyword.as_slice())
+        && index
+            .checked_sub(1)
+            .and_then(|before| chars.get(before))
+            .is_none_or(|character| !is_ident_continue(*character))
+        && chars
+            .get(end)
+            .is_none_or(|character| !is_ident_continue(*character))
 }
+
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum GenericMode {
@@ -2262,29 +2301,69 @@ fn replace_square_generics(text: &str, mode: GenericMode) -> String {
     let chars: Vec<char> = text.chars().collect();
     let mut output = String::new();
     let mut index = 0usize;
+    let mut square_const = Vec::<bool>::new();
+    let mut curly_depth = 0usize;
     while index < chars.len() {
-        if chars[index] == '['
+        if let Some(end) = opaque_span_end(&chars, index)
+            .or_else(|| macro_invocation_end(&chars, index))
+        {
+            output.extend(chars[index..=end].iter());
+            index = end + 1;
+            continue;
+        }
+
+        let in_type_const_expr = mode == GenericMode::Type
+            && (curly_depth > 0 || square_const.last().copied().unwrap_or(false));
+
+        if chars[index] == '.'
+            && chars.get(index + 1) == Some(&'[')
+            && has_generic_base_before(&chars, index)
+            && let Some(close) = matching_bracket(&chars, index + 1, '[', ']')
+        {
+            let content: String = chars[index + 2..close].iter().collect();
+            let inner = lower_generic_content(&content);
+            if mode == GenericMode::Expr || in_type_const_expr {
+                output.push_str("::<");
+            } else {
+                output.push('<');
+            }
+            output.push_str(&inner);
+            output.push('>');
+            index = close + 1;
+            continue;
+        }
+
+        // Keep the old square form in type-only positions for source compatibility.
+        // Once a type grammar enters a const expression, plain `[...]` is indexing
+        // again and only explicit `.[...]` can denote generic application.
+        if mode == GenericMode::Type
+            && !in_type_const_expr
+            && chars[index] == '['
             && has_ident_before(&chars, index)
             && let Some(close) = matching_bracket(&chars, index, '[', ']')
         {
             let content: String = chars[index + 1..close].iter().collect();
-            let next = chars.get(close + 1).copied();
-            let should_convert = match mode {
-                GenericMode::Type => true,
-                GenericMode::Expr => next == Some('(') || type_like_generic(&content),
-            };
-            if should_convert {
-                let inner = replace_square_generics(&content, GenericMode::Type);
-                if mode == GenericMode::Expr && next == Some('(') {
-                    output.push_str("::<");
-                } else {
-                    output.push('<');
+            let inner = lower_generic_content(&content);
+            output.push('<');
+            output.push_str(&inner);
+            output.push('>');
+            index = close + 1;
+            continue;
+        }
+
+        match chars[index] {
+            '[' => square_const.push(false),
+            ';' if !square_const.is_empty() => {
+                if let Some(is_const) = square_const.last_mut() {
+                    *is_const = true;
                 }
-                output.push_str(&inner);
-                output.push('>');
-                index = close + 1;
-                continue;
             }
+            ']' => {
+                square_const.pop();
+            }
+            '{' => curly_depth += 1,
+            '}' => curly_depth = curly_depth.saturating_sub(1),
+            _ => {}
         }
         output.push(chars[index]);
         index += 1;
@@ -2292,31 +2371,99 @@ fn replace_square_generics(text: &str, mode: GenericMode) -> String {
     output
 }
 
+fn lower_generic_content(content: &str) -> String {
+    replace_dotted_paths(
+        &replace_square_generics(content, GenericMode::Type),
+        PathMode::Type,
+    )
+}
+
 fn replace_dotted_paths(text: &str, mode: PathMode) -> String {
     let chars: Vec<char> = text.chars().collect();
     let mut output = String::new();
     let mut index = 0usize;
+    let mut square_const = Vec::<bool>::new();
+    let mut curly_depth = 0usize;
     while index < chars.len() {
+        if let Some(end) = opaque_span_end(&chars, index)
+            .or_else(|| macro_invocation_end(&chars, index))
+        {
+            output.extend(chars[index..=end].iter());
+            index = end + 1;
+            continue;
+        }
+
         if is_ident_start(chars[index]) {
             let start = index;
+            let explicit_path_before = start >= 2 && chars[start - 2..start] == [':', ':'];
             let mut segments = Vec::new();
+            let mut dot_positions = Vec::new();
             let first_end = read_ident(&chars, index);
             segments.push(chars[start..first_end].iter().collect::<String>());
             index = first_end;
-            while index + 1 < chars.len() && chars[index] == '.' && is_ident_start(chars[index + 1])
-            {
-                let segment_start = index + 1;
-                let segment_end = read_ident(&chars, segment_start);
-                segments.push(chars[segment_start..segment_end].iter().collect::<String>());
-                index = segment_end;
+
+            loop {
+                if index + 2 < chars.len()
+                    && chars[index] == ':'
+                    && chars[index + 1] == ':'
+                    && chars[index + 2] == '<'
+                    && let Some(close) = matching_bracket(&chars, index + 2, '<', '>')
+                {
+                    index = close + 1;
+                    continue;
+                }
+                if chars.get(index) == Some(&'<')
+                    && let Some(close) = matching_bracket(&chars, index, '<', '>')
+                {
+                    index = close + 1;
+                    continue;
+                }
+                if index + 1 < chars.len()
+                    && chars[index] == '.'
+                    && is_ident_start(chars[index + 1])
+                {
+                    dot_positions.push(index);
+                    let segment_start = index + 1;
+                    let segment_end = read_ident(&chars, segment_start);
+                    segments.push(chars[segment_start..segment_end].iter().collect::<String>());
+                    index = segment_end;
+                    continue;
+                }
+                break;
             }
-            if segments.len() > 1 && should_convert_path(&segments, mode, chars.get(index).copied())
-            {
-                output.push_str(&segments.join("::"));
+
+            let in_type_const_expr = mode == PathMode::Type
+                && (curly_depth > 0 || square_const.last().copied().unwrap_or(false));
+            let should_convert = segments.len() > 1
+                && !explicit_path_before
+                && !in_type_const_expr
+                && should_convert_path(&segments, mode, chars.get(index).copied());
+            if should_convert {
+                let mut part_start = start;
+                for dot in dot_positions {
+                    output.extend(chars[part_start..dot].iter());
+                    output.push_str("::");
+                    part_start = dot + 1;
+                }
+                output.extend(chars[part_start..index].iter());
             } else {
-                output.push_str(&chars[start..index].iter().collect::<String>());
+                output.extend(chars[start..index].iter());
             }
         } else {
+            match chars[index] {
+                '[' => square_const.push(false),
+                ';' if !square_const.is_empty() => {
+                    if let Some(is_const) = square_const.last_mut() {
+                        *is_const = true;
+                    }
+                }
+                ']' => {
+                    square_const.pop();
+                }
+                '{' => curly_depth += 1,
+                '}' => curly_depth = curly_depth.saturating_sub(1),
+                _ => {}
+            }
             output.push(chars[index]);
             index += 1;
         }
@@ -2326,17 +2473,175 @@ fn replace_dotted_paths(text: &str, mode: PathMode) -> String {
 
 fn matching_bracket(chars: &[char], open_index: usize, open: char, close: char) -> Option<usize> {
     let mut depth = 0usize;
-    for (index, character) in chars.iter().enumerate().skip(open_index) {
-        if *character == open {
+    let mut index = open_index;
+    while index < chars.len() {
+        if let Some(end) = opaque_span_end(chars, index) {
+            index = end + 1;
+            continue;
+        }
+        if chars[index] == open {
             depth += 1;
-        } else if *character == close {
-            depth -= 1;
+        } else if chars[index] == close {
+            depth = depth.checked_sub(1)?;
             if depth == 0 {
                 return Some(index);
             }
         }
+        index += 1;
     }
     None
+}
+
+fn opaque_span_end(chars: &[char], index: usize) -> Option<usize> {
+    if index >= chars.len() {
+        return None;
+    }
+    if chars[index] == '/' && chars.get(index + 1) == Some(&'/') {
+        return Some(chars.len().saturating_sub(1));
+    }
+    if chars[index] == '/' && chars.get(index + 1) == Some(&'*') {
+        let mut depth = 1usize;
+        let mut cursor = index + 2;
+        while cursor + 1 < chars.len() {
+            if chars[cursor] == '/' && chars[cursor + 1] == '*' {
+                depth += 1;
+                cursor += 2;
+                continue;
+            }
+            if chars[cursor] == '*' && chars[cursor + 1] == '/' {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(cursor + 1);
+                }
+                cursor += 2;
+                continue;
+            }
+            cursor += 1;
+        }
+        return Some(chars.len().saturating_sub(1));
+    }
+    if let Some(end) = raw_string_span_end(chars, index) {
+        return Some(end);
+    }
+    if chars[index] == '"' {
+        return Some(quoted_chars_end(chars, index, '"'));
+    }
+    if matches!(chars[index], 'b' | 'c') && chars.get(index + 1) == Some(&'"') {
+        return Some(quoted_chars_end(chars, index + 1, '"'));
+    }
+    if chars[index] == '\'' {
+        return char_literal_end(chars, index);
+    }
+    if chars[index] == 'b' && chars.get(index + 1) == Some(&'\'') {
+        return char_literal_end(chars, index + 1);
+    }
+    None
+}
+
+fn raw_string_span_end(chars: &[char], index: usize) -> Option<usize> {
+    let mut raw = index;
+    if chars
+        .get(raw)
+        .is_some_and(|character| matches!(*character, 'b' | 'c'))
+    {
+        raw += 1;
+    }
+    if chars.get(raw) != Some(&'r') {
+        return None;
+    }
+    let mut quote = raw + 1;
+    let mut hashes = 0usize;
+    while chars.get(quote) == Some(&'#') {
+        hashes += 1;
+        quote += 1;
+    }
+    if chars.get(quote) != Some(&'"') {
+        return None;
+    }
+    let mut cursor = quote + 1;
+    while cursor < chars.len() {
+        if chars[cursor] == '"'
+            && (0..hashes).all(|offset| chars.get(cursor + 1 + offset) == Some(&'#'))
+        {
+            return Some(cursor + hashes);
+        }
+        cursor += 1;
+    }
+    Some(chars.len().saturating_sub(1))
+}
+
+fn quoted_chars_end(chars: &[char], start: usize, quote: char) -> usize {
+    let mut escaped = false;
+    let mut cursor = start + 1;
+    while cursor < chars.len() {
+        let character = chars[cursor];
+        if escaped {
+            escaped = false;
+        } else if character == '\\' {
+            escaped = true;
+        } else if character == quote {
+            return cursor;
+        }
+        cursor += 1;
+    }
+    chars.len().saturating_sub(1)
+}
+
+fn char_literal_end(chars: &[char], quote: usize) -> Option<usize> {
+    let first = *chars.get(quote + 1)?;
+    if is_ident_continue(first) && chars.get(quote + 2) != Some(&'\'') {
+        return None;
+    }
+    if first != '\\' {
+        return (chars.get(quote + 2) == Some(&'\'')).then_some(quote + 2);
+    }
+    let mut cursor = quote + 2;
+    while cursor < chars.len() {
+        if chars[cursor] == '\'' {
+            return Some(cursor);
+        }
+        if chars[cursor].is_whitespace() {
+            return None;
+        }
+        cursor += 1;
+    }
+    None
+}
+
+fn macro_invocation_end(chars: &[char], start: usize) -> Option<usize> {
+    if !chars.get(start).copied().is_some_and(is_ident_start) {
+        return None;
+    }
+    let mut cursor = read_ident(chars, start);
+    loop {
+        if cursor + 2 < chars.len()
+            && chars[cursor] == ':'
+            && chars[cursor + 1] == ':'
+            && is_ident_start(chars[cursor + 2])
+        {
+            cursor = read_ident(chars, cursor + 2);
+        } else {
+            break;
+        }
+    }
+    while chars.get(cursor).is_some_and(|character| character.is_whitespace()) {
+        cursor += 1;
+    }
+    if chars.get(cursor) != Some(&'!') {
+        return None;
+    }
+    cursor += 1;
+    while chars.get(cursor).is_some_and(|character| character.is_whitespace()) {
+        cursor += 1;
+    }
+    let open = *chars.get(cursor)?;
+    let close = match open {
+        '(' => ')',
+        '[' => ']',
+        '{' => '}',
+        _ => return None,
+    };
+    matching_bracket(chars, cursor, open, close)
 }
 
 fn has_ident_before(chars: &[char], index: usize) -> bool {
@@ -2344,6 +2649,12 @@ fn has_ident_before(chars: &[char], index: usize) -> bool {
         && (is_ident_continue(chars[index - 1])
             || chars[index - 1] == ']'
             || chars[index - 1] == '>')
+}
+
+fn has_generic_base_before(chars: &[char], dot_index: usize) -> bool {
+    dot_index > 0
+        && (is_ident_continue(chars[dot_index - 1])
+            || matches!(chars[dot_index - 1], ']' | '>' | ')'))
 }
 
 fn type_like_generic(content: &str) -> bool {
@@ -2455,6 +2766,7 @@ fn is_match(text: &str) -> bool {
 }
 
 fn is_control(text: &str) -> bool {
+    let text = strip_control_label(text);
     (text.starts_with("if ") && !is_inline_if_expression(text))
         || (text.starts_with("else if ") && !is_inline_if_expression(text))
         || (text.starts_with("else") && !text.starts_with("else if "))
@@ -2463,6 +2775,21 @@ fn is_control(text: &str) -> bool {
         || text.starts_with("for ")
         || text == "unsafe"
         || text == "async"
+}
+
+fn strip_control_label(text: &str) -> &str {
+    let text = text.trim_start();
+    let Some(rest) = text.strip_prefix('\'') else {
+        return text;
+    };
+    let Some(colon) = rest.find(':') else {
+        return text;
+    };
+    let label = &rest[..colon];
+    if label.is_empty() || !label.chars().all(is_ident_continue) {
+        return text;
+    }
+    rest[colon + 1..].trim_start()
 }
 
 fn is_inline_if_expression(text: &str) -> bool {
@@ -2500,7 +2827,16 @@ fn are_continuations(nodes: &[Node]) -> bool {
     !nodes.is_empty()
         && nodes
             .iter()
-            .all(|node| node.text.trim_start().starts_with('.'))
+            .all(|node| is_expression_continuation(node.text.trim_start()))
+}
+
+fn is_expression_continuation(text: &str) -> bool {
+    [
+        ".[", ".", "::", "(", "[", "?", "+", "-", "*", "/", "%", "&&", "||", "&",
+        "|", "^", "<<", ">>", "==", "!=", "<=", ">=", "<", ">",
+    ]
+    .iter()
+    .any(|prefix| text.starts_with(prefix))
 }
 
 fn is_jump_statement(text: &str) -> bool {
@@ -2644,7 +2980,7 @@ impl User {
     fn lowers_explicit_semicolons_and_match_arms() {
         let source = r#"
 fn parse(line: &str) -> Result[i32, String]:
-    match line.parse[i32]():
+    match line.parse.[i32]():
         Ok(value):
             println!("{}", value);
             Ok(value)
@@ -2709,7 +3045,7 @@ fn log(value: Result<i32, String>) {
 fn test(iter: Iter):
     Foo.new();
     Foo::bar();
-    iter.collect::<Vec[_]>();
+    iter.collect::<Vec<_>>();
     std.io.read();
 "#;
 
@@ -2825,7 +3161,7 @@ fn discarded_units(values: &[i32]) -> Vec[()] = values
     .map(|value| {
         bump(*value);
     })
-    .collect[Vec[()]]()
+    .collect.[Vec[()]]()
 "#;
 
         assert_eq!(
@@ -2886,7 +3222,7 @@ pub fn normalized_names(lines: Vec[String]) -> Vec[String] = lines
         let trimmed = line.trim()
         if trimmed.is_empty() then None else Some(trimmed.to_ascii_lowercase())
     })
-    .collect[Vec[String]]()
+    .collect.[Vec[String]]()
 "#;
 
         assert_eq!(
@@ -3015,7 +3351,7 @@ fn id(value: i32) -> i32 {
             ruk_to_rust(&ruk).unwrap(),
             ensure_trailing_newline(rust_source.trim_start())
         );
-        assert!(ruk_to_rusk(&ruk).unwrap().contains("let user = User.new"));
+        assert!(ruk_to_rusk(&ruk).unwrap().contains("let user = User::new"));
         assert!(
             rusk_to_ruk("fn main():\n    println!(\"hello\")\n")
                 .unwrap()
@@ -3182,7 +3518,7 @@ impl User:
         &self.name
 
 pub fn main():
-    let user = User.new(1, "Ada".to_string())
+    let user = User::new(1, "Ada".to_string())
     println!("{}", user.display_name());
 "#
         );
@@ -3258,8 +3594,8 @@ impl[T] Boxed[T]:
 
 pub fn parse(raw: &str) -> Option[(i32, i32)]:
     let (left, right) = raw.split_once(',')?
-    let left = left.trim().parse[i32]().ok()?
-    let right = right.trim().parse[i32]().ok()?
+    let left = left.trim().parse.[i32]().ok()?
+    let right = right.trim().parse.[i32]().ok()?
     if left < right then Some((left, right)) else None
 "#
         );
@@ -3292,8 +3628,8 @@ pub fn normalized_names(lines: Vec<String>) -> Vec<String> {
 
     #[test]
     fn formats_without_reflowing_line_break_style() {
-        let inline = "pub fn even_squares(values: Vec[i32]) -> Vec[i32]:\n    values.into_iter().filter(|value| value % 2 == 0).map(|value| value * value).collect[Vec[i32]]()\n";
-        let broken = "pub fn even_squares(values: Vec[i32]) -> Vec[i32] = values\n    .into_iter()\n    .filter(|value| value % 2 == 0)\n    .map(|value| value * value)\n    .collect[Vec[i32]]()\n";
+        let inline = "pub fn even_squares(values: Vec[i32]) -> Vec[i32]:\n    values.into_iter().filter(|value| value % 2 == 0).map(|value| value * value).collect.[Vec[i32]]()\n";
+        let broken = "pub fn even_squares(values: Vec[i32]) -> Vec[i32] = values\n    .into_iter()\n    .filter(|value| value % 2 == 0)\n    .map(|value| value * value)\n    .collect.[Vec[i32]]()\n";
 
         assert_eq!(
             format_source(inline, FormatOptions { line_width: 80 }).unwrap(),
@@ -3380,12 +3716,12 @@ pub fn normalized_names(lines: Vec<String>) -> Vec<String> {
     }
 
     #[test]
-    fn rejects_inline_function_body_with_unsupported_children() {
-        let error = transpile("fn id(value: i32) -> i32 = value\n    + 1\n").unwrap_err();
-        assert_eq!(error.line, 1);
+    fn allows_inline_function_body_with_operator_continuation() {
         assert_eq!(
-            error.message,
-            "inline function bodies cannot own indented blocks; move the body below `:` or use method-chain continuations"
+            transpile("fn id(value: i32) -> i32 = value\n    + 1\n")
+                .unwrap()
+                .rust,
+            "fn id(value: i32) -> i32 {\n    value\n        + 1\n}\n"
         );
     }
 
