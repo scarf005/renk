@@ -424,6 +424,7 @@ fn run_command(command: &str, args: &[&str], cwd: &Path, timeout: Duration) -> C
     command
         .args(args)
         .current_dir(cwd)
+        .env("TOKIO_WORKER_THREADS", "2")
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout_file))
         .stderr(Stdio::from(stderr_file));
