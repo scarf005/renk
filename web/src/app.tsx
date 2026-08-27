@@ -151,6 +151,7 @@ export function App() {
   const outputRef = useRef<HTMLElement>(null)
   const isScrollingRef = useRef(false)
   const exampleWheelDeltaRef = useRef(0)
+  const lastRunSourceRef = useRef("")
 
   const clearRun = () => {
     runOutput.value = ""
@@ -337,15 +338,16 @@ export function App() {
 
   const runRust = async () => {
     if (converted.value.error || runState.value === "running") return
+    const rust = converted.value.rust
     if (
-      new TextEncoder().encode(converted.value.rust).length >
-        RUN_SOURCE_LIMIT_BYTES
+      new TextEncoder().encode(rust).length > RUN_SOURCE_LIMIT_BYTES
     ) {
       runOutput.value =
         `Rust source exceeds ${RUN_SOURCE_LIMIT_LABEL} run limit`
       return
     }
 
+    lastRunSourceRef.current = rust
     runState.value = "running"
     runResult.value = null
     runOutput.value = "Running..."
@@ -353,7 +355,7 @@ export function App() {
       const response = await fetch("/api/run", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ rust: converted.value.rust }),
+        body: JSON.stringify({ rust }),
       })
       const result = await response.json() as RunResponse | { error: string }
       if ("error" in result) runOutput.value = result.error
@@ -370,8 +372,11 @@ export function App() {
 
   useEffect(() => {
     if (!canRunRust || !autoRun.value || converted.value.error) return
+    if (runState.value === "running") return
+    const rust = converted.value.rust
+    if (rust === lastRunSourceRef.current) return
     const timer = globalThis.setTimeout(() => {
-      void runRust()
+      if (rust !== lastRunSourceRef.current) void runRust()
     }, AUTO_RUN_DELAY_MS)
     return () => globalThis.clearTimeout(timer)
   }, [
@@ -380,6 +385,7 @@ export function App() {
     rustCode.value,
     sourcePanel.value,
     editSide.value,
+    runState.value,
   ])
 
   return (
