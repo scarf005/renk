@@ -35,6 +35,7 @@ const MAX_OUTPUT_BYTES: usize = MAX_OUTPUT_KIB * BYTES_PER_KIB;
 const MAX_BODY_BYTES: usize = MAX_RUN_SOURCE_BYTES * JSON_BODY_SIZE_MULTIPLIER;
 const DEFAULT_ADDR: &str = "0.0.0.0:8080";
 const DEFAULT_DIST: &str = "/app/web/dist";
+const DEFAULT_RUN_DEPS: &str = "/app/trpl-runtime/release/deps";
 const DEFAULT_TIMEOUT_MS: u64 = 5_000;
 const DEFAULT_REQUEST_TIMEOUT_MS: u64 = 10_000;
 const DEFAULT_MAX_REQUESTS: usize = 64;
@@ -55,6 +56,7 @@ static RUN_RATE_COUNT: AtomicUsize = AtomicUsize::new(0);
 struct AppState {
     config: ServerConfig,
     dist: PathBuf,
+    run_deps: PathBuf,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -120,6 +122,7 @@ async fn main() -> std::io::Result<()> {
             ),
         },
         dist: PathBuf::from(env::var("RUSK_WEB_DIST").unwrap_or_else(|_| DEFAULT_DIST.to_string())),
+        run_deps: run_dependency_dir(),
     };
     let app = Router::new()
         .route("/api/run", post(handle_run_request))
@@ -226,7 +229,8 @@ async fn handle_run_request(State(state): State<AppState>, body: Bytes) -> Respo
 
     let rust = rust.to_string();
     let timeout = state.config.run_timeout;
-    match tokio::task::spawn_blocking(move || compile_and_run_rust(&rust, timeout)).await {
+    let run_deps = state.run_deps.clone();
+    match tokio::task::spawn_blocking(move || compile_and_run_rust(&rust, timeout, &run_deps)).await {
         Ok(Ok(response)) => json_response(StatusCode::OK, run_response_json(response)),
         Ok(Err(error)) => json_response(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -270,7 +274,11 @@ fn now_millis() -> u64 {
         .unwrap_or_default()
 }
 
-fn compile_and_run_rust(rust: &str, timeout: Duration) -> std::io::Result<RunResponse> {
+fn compile_and_run_rust(
+    rust: &str,
+    timeout: Duration,
+    run_deps: &Path,
+) -> std::io::Result<RunResponse> {
     let dir = temp_run_dir();
     fs::create_dir_all(&dir)?;
     let started = Instant::now();
@@ -278,17 +286,28 @@ fn compile_and_run_rust(rust: &str, timeout: Duration) -> std::io::Result<RunRes
     let binary_path = dir.join("main");
     fs::write(&source_path, rust)?;
 
-    let compile = run_command(
-        "rustc",
-        &[
-            "--edition=2024",
-            source_path.to_str().unwrap(),
-            "-o",
-            binary_path.to_str().unwrap(),
-        ],
-        &dir,
-        timeout,
-    );
+    let mut compile_args = vec![
+        "--edition=2024".to_string(),
+        source_path.to_string_lossy().into_owned(),
+        "-o".to_string(),
+        binary_path.to_string_lossy().into_owned(),
+    ];
+    if let Some(trpl) = find_dependency_rlib(run_deps, "trpl") {
+        compile_args.extend([
+            "-L".to_string(),
+            format!("dependency={}", run_deps.display()),
+            "--extern".to_string(),
+            format!("trpl={}", trpl.display()),
+        ]);
+        for native in native_dependency_dirs(run_deps) {
+            compile_args.extend([
+                "-L".to_string(),
+                format!("native={}", native.display()),
+            ]);
+        }
+    }
+    let compile_args = compile_args.iter().map(String::as_str).collect::<Vec<_>>();
+    let compile = run_command("rustc", &compile_args, &dir, timeout);
     if compile.status != Some(0) || compile.timed_out {
         let total_ms = elapsed_ms(started);
         let compile_ms = compile.elapsed_ms;
@@ -317,6 +336,49 @@ fn compile_and_run_rust(rust: &str, timeout: Duration) -> std::io::Result<RunRes
         run_ms,
         total_ms,
     })
+}
+
+fn run_dependency_dir() -> PathBuf {
+    if let Ok(path) = env::var("RUSK_RUN_DEPS") {
+        return PathBuf::from(path);
+    }
+    if let Ok(executable) = env::current_exe()
+        && let Some(parent) = executable.parent()
+    {
+        let local = parent.join("deps");
+        if local.is_dir() {
+            return local;
+        }
+    }
+    PathBuf::from(DEFAULT_RUN_DEPS)
+}
+
+fn find_dependency_rlib(directory: &Path, crate_name: &str) -> Option<PathBuf> {
+    let prefix = format!("lib{crate_name}-");
+    fs::read_dir(directory)
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .find(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with(&prefix) && name.ends_with(".rlib"))
+        })
+}
+
+fn native_dependency_dirs(run_deps: &Path) -> Vec<PathBuf> {
+    let Some(release) = run_deps.parent() else {
+        return Vec::new();
+    };
+    let build = release.join("build");
+    let Ok(entries) = fs::read_dir(build) else {
+        return Vec::new();
+    };
+    entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path().join("out"))
+        .filter(|path| path.is_dir())
+        .collect()
 }
 
 fn temp_run_dir() -> PathBuf {
