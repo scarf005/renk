@@ -2265,6 +2265,8 @@ fn replace_square_generics(text: &str, mode: GenericMode) -> String {
     let chars: Vec<char> = text.chars().collect();
     let mut output = String::new();
     let mut index = 0usize;
+    let mut square_const = Vec::<bool>::new();
+    let mut curly_depth = 0usize;
     while index < chars.len() {
         if let Some(end) = opaque_span_end(&chars, index)
             .or_else(|| macro_invocation_end(&chars, index))
@@ -2274,6 +2276,9 @@ fn replace_square_generics(text: &str, mode: GenericMode) -> String {
             continue;
         }
 
+        let in_type_const_expr = mode == GenericMode::Type
+            && (curly_depth > 0 || square_const.last().copied().unwrap_or(false));
+
         if chars[index] == '.'
             && chars.get(index + 1) == Some(&'[')
             && has_generic_base_before(&chars, index)
@@ -2281,7 +2286,7 @@ fn replace_square_generics(text: &str, mode: GenericMode) -> String {
         {
             let content: String = chars[index + 2..close].iter().collect();
             let inner = lower_generic_content(&content);
-            if mode == GenericMode::Expr {
+            if mode == GenericMode::Expr || in_type_const_expr {
                 output.push_str("::<");
             } else {
                 output.push('<');
@@ -2293,9 +2298,10 @@ fn replace_square_generics(text: &str, mode: GenericMode) -> String {
         }
 
         // Keep the old square form in type-only positions for source compatibility.
-        // Expression positions are intentionally strict: `value[index]` is always
-        // indexing and generic application is spelled `value.[T]`.
+        // Once a type grammar enters a const expression, plain `[...]` is indexing
+        // again and only explicit `.[...]` can denote generic application.
         if mode == GenericMode::Type
+            && !in_type_const_expr
             && chars[index] == '['
             && has_ident_before(&chars, index)
             && let Some(close) = matching_bracket(&chars, index, '[', ']')
@@ -2309,6 +2315,20 @@ fn replace_square_generics(text: &str, mode: GenericMode) -> String {
             continue;
         }
 
+        match chars[index] {
+            '[' => square_const.push(false),
+            ';' if !square_const.is_empty() => {
+                if let Some(is_const) = square_const.last_mut() {
+                    *is_const = true;
+                }
+            }
+            ']' => {
+                square_const.pop();
+            }
+            '{' => curly_depth += 1,
+            '}' => curly_depth = curly_depth.saturating_sub(1),
+            _ => {}
+        }
         output.push(chars[index]);
         index += 1;
     }
@@ -2326,6 +2346,8 @@ fn replace_dotted_paths(text: &str, mode: PathMode) -> String {
     let chars: Vec<char> = text.chars().collect();
     let mut output = String::new();
     let mut index = 0usize;
+    let mut square_const = Vec::<bool>::new();
+    let mut curly_depth = 0usize;
     while index < chars.len() {
         if let Some(end) = opaque_span_end(&chars, index)
             .or_else(|| macro_invocation_end(&chars, index))
@@ -2374,8 +2396,11 @@ fn replace_dotted_paths(text: &str, mode: PathMode) -> String {
                 break;
             }
 
+            let in_type_const_expr = mode == PathMode::Type
+                && (curly_depth > 0 || square_const.last().copied().unwrap_or(false));
             let should_convert = segments.len() > 1
                 && !explicit_path_before
+                && !in_type_const_expr
                 && should_convert_path(&segments, mode, chars.get(index).copied());
             if should_convert {
                 let mut part_start = start;
@@ -2389,6 +2414,20 @@ fn replace_dotted_paths(text: &str, mode: PathMode) -> String {
                 output.extend(chars[start..index].iter());
             }
         } else {
+            match chars[index] {
+                '[' => square_const.push(false),
+                ';' if !square_const.is_empty() => {
+                    if let Some(is_const) = square_const.last_mut() {
+                        *is_const = true;
+                    }
+                }
+                ']' => {
+                    square_const.pop();
+                }
+                '{' => curly_depth += 1,
+                '}' => curly_depth = curly_depth.saturating_sub(1),
+                _ => {}
+            }
             output.push(chars[index]);
             index += 1;
         }
