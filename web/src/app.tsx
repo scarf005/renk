@@ -55,6 +55,8 @@ const BYTES_PER_KIB = 1024
 const RUN_SOURCE_LIMIT_KIB = 64
 const RUN_SOURCE_LIMIT_BYTES = RUN_SOURCE_LIMIT_KIB * BYTES_PER_KIB
 const RUN_SOURCE_LIMIT_LABEL = `${RUN_SOURCE_LIMIT_KIB} KiB`
+const AUTO_RUN_STORAGE_KEY = "rusk:auto-run"
+const AUTO_RUN_DELAY_MS = 1_000
 
 const sourcePanel = signal<SourcePanel>("rusk")
 const editSide = signal<EditSide>("source")
@@ -143,11 +145,16 @@ const stats = computed(() => ({
 export function App() {
   const [location, navigate] = useLocation()
   const copied = useSignal(false)
+  const settingsOpen = useSignal(false)
+  const autoRun = useSignal(false)
   const sourceRef = useRef<HTMLElement>(null)
   const outputRef = useRef<HTMLElement>(null)
   const isScrollingRef = useRef(false)
+  const exampleWheelDeltaRef = useRef(0)
+  const lastRunSourceRef = useRef("")
 
   const clearRun = () => {
+    lastRunSourceRef.current = ""
     runOutput.value = ""
     runResult.value = null
   }
@@ -156,6 +163,23 @@ export function App() {
     editSide.value = "source"
     sourceCode.value = value
     clearRun()
+  }
+
+  useEffect(() => {
+    try {
+      autoRun.value = globalThis.localStorage.getItem(AUTO_RUN_STORAGE_KEY) === "1"
+    } catch (_) {
+      // Storage can be unavailable in hardened/private browser contexts.
+    }
+  }, [])
+
+  const setAutoRun = (enabled: boolean) => {
+    autoRun.value = enabled
+    try {
+      globalThis.localStorage.setItem(AUTO_RUN_STORAGE_KEY, enabled ? "1" : "0")
+    } catch (_) {
+      // Keep the in-memory setting even when persistence is unavailable.
+    }
   }
 
   const setRustCode = (value: string) => {
@@ -262,6 +286,28 @@ export function App() {
     if (location !== path) navigate(path)
   }
 
+  const cycleExample = (direction: -1 | 1) => {
+    if (sourcePanel.value === "rusk") {
+      const index = EXAMPLE_NAMES.indexOf(selectedExample.value)
+      const next = (index + direction + EXAMPLE_NAMES.length) % EXAMPLE_NAMES.length
+      loadExample(EXAMPLE_NAMES[next])
+      return
+    }
+
+    const index = RUK_EXAMPLE_NAMES.indexOf(selectedRukExample.value)
+    const next = (index + direction + RUK_EXAMPLE_NAMES.length) % RUK_EXAMPLE_NAMES.length
+    loadRukExample(RUK_EXAMPLE_NAMES[next])
+  }
+
+  const handleExampleWheel = (deltaY: number) => {
+    if (deltaY === 0) return
+    exampleWheelDeltaRef.current += deltaY
+    if (Math.abs(exampleWheelDeltaRef.current) < 40) return
+    const direction = exampleWheelDeltaRef.current > 0 ? 1 : -1
+    exampleWheelDeltaRef.current = 0
+    cycleExample(direction)
+  }
+
   const setSourcePanel = (panel: SourcePanel) => {
     if (panel === sourcePanel.value) return
     const nextSource = panel === "rusk"
@@ -299,15 +345,16 @@ export function App() {
 
   const runRust = async () => {
     if (converted.value.error || runState.value === "running") return
+    const rust = converted.value.rust
     if (
-      new TextEncoder().encode(converted.value.rust).length >
-        RUN_SOURCE_LIMIT_BYTES
+      new TextEncoder().encode(rust).length > RUN_SOURCE_LIMIT_BYTES
     ) {
       runOutput.value =
         `Rust source exceeds ${RUN_SOURCE_LIMIT_LABEL} run limit`
       return
     }
 
+    lastRunSourceRef.current = rust
     runState.value = "running"
     runResult.value = null
     runOutput.value = "Running..."
@@ -315,7 +362,7 @@ export function App() {
       const response = await fetch("/api/run", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ rust: converted.value.rust }),
+        body: JSON.stringify({ rust }),
       })
       const result = await response.json() as RunResponse | { error: string }
       if ("error" in result) runOutput.value = result.error
@@ -329,6 +376,24 @@ export function App() {
       runState.value = "idle"
     }
   }
+
+  useEffect(() => {
+    if (!canRunRust || !autoRun.value || converted.value.error) return
+    if (runState.value === "running") return
+    const rust = converted.value.rust
+    if (rust === lastRunSourceRef.current) return
+    const timer = globalThis.setTimeout(() => {
+      if (rust !== lastRunSourceRef.current) void runRust()
+    }, AUTO_RUN_DELAY_MS)
+    return () => globalThis.clearTimeout(timer)
+  }, [
+    autoRun.value,
+    sourceCode.value,
+    rustCode.value,
+    sourcePanel.value,
+    editSide.value,
+    runState.value,
+  ])
 
   return (
     <Layout>
@@ -371,7 +436,36 @@ export function App() {
         </div>
 
         <div class="flex-none w-full lg:w-auto flex flex-row border-b-2 lg:border-b-0 border-black bg-white">
-          <div class="flex-1 lg:flex-none relative border-r-2 border-black">
+          <div class="relative flex-none border-r-2 border-black">
+            <button
+              type="button"
+              onClick={() => settingsOpen.value = !settingsOpen.value}
+              class="h-full px-4 py-3 text-xs md:text-sm font-bold uppercase bg-white hover:bg-black hover:text-white"
+              aria-expanded={settingsOpen.value}
+            >
+              Set
+            </button>
+            {settingsOpen.value && (
+              <div class="absolute right-0 top-full z-30 w-52 border-2 border-black bg-white p-2">
+                <button
+                  type="button"
+                  disabled={!canRunRust}
+                  onClick={() => setAutoRun(!autoRun.value)}
+                  class="w-full flex items-center justify-between gap-3 px-2 py-2 text-xs font-bold uppercase text-left hover:bg-black hover:text-white disabled:opacity-40 disabled:hover:bg-white disabled:hover:text-black"
+                >
+                  <span>Auto Run</span>
+                  <span>{autoRun.value ? "On · 1s" : "Off · 1s"}</span>
+                </button>
+              </div>
+            )}
+          </div>
+          <div
+            class="flex-1 lg:flex-none relative border-r-2 border-black"
+            onWheel={(event) => {
+              event.preventDefault()
+              handleExampleWheel(event.deltaY)
+            }}
+          >
             <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
               <span class="text-[10px] md:text-xs font-bold uppercase mr-2 opacity-50">
                 EXPL:
