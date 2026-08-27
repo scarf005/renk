@@ -366,6 +366,18 @@ fn find_dependency_rlib(directory: &Path, crate_name: &str) -> Option<PathBuf> {
         })
 }
 
+fn require_dependency_rlib(directory: &Path, crate_name: &str) -> std::io::Result<PathBuf> {
+    find_dependency_rlib(directory, crate_name).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!(
+                "runner dependency `{crate_name}` not found in {}",
+                directory.display()
+            ),
+        )
+    })
+}
+
 fn native_dependency_dirs(run_deps: &Path) -> Vec<PathBuf> {
     let Some(release) = run_deps.parent() else {
         return Vec::new();
