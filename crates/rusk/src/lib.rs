@@ -2269,7 +2269,7 @@ fn replace_square_generics(text: &str, mode: GenericMode) -> String {
             && let Some(close) = matching_bracket(&chars, index + 1, '[', ']')
         {
             let content: String = chars[index + 2..close].iter().collect();
-            let inner = replace_square_generics(&content, GenericMode::Type);
+            let inner = lower_generic_content(&content);
             if mode == GenericMode::Expr {
                 output.push_str("::<");
             } else {
@@ -2290,7 +2290,7 @@ fn replace_square_generics(text: &str, mode: GenericMode) -> String {
             && let Some(close) = matching_bracket(&chars, index, '[', ']')
         {
             let content: String = chars[index + 1..close].iter().collect();
-            let inner = replace_square_generics(&content, GenericMode::Type);
+            let inner = lower_generic_content(&content);
             output.push('<');
             output.push_str(&inner);
             output.push('>');
@@ -2304,6 +2304,13 @@ fn replace_square_generics(text: &str, mode: GenericMode) -> String {
     output
 }
 
+fn lower_generic_content(content: &str) -> String {
+    replace_dotted_paths(
+        &replace_square_generics(content, GenericMode::Type),
+        PathMode::Type,
+    )
+}
+
 fn replace_dotted_paths(text: &str, mode: PathMode) -> String {
     let chars: Vec<char> = text.chars().collect();
     let mut output = String::new();
@@ -2311,22 +2318,56 @@ fn replace_dotted_paths(text: &str, mode: PathMode) -> String {
     while index < chars.len() {
         if is_ident_start(chars[index]) {
             let start = index;
+            let explicit_path_before = start >= 2 && chars[start - 2..start] == [':', ':'];
             let mut segments = Vec::new();
+            let mut dot_positions = Vec::new();
             let first_end = read_ident(&chars, index);
             segments.push(chars[start..first_end].iter().collect::<String>());
             index = first_end;
-            while index + 1 < chars.len() && chars[index] == '.' && is_ident_start(chars[index + 1])
-            {
-                let segment_start = index + 1;
-                let segment_end = read_ident(&chars, segment_start);
-                segments.push(chars[segment_start..segment_end].iter().collect::<String>());
-                index = segment_end;
+
+            loop {
+                if index + 2 < chars.len()
+                    && chars[index] == ':'
+                    && chars[index + 1] == ':'
+                    && chars[index + 2] == '<'
+                    && let Some(close) = matching_bracket(&chars, index + 2, '<', '>')
+                {
+                    index = close + 1;
+                    continue;
+                }
+                if chars.get(index) == Some(&'<')
+                    && let Some(close) = matching_bracket(&chars, index, '<', '>')
+                {
+                    index = close + 1;
+                    continue;
+                }
+                if index + 1 < chars.len()
+                    && chars[index] == '.'
+                    && is_ident_start(chars[index + 1])
+                {
+                    dot_positions.push(index);
+                    let segment_start = index + 1;
+                    let segment_end = read_ident(&chars, segment_start);
+                    segments.push(chars[segment_start..segment_end].iter().collect::<String>());
+                    index = segment_end;
+                    continue;
+                }
+                break;
             }
-            if segments.len() > 1 && should_convert_path(&segments, mode, chars.get(index).copied())
-            {
-                output.push_str(&segments.join("::"));
+
+            let should_convert = segments.len() > 1
+                && !explicit_path_before
+                && should_convert_path(&segments, mode, chars.get(index).copied());
+            if should_convert {
+                let mut part_start = start;
+                for dot in dot_positions {
+                    output.extend(chars[part_start..dot].iter());
+                    output.push_str("::");
+                    part_start = dot + 1;
+                }
+                output.extend(chars[part_start..index].iter());
             } else {
-                output.push_str(&chars[start..index].iter().collect::<String>());
+                output.extend(chars[start..index].iter());
             }
         } else {
             output.push(chars[index]);
