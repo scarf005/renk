@@ -35,6 +35,7 @@ const MAX_OUTPUT_BYTES: usize = MAX_OUTPUT_KIB * BYTES_PER_KIB;
 const MAX_BODY_BYTES: usize = MAX_RUN_SOURCE_BYTES * JSON_BODY_SIZE_MULTIPLIER;
 const DEFAULT_ADDR: &str = "0.0.0.0:8080";
 const DEFAULT_DIST: &str = "/app/web/dist";
+const DEFAULT_RUN_DEPS: &str = "/app/trpl-runtime/release/deps";
 const DEFAULT_TIMEOUT_MS: u64 = 5_000;
 const DEFAULT_REQUEST_TIMEOUT_MS: u64 = 10_000;
 const DEFAULT_MAX_REQUESTS: usize = 64;
@@ -43,7 +44,6 @@ const DEFAULT_RUN_RATE_LIMIT_PER_MINUTE: usize = 10;
 const RATE_LIMIT_WINDOW_MS: u64 = 60_000;
 const CHILD_FILE_SIZE_MIB: u64 = 64;
 const CHILD_OPEN_FILES: u64 = 64;
-const CHILD_PROCESSES: u64 = 64;
 const CHILD_FILE_SIZE_BYTES: u64 = CHILD_FILE_SIZE_MIB * BYTES_PER_MIB;
 
 static ACTIVE_REQUESTS: AtomicUsize = AtomicUsize::new(0);
@@ -55,6 +55,7 @@ static RUN_RATE_COUNT: AtomicUsize = AtomicUsize::new(0);
 struct AppState {
     config: ServerConfig,
     dist: PathBuf,
+    run_deps: PathBuf,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -99,6 +100,8 @@ struct RunResponse {
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
     let addr = env::var("RUSK_WEB_ADDR").unwrap_or_else(|_| DEFAULT_ADDR.to_string());
+    let run_deps = run_dependency_dir();
+    require_dependency_rlib(&run_deps, "trpl")?;
     let state = AppState {
         config: ServerConfig {
             request_timeout: Duration::from_millis(read_u64_env(
@@ -120,6 +123,7 @@ async fn main() -> std::io::Result<()> {
             ),
         },
         dist: PathBuf::from(env::var("RUSK_WEB_DIST").unwrap_or_else(|_| DEFAULT_DIST.to_string())),
+        run_deps,
     };
     let app = Router::new()
         .route("/api/run", post(handle_run_request))
@@ -226,7 +230,8 @@ async fn handle_run_request(State(state): State<AppState>, body: Bytes) -> Respo
 
     let rust = rust.to_string();
     let timeout = state.config.run_timeout;
-    match tokio::task::spawn_blocking(move || compile_and_run_rust(&rust, timeout)).await {
+    let run_deps = state.run_deps.clone();
+    match tokio::task::spawn_blocking(move || compile_and_run_rust(&rust, timeout, &run_deps)).await {
         Ok(Ok(response)) => json_response(StatusCode::OK, run_response_json(response)),
         Ok(Err(error)) => json_response(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -270,7 +275,11 @@ fn now_millis() -> u64 {
         .unwrap_or_default()
 }
 
-fn compile_and_run_rust(rust: &str, timeout: Duration) -> std::io::Result<RunResponse> {
+fn compile_and_run_rust(
+    rust: &str,
+    timeout: Duration,
+    run_deps: &Path,
+) -> std::io::Result<RunResponse> {
     let dir = temp_run_dir();
     fs::create_dir_all(&dir)?;
     let started = Instant::now();
@@ -278,17 +287,27 @@ fn compile_and_run_rust(rust: &str, timeout: Duration) -> std::io::Result<RunRes
     let binary_path = dir.join("main");
     fs::write(&source_path, rust)?;
 
-    let compile = run_command(
-        "rustc",
-        &[
-            "--edition=2024",
-            source_path.to_str().unwrap(),
-            "-o",
-            binary_path.to_str().unwrap(),
-        ],
-        &dir,
-        timeout,
-    );
+    let mut compile_args = vec![
+        "--edition=2024".to_string(),
+        source_path.to_string_lossy().into_owned(),
+        "-o".to_string(),
+        binary_path.to_string_lossy().into_owned(),
+    ];
+    let trpl = require_dependency_rlib(run_deps, "trpl")?;
+    compile_args.extend([
+        "-L".to_string(),
+        format!("dependency={}", run_deps.display()),
+        "--extern".to_string(),
+        format!("trpl={}", trpl.display()),
+    ]);
+    for native in native_dependency_dirs(run_deps) {
+        compile_args.extend([
+            "-L".to_string(),
+            format!("native={}", native.display()),
+        ]);
+    }
+    let compile_args = compile_args.iter().map(String::as_str).collect::<Vec<_>>();
+    let compile = run_command("rustc", &compile_args, &dir, timeout);
     if compile.status != Some(0) || compile.timed_out {
         let total_ms = elapsed_ms(started);
         let compile_ms = compile.elapsed_ms;
@@ -317,6 +336,61 @@ fn compile_and_run_rust(rust: &str, timeout: Duration) -> std::io::Result<RunRes
         run_ms,
         total_ms,
     })
+}
+
+fn run_dependency_dir() -> PathBuf {
+    if let Ok(path) = env::var("RUSK_RUN_DEPS") {
+        return PathBuf::from(path);
+    }
+    if let Ok(executable) = env::current_exe()
+        && let Some(parent) = executable.parent()
+    {
+        let local = parent.join("deps");
+        if local.is_dir() {
+            return local;
+        }
+    }
+    PathBuf::from(DEFAULT_RUN_DEPS)
+}
+
+fn find_dependency_rlib(directory: &Path, crate_name: &str) -> Option<PathBuf> {
+    let prefix = format!("lib{crate_name}-");
+    fs::read_dir(directory)
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .find(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with(&prefix) && name.ends_with(".rlib"))
+        })
+}
+
+fn require_dependency_rlib(directory: &Path, crate_name: &str) -> std::io::Result<PathBuf> {
+    find_dependency_rlib(directory, crate_name).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!(
+                "runner dependency `{crate_name}` not found in {}",
+                directory.display()
+            ),
+        )
+    })
+}
+
+fn native_dependency_dirs(run_deps: &Path) -> Vec<PathBuf> {
+    let Some(release) = run_deps.parent() else {
+        return Vec::new();
+    };
+    let build = release.join("build");
+    let Ok(entries) = fs::read_dir(build) else {
+        return Vec::new();
+    };
+    entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path().join("out"))
+        .filter(|path| path.is_dir())
+        .collect()
 }
 
 fn temp_run_dir() -> PathBuf {
@@ -491,8 +565,7 @@ fn apply_child_limits(cpu_seconds: u64) -> std::io::Result<()> {
         CHILD_FILE_SIZE_BYTES,
         CHILD_FILE_SIZE_BYTES,
     )?;
-    set_limit(libc::RLIMIT_NOFILE, CHILD_OPEN_FILES, CHILD_OPEN_FILES)?;
-    set_limit(libc::RLIMIT_NPROC, CHILD_PROCESSES, CHILD_PROCESSES)
+    set_limit(libc::RLIMIT_NOFILE, CHILD_OPEN_FILES, CHILD_OPEN_FILES)
 }
 
 #[cfg(unix)]
