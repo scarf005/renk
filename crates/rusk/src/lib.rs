@@ -2210,14 +2210,23 @@ fn lower_if_then_else(text: &str) -> Option<String> {
 }
 
 fn find_else_for_then_body(text: &str) -> Option<usize> {
+    let chars = text.chars().collect::<Vec<_>>();
+    let byte_offsets = text.char_indices().map(|(offset, _)| offset).collect::<Vec<_>>();
     let mut round = 0usize;
     let mut square = 0usize;
     let mut curly = 0usize;
     let mut nested_if_count = 0usize;
     let mut index = 0usize;
 
-    while index < text.len() {
-        let character = text[index..].chars().next()?;
+    while index < chars.len() {
+        if let Some(end) = opaque_span_end(&chars, index)
+            .or_else(|| macro_invocation_end(&chars, index))
+        {
+            index = end + 1;
+            continue;
+        }
+
+        let character = chars[index];
         match character {
             '(' => round += 1,
             ')' => round = round.saturating_sub(1),
@@ -2229,32 +2238,39 @@ fn find_else_for_then_body(text: &str) -> Option<usize> {
         }
 
         if round == 0 && square == 0 && curly == 0 {
-            if text[index..].starts_with("if") && is_keyword_boundary(text, index, "if".len()) {
+            if keyword_at(&chars, index, "if") {
                 nested_if_count += 1;
-            } else if text[index..].starts_with("else")
-                && is_keyword_boundary(text, index, "else".len())
-            {
+            } else if keyword_at(&chars, index, "else") {
                 if nested_if_count == 0 {
-                    return Some(index);
+                    return byte_offsets.get(index).copied();
                 }
                 nested_if_count -= 1;
             }
         }
 
-        index += character.len_utf8();
+        index += 1;
     }
 
     None
 }
 
 fn find_top_level_keyword(text: &str, keyword: &str) -> Option<usize> {
+    let chars = text.chars().collect::<Vec<_>>();
+    let byte_offsets = text.char_indices().map(|(offset, _)| offset).collect::<Vec<_>>();
     let mut round = 0usize;
     let mut square = 0usize;
     let mut curly = 0usize;
     let mut index = 0usize;
 
-    while index < text.len() {
-        let character = text[index..].chars().next()?;
+    while index < chars.len() {
+        if let Some(end) = opaque_span_end(&chars, index)
+            .or_else(|| macro_invocation_end(&chars, index))
+        {
+            index = end + 1;
+            continue;
+        }
+
+        let character = chars[index];
         match character {
             '(' => round += 1,
             ')' => round = round.saturating_sub(1),
@@ -2268,16 +2284,29 @@ fn find_top_level_keyword(text: &str, keyword: &str) -> Option<usize> {
         if round == 0
             && square == 0
             && curly == 0
-            && text[index..].starts_with(keyword)
-            && is_keyword_boundary(text, index, keyword.len())
+            && keyword_at(&chars, index, keyword)
+            && !chars[..index].iter().collect::<String>().trim().is_empty()
         {
-            return Some(index);
+            return byte_offsets.get(index).copied();
         }
 
-        index += character.len_utf8();
+        index += 1;
     }
 
     None
+}
+
+fn keyword_at(chars: &[char], index: usize, keyword: &str) -> bool {
+    let keyword = keyword.chars().collect::<Vec<_>>();
+    let end = index + keyword.len();
+    chars.get(index..end) == Some(keyword.as_slice())
+        && index
+            .checked_sub(1)
+            .and_then(|before| chars.get(before))
+            .is_none_or(|character| !is_ident_continue(*character))
+        && chars
+            .get(end)
+            .is_none_or(|character| !is_ident_continue(*character))
 }
 
 fn is_keyword_boundary(text: &str, index: usize, len: usize) -> bool {
