@@ -13,7 +13,7 @@ fn explicit_generic_application_does_not_compete_with_indexing() {
     assert!(output.contains("let parsed = raw.parse::<i32>();"));
 
     let output = rust(
-        "fn make() -> Vec.[String] = Vec.[String].new()\nfn collect(iter: Iter) = iter.collect.[Vec.[String]]()\n",
+        "fn make() -> Vec[String] = Vec.[String].new()\nfn collect(iter: Iter) = iter.collect.[Vec[String]]()\n",
     );
     assert!(output.contains("fn make() -> Vec<String>"));
     assert!(output.contains("Vec::<String>::new()"));
@@ -58,7 +58,7 @@ fn macro_rules_bodies_use_rust_tokens() {
 #[test]
 fn type_lowering_reenters_expression_context_for_consts() {
     let output = rust(
-        "fn bytes() -> [u8; TABLE[N].len()] = todo!()\nfn array() -> Array.[u8, { TABLE[N].len() }] = todo!()\n",
+        "fn bytes() -> [u8; TABLE[N].len()] = todo!()\nfn array() -> Array[u8, { TABLE[N].len() }] = todo!()\n",
     );
     assert!(output.contains("fn bytes() -> [u8; TABLE[N].len()]"));
     assert!(output.contains("fn array() -> Array<u8, { TABLE[N].len() }>") );
@@ -72,7 +72,7 @@ fn rust_conversion_preserves_paths_and_marks_generic_application() {
         "fn id<T>(x: Vec<T>) -> Option<T> {\n    std::mem::drop(x);\n    None\n}\n\nfn parse(value: &str) {\n    let _ = value.parse::<i32>();\n}\n",
     )
     .unwrap();
-    assert!(output.contains("fn id[T](x: Vec.[T]) -> Option.[T]:"));
+    assert!(output.contains("fn id[T](x: Vec[T]) -> Option[T]:"));
     assert!(output.contains("std::mem::drop(x)"));
     assert!(output.contains("value.parse.[i32]()"));
 }
