@@ -739,8 +739,7 @@ fn is_raw_rust_block_header(header: &str, kind: RustBlockKind) -> bool {
 
 fn lower_rust_syntax(text: &str) -> String {
     let text = replace_rust_turbofish(text);
-    let text = replace_angle_generics_with_square(&text);
-    text.replace("::", ".")
+    replace_angle_generics_with_square(&text)
 }
 
 fn replace_rust_turbofish(text: &str) -> String {
@@ -748,13 +747,20 @@ fn replace_rust_turbofish(text: &str) -> String {
     let mut output = String::new();
     let mut index = 0usize;
     while index < chars.len() {
+        if let Some(end) = opaque_span_end(&chars, index)
+            .or_else(|| macro_invocation_end(&chars, index))
+        {
+            output.extend(chars[index..=end].iter());
+            index = end + 1;
+            continue;
+        }
         if index + 2 < chars.len()
             && chars[index] == ':'
             && chars[index + 1] == ':'
             && chars[index + 2] == '<'
             && let Some(close) = matching_bracket(&chars, index + 2, '<', '>')
         {
-            output.push('[');
+            output.push_str(".[");
             output.push_str(&replace_angle_generics_with_square(
                 &chars[index + 3..close].iter().collect::<String>(),
             ));
@@ -773,12 +779,22 @@ fn replace_angle_generics_with_square(text: &str) -> String {
     let mut output = String::new();
     let mut index = 0usize;
     while index < chars.len() {
+        if let Some(end) = opaque_span_end(&chars, index)
+            .or_else(|| macro_invocation_end(&chars, index))
+        {
+            output.extend(chars[index..=end].iter());
+            index = end + 1;
+            continue;
+        }
         if chars[index] == '<'
             && has_ident_before(&chars, index)
             && let Some(close) = matching_bracket(&chars, index, '<', '>')
         {
             let content = chars[index + 1..close].iter().collect::<String>();
             if rust_generic_content(&content) {
+                if !rust_generic_parameter_list(&chars, index) {
+                    output.push('.');
+                }
                 output.push('[');
                 output.push_str(&replace_angle_generics_with_square(&content));
                 output.push(']');
@@ -790,6 +806,28 @@ fn replace_angle_generics_with_square(text: &str) -> String {
         index += 1;
     }
     output
+}
+
+fn rust_generic_parameter_list(chars: &[char], open: usize) -> bool {
+    let mut start = open;
+    while start > 0 && is_ident_continue(chars[start - 1]) {
+        start -= 1;
+    }
+    let ident = chars[start..open].iter().collect::<String>();
+    if matches!(ident.as_str(), "impl" | "for") {
+        return true;
+    }
+
+    let mut cursor = start;
+    while cursor > 0 && chars[cursor - 1].is_whitespace() {
+        cursor -= 1;
+    }
+    let end = cursor;
+    while cursor > 0 && is_ident_continue(chars[cursor - 1]) {
+        cursor -= 1;
+    }
+    let previous = chars[cursor..end].iter().collect::<String>();
+    matches!(previous.as_str(), "fn" | "struct" | "enum" | "trait" | "union" | "type")
 }
 
 fn rust_generic_content(content: &str) -> bool {
