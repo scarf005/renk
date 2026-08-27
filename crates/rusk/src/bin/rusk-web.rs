@@ -294,19 +294,18 @@ fn compile_and_run_rust(
         "-o".to_string(),
         binary_path.to_string_lossy().into_owned(),
     ];
-    if let Some(trpl) = find_dependency_rlib(run_deps, "trpl") {
+    let trpl = require_dependency_rlib(run_deps, "trpl")?;
+    compile_args.extend([
+        "-L".to_string(),
+        format!("dependency={}", run_deps.display()),
+        "--extern".to_string(),
+        format!("trpl={}", trpl.display()),
+    ]);
+    for native in native_dependency_dirs(run_deps) {
         compile_args.extend([
             "-L".to_string(),
-            format!("dependency={}", run_deps.display()),
-            "--extern".to_string(),
-            format!("trpl={}", trpl.display()),
+            format!("native={}", native.display()),
         ]);
-        for native in native_dependency_dirs(run_deps) {
-            compile_args.extend([
-                "-L".to_string(),
-                format!("native={}", native.display()),
-            ]);
-        }
     }
     let compile_args = compile_args.iter().map(String::as_str).collect::<Vec<_>>();
     let compile = run_command("rustc", &compile_args, &dir, timeout);
