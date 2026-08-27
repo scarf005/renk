@@ -101,6 +101,8 @@ struct RunResponse {
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
     let addr = env::var("RUSK_WEB_ADDR").unwrap_or_else(|_| DEFAULT_ADDR.to_string());
+    let run_deps = run_dependency_dir();
+    require_dependency_rlib(&run_deps, "trpl")?;
     let state = AppState {
         config: ServerConfig {
             request_timeout: Duration::from_millis(read_u64_env(
@@ -122,7 +124,7 @@ async fn main() -> std::io::Result<()> {
             ),
         },
         dist: PathBuf::from(env::var("RUSK_WEB_DIST").unwrap_or_else(|_| DEFAULT_DIST.to_string())),
-        run_deps: run_dependency_dir(),
+        run_deps,
     };
     let app = Router::new()
         .route("/api/run", post(handle_run_request))
