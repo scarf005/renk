@@ -67,12 +67,13 @@ just web # open web editor
 - `if condition then expr else expr` expressions
 - Rust-style inline struct literals, e.g. `Self{ id, name }`
 - trailing `;` for explicit semicolon/discard statements when inference is not enough
-- Rust-style `#[...]` / `#![...]` attributes
-- Scala-style generic brackets in type positions, e.g. `Result[T, E]` -> `Result<T, E>`
-- method generic calls, e.g. `value.parse[i32]()` -> `value.parse::<i32>()`
-- dotted path lowering for type paths and obvious item paths, e.g. `std.io.Read` -> `std::io::Read`, `Foo.new()` -> `Foo::new()`
-- escape hatch: existing Rust `::` syntax is preserved
-- macro definitions with indentation-based `macro_rules!` arms
+- Rust-style `#[...]` / `#![...]` attributes; attribute payloads use Rust token syntax unchanged
+- generic parameter declarations with `[T]`, e.g. `struct Boxed[T]` -> `struct Boxed<T>`
+- explicit generic application with `.[...]`, e.g. `Result.[T, E]` -> `Result<T, E>` and `value.parse.[i32]()` -> `value.parse::<i32>()`
+- expression `[...]` is always indexing, e.g. `values[index]`; it is never inferred as generic application
+- dotted path lowering for obvious item paths, e.g. `std.io.Read` -> `std::io::Read`, `Foo.new()` -> `Foo::new()`
+- escape hatches: Rust `::` / `::<...>` force path/generic syntax, while parentheses force a value receiver, e.g. `(TEXT).len()`
+- macro definitions with indentation-based `macro_rules!` arms; macro patterns, bodies, and arbitrary macro invocation token trees use Rust syntax unchanged (`println!` / `format!` keep their existing inline-format-expression sugar)
 - source formatter that preserves existing line break style; only line width is configurable
 - hierarchical JSON source map generation
 - Rust-to-Rusk, Rust-to-Ruk, Ruk-to-Rust, Ruk-to-Rusk, and Rusk-to-Ruk conversion
@@ -121,4 +122,4 @@ cargo install --path crates/rusk --bin rusk-lsp
 
 This is a compiler-front-end MVP, not a full Rust replacement yet. It intentionally avoids proc-macro DSL parsing and full type-aware dot disambiguation.
 
-Dot and bracket disambiguation is heuristic in expression positions. Type signatures are lowered as type syntax, so `Result[foo, err]` becomes `Result<foo, err>`, but expression paths use Rust naming conventions: `Vec.from(pair)` becomes `Vec::from(pair)` because `Vec` starts with an uppercase letter, while `picked.parse[i32]()` becomes `picked.parse::<i32>()` and keeps the receiver dot. Lowercase type paths in expression positions are ambiguous and may need Rust's escape hatch syntax, e.g. write `foo::new()` instead of `foo.new()` when `foo` is a lowercase type or module path.
+Generic application and indexing are syntactically distinct: `Vec.[T]` / `value.parse.[i32]()` are generic applications, while `values[index]` is always indexing. Only dotted path lowering remains heuristic in expression positions. Obvious Rust-style item paths such as `Vec.from(pair)` are lowered to `Vec::from(pair)`, while value receivers keep `.`, and explicit `::` is never reinterpreted. When the heuristic would choose the wrong side, use `foo::new()` to force a path or `(FOO).method()` to force a value receiver. Arbitrary macro and attribute token trees are opaque Rust syntax and are not path/generic-rewritten; the existing `println!` / `format!` inline-format-expression transform is a dedicated exception. Rust-to-Rusk conversion preserves explicit `::` paths and emits `.[...]` for generic application so conversion does not depend on path heuristics.
