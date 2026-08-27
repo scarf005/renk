@@ -146,6 +146,7 @@ export function App() {
   const sourceRef = useRef<HTMLElement>(null)
   const outputRef = useRef<HTMLElement>(null)
   const isScrollingRef = useRef(false)
+  const exampleWheelDeltaRef = useRef(0)
 
   const clearRun = () => {
     runOutput.value = ""
@@ -262,6 +263,28 @@ export function App() {
     if (location !== path) navigate(path)
   }
 
+  const cycleExample = (direction: -1 | 1) => {
+    if (sourcePanel.value === "rusk") {
+      const index = EXAMPLE_NAMES.indexOf(selectedExample.value)
+      const next = (index + direction + EXAMPLE_NAMES.length) % EXAMPLE_NAMES.length
+      loadExample(EXAMPLE_NAMES[next])
+      return
+    }
+
+    const index = RUK_EXAMPLE_NAMES.indexOf(selectedRukExample.value)
+    const next = (index + direction + RUK_EXAMPLE_NAMES.length) % RUK_EXAMPLE_NAMES.length
+    loadRukExample(RUK_EXAMPLE_NAMES[next])
+  }
+
+  const handleExampleWheel = (deltaY: number) => {
+    if (deltaY === 0) return
+    exampleWheelDeltaRef.current += deltaY
+    if (Math.abs(exampleWheelDeltaRef.current) < 40) return
+    const direction = exampleWheelDeltaRef.current > 0 ? 1 : -1
+    exampleWheelDeltaRef.current = 0
+    cycleExample(direction)
+  }
+
   const setSourcePanel = (panel: SourcePanel) => {
     if (panel === sourcePanel.value) return
     const nextSource = panel === "rusk"
@@ -371,7 +394,13 @@ export function App() {
         </div>
 
         <div class="flex-none w-full lg:w-auto flex flex-row border-b-2 lg:border-b-0 border-black bg-white">
-          <div class="flex-1 lg:flex-none relative border-r-2 border-black">
+          <div
+            class="flex-1 lg:flex-none relative border-r-2 border-black"
+            onWheel={(event) => {
+              event.preventDefault()
+              handleExampleWheel(event.deltaY)
+            }}
+          >
             <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
               <span class="text-[10px] md:text-xs font-bold uppercase mr-2 opacity-50">
                 EXPL:
