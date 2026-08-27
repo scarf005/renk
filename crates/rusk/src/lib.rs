@@ -1867,7 +1867,7 @@ fn lower_format_invocation(arguments: &str) -> Option<String> {
         };
         let marker = format!("__rusk_inline_{}__", index);
         lowered_arguments[0] = lowered_arguments[0].replace(&marker, &placeholder);
-        lowered_arguments.push(expression);
+        lowered_arguments.push(lower_expr(&expression));
     }
     Some(lowered_arguments.join(", "))
 }
@@ -2263,6 +2263,14 @@ fn replace_square_generics(text: &str, mode: GenericMode) -> String {
     let mut output = String::new();
     let mut index = 0usize;
     while index < chars.len() {
+        if let Some(end) = opaque_span_end(&chars, index)
+            .or_else(|| macro_invocation_end(&chars, index))
+        {
+            output.extend(chars[index..=end].iter());
+            index = end + 1;
+            continue;
+        }
+
         if chars[index] == '.'
             && chars.get(index + 1) == Some(&'[')
             && has_generic_base_before(&chars, index)
@@ -2316,6 +2324,14 @@ fn replace_dotted_paths(text: &str, mode: PathMode) -> String {
     let mut output = String::new();
     let mut index = 0usize;
     while index < chars.len() {
+        if let Some(end) = opaque_span_end(&chars, index)
+            .or_else(|| macro_invocation_end(&chars, index))
+        {
+            output.extend(chars[index..=end].iter());
+            index = end + 1;
+            continue;
+        }
+
         if is_ident_start(chars[index]) {
             let start = index;
             let explicit_path_before = start >= 2 && chars[start - 2..start] == [':', ':'];
@@ -2379,17 +2395,175 @@ fn replace_dotted_paths(text: &str, mode: PathMode) -> String {
 
 fn matching_bracket(chars: &[char], open_index: usize, open: char, close: char) -> Option<usize> {
     let mut depth = 0usize;
-    for (index, character) in chars.iter().enumerate().skip(open_index) {
-        if *character == open {
+    let mut index = open_index;
+    while index < chars.len() {
+        if let Some(end) = opaque_span_end(chars, index) {
+            index = end + 1;
+            continue;
+        }
+        if chars[index] == open {
             depth += 1;
-        } else if *character == close {
-            depth -= 1;
+        } else if chars[index] == close {
+            depth = depth.checked_sub(1)?;
             if depth == 0 {
                 return Some(index);
             }
         }
+        index += 1;
     }
     None
+}
+
+fn opaque_span_end(chars: &[char], index: usize) -> Option<usize> {
+    if index >= chars.len() {
+        return None;
+    }
+    if chars[index] == '/' && chars.get(index + 1) == Some(&'/') {
+        return Some(chars.len().saturating_sub(1));
+    }
+    if chars[index] == '/' && chars.get(index + 1) == Some(&'*') {
+        let mut depth = 1usize;
+        let mut cursor = index + 2;
+        while cursor + 1 < chars.len() {
+            if chars[cursor] == '/' && chars[cursor + 1] == '*' {
+                depth += 1;
+                cursor += 2;
+                continue;
+            }
+            if chars[cursor] == '*' && chars[cursor + 1] == '/' {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(cursor + 1);
+                }
+                cursor += 2;
+                continue;
+            }
+            cursor += 1;
+        }
+        return Some(chars.len().saturating_sub(1));
+    }
+    if let Some(end) = raw_string_span_end(chars, index) {
+        return Some(end);
+    }
+    if chars[index] == '"' {
+        return Some(quoted_chars_end(chars, index, '"'));
+    }
+    if matches!(chars[index], 'b' | 'c') && chars.get(index + 1) == Some(&'"') {
+        return Some(quoted_chars_end(chars, index + 1, '"'));
+    }
+    if chars[index] == '\'' {
+        return char_literal_end(chars, index);
+    }
+    if chars[index] == 'b' && chars.get(index + 1) == Some(&'\'') {
+        return char_literal_end(chars, index + 1);
+    }
+    None
+}
+
+fn raw_string_span_end(chars: &[char], index: usize) -> Option<usize> {
+    let mut raw = index;
+    if chars
+        .get(raw)
+        .is_some_and(|character| matches!(*character, 'b' | 'c'))
+    {
+        raw += 1;
+    }
+    if chars.get(raw) != Some(&'r') {
+        return None;
+    }
+    let mut quote = raw + 1;
+    let mut hashes = 0usize;
+    while chars.get(quote) == Some(&'#') {
+        hashes += 1;
+        quote += 1;
+    }
+    if chars.get(quote) != Some(&'"') {
+        return None;
+    }
+    let mut cursor = quote + 1;
+    while cursor < chars.len() {
+        if chars[cursor] == '"'
+            && (0..hashes).all(|offset| chars.get(cursor + 1 + offset) == Some(&'#'))
+        {
+            return Some(cursor + hashes);
+        }
+        cursor += 1;
+    }
+    Some(chars.len().saturating_sub(1))
+}
+
+fn quoted_chars_end(chars: &[char], start: usize, quote: char) -> usize {
+    let mut escaped = false;
+    let mut cursor = start + 1;
+    while cursor < chars.len() {
+        let character = chars[cursor];
+        if escaped {
+            escaped = false;
+        } else if character == '\\' {
+            escaped = true;
+        } else if character == quote {
+            return cursor;
+        }
+        cursor += 1;
+    }
+    chars.len().saturating_sub(1)
+}
+
+fn char_literal_end(chars: &[char], quote: usize) -> Option<usize> {
+    let first = *chars.get(quote + 1)?;
+    if is_ident_continue(first) && chars.get(quote + 2) != Some(&'\'') {
+        return None;
+    }
+    if first != '\\' {
+        return (chars.get(quote + 2) == Some(&'\'')).then_some(quote + 2);
+    }
+    let mut cursor = quote + 2;
+    while cursor < chars.len() {
+        if chars[cursor] == '\'' {
+            return Some(cursor);
+        }
+        if chars[cursor].is_whitespace() {
+            return None;
+        }
+        cursor += 1;
+    }
+    None
+}
+
+fn macro_invocation_end(chars: &[char], start: usize) -> Option<usize> {
+    if !chars.get(start).copied().is_some_and(is_ident_start) {
+        return None;
+    }
+    let mut cursor = read_ident(chars, start);
+    loop {
+        if cursor + 2 < chars.len()
+            && chars[cursor] == ':'
+            && chars[cursor + 1] == ':'
+            && is_ident_start(chars[cursor + 2])
+        {
+            cursor = read_ident(chars, cursor + 2);
+        } else {
+            break;
+        }
+    }
+    while chars.get(cursor).is_some_and(|character| character.is_whitespace()) {
+        cursor += 1;
+    }
+    if chars.get(cursor) != Some(&'!') {
+        return None;
+    }
+    cursor += 1;
+    while chars.get(cursor).is_some_and(|character| character.is_whitespace()) {
+        cursor += 1;
+    }
+    let open = *chars.get(cursor)?;
+    let close = match open {
+        '(' => ')',
+        '[' => ']',
+        '{' => '}',
+        _ => return None,
+    };
+    matching_bracket(chars, cursor, open, close)
 }
 
 fn has_ident_before(chars: &[char], index: usize) -> bool {
