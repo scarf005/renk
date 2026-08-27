@@ -2263,29 +2263,41 @@ fn replace_square_generics(text: &str, mode: GenericMode) -> String {
     let mut output = String::new();
     let mut index = 0usize;
     while index < chars.len() {
-        if chars[index] == '['
+        if chars[index] == '.'
+            && chars.get(index + 1) == Some(&'[')
+            && has_generic_base_before(&chars, index)
+            && let Some(close) = matching_bracket(&chars, index + 1, '[', ']')
+        {
+            let content: String = chars[index + 2..close].iter().collect();
+            let inner = replace_square_generics(&content, GenericMode::Type);
+            if mode == GenericMode::Expr {
+                output.push_str("::<");
+            } else {
+                output.push('<');
+            }
+            output.push_str(&inner);
+            output.push('>');
+            index = close + 1;
+            continue;
+        }
+
+        // Keep the old square form in type-only positions for source compatibility.
+        // Expression positions are intentionally strict: `value[index]` is always
+        // indexing and generic application is spelled `value.[T]`.
+        if mode == GenericMode::Type
+            && chars[index] == '['
             && has_ident_before(&chars, index)
             && let Some(close) = matching_bracket(&chars, index, '[', ']')
         {
             let content: String = chars[index + 1..close].iter().collect();
-            let next = chars.get(close + 1).copied();
-            let should_convert = match mode {
-                GenericMode::Type => true,
-                GenericMode::Expr => next == Some('(') || type_like_generic(&content),
-            };
-            if should_convert {
-                let inner = replace_square_generics(&content, GenericMode::Type);
-                if mode == GenericMode::Expr && next == Some('(') {
-                    output.push_str("::<");
-                } else {
-                    output.push('<');
-                }
-                output.push_str(&inner);
-                output.push('>');
-                index = close + 1;
-                continue;
-            }
+            let inner = replace_square_generics(&content, GenericMode::Type);
+            output.push('<');
+            output.push_str(&inner);
+            output.push('>');
+            index = close + 1;
+            continue;
         }
+
         output.push(chars[index]);
         index += 1;
     }
@@ -2344,6 +2356,12 @@ fn has_ident_before(chars: &[char], index: usize) -> bool {
         && (is_ident_continue(chars[index - 1])
             || chars[index - 1] == ']'
             || chars[index - 1] == '>')
+}
+
+fn has_generic_base_before(chars: &[char], dot_index: usize) -> bool {
+    dot_index > 0
+        && (is_ident_continue(chars[dot_index - 1])
+            || matches!(chars[dot_index - 1], ']' | '>' | ')'))
 }
 
 fn type_like_generic(content: &str) -> bool {
