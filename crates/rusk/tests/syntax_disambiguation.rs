@@ -96,3 +96,15 @@ fn inline_if_keywords_are_contextual() {
     let output = rust("fn choose(value: bool) -> i32 = if value /* then */ then 1 else 2\n");
     assert!(output.contains("if value /* then */ { 1 } else { 2 }"));
 }
+
+#[test]
+fn let_and_closure_annotations_are_type_positions() {
+    let output = rust(
+        "fn demo(xs: Vec[i32]):\n    let mut found: Option[i32] = None\n    let (a, b): (Vec[u8], Option[i32]) = (vec![], None)\n    let pick = |x: Vec[i32], i: usize| -> Option[i32] { x.get(i).copied() }\n    let first = xs[0]\n    let mask = xs[0] | xs[1]\n",
+    );
+    assert!(output.contains("let mut found: Option<i32> = None;"));
+    assert!(output.contains("let (a, b): (Vec<u8>, Option<i32>) = (vec![], None);"));
+    assert!(output.contains("|x: Vec<i32>, i: usize| -> Option<i32> { x.get(i).copied() }"));
+    assert!(output.contains("let first = xs[0];"));
+    assert!(output.contains("let mask = xs[0] | xs[1];"));
+}

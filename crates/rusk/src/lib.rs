@@ -1803,11 +1803,139 @@ fn closing_delimiters(text: &str) -> String {
 }
 
 fn lower_basic_expr(text: &str) -> String {
-    let text = lower_format_macros(text);
-    replace_dotted_paths(
-        &replace_square_generics(&text, GenericMode::Expr),
-        PathMode::Expr,
-    )
+    let chars = lower_format_macros(text).chars().collect::<Vec<_>>();
+    let lower_value = |range: &[char]| {
+        replace_dotted_paths(
+            &replace_square_generics(&range.iter().collect::<String>(), GenericMode::Expr),
+            PathMode::Expr,
+        )
+    };
+    let mut output = String::new();
+    let mut start = 0usize;
+    for (type_start, type_end) in type_annotation_spans(&chars) {
+        output.push_str(&lower_value(&chars[start..type_start]));
+        output.push_str(&lower_signature(
+            &chars[type_start..type_end].iter().collect::<String>(),
+        ));
+        start = type_end;
+    }
+    output.push_str(&lower_value(&chars[start..]));
+    output
+}
+
+/// Type positions inside expressions: `let` annotations and closure parameter/return types.
+fn type_annotation_spans(chars: &[char]) -> Vec<(usize, usize)> {
+    let mut spans = Vec::new();
+    let mut index = 0usize;
+    if chars.starts_with(&['l', 'e', 't', ' ']) {
+        let pattern_end = top_level_position(chars, 4, |at| {
+            chars[at] == '='
+                && !matches!(chars.get(at + 1), Some('=' | '>'))
+                && !matches!(chars[at - 1], '=' | '!' | '<' | '>')
+        })
+        .unwrap_or(chars.len());
+        if let Some(colon) =
+            top_level_position(&chars[..pattern_end], 4, |at| is_single_colon(chars, at))
+        {
+            spans.push((colon + 1, pattern_end));
+            index = pattern_end;
+        }
+    }
+    while index < chars.len() {
+        if let Some(end) =
+            opaque_span_end(chars, index).or_else(|| macro_invocation_end(chars, index))
+        {
+            index = end + 1;
+            continue;
+        }
+        if chars[index] != '|' || !is_closure_start(chars, index) {
+            index += 1;
+            continue;
+        }
+        let params_end = if chars.get(index + 1) == Some(&'|') {
+            index + 1
+        } else {
+            let Some(end) = top_level_position(chars, index + 1, |at| chars[at] == '|') else {
+                break;
+            };
+            let mut param_start = index + 1;
+            while param_start < end {
+                let param_end =
+                    top_level_position(&chars[..end], param_start, |at| chars[at] == ',')
+                        .unwrap_or(end);
+                if let Some(colon) = top_level_position(&chars[..param_end], param_start, |at| {
+                    is_single_colon(chars, at)
+                }) {
+                    spans.push((colon + 1, param_end));
+                }
+                param_start = param_end + 1;
+            }
+            end
+        };
+        let mut cursor = params_end + 1;
+        skip_whitespace_chars(chars, &mut cursor);
+        if chars[cursor..].starts_with(&['-', '>']) {
+            let return_end =
+                top_level_position(chars, cursor + 2, |at| chars[at] == '{').unwrap_or(chars.len());
+            spans.push((cursor + 2, return_end));
+        }
+        index = params_end + 1;
+    }
+    spans
+}
+
+fn is_single_colon(chars: &[char], at: usize) -> bool {
+    chars[at] == ':' && chars.get(at + 1) != Some(&':') && (at == 0 || chars[at - 1] != ':')
+}
+
+fn is_closure_start(chars: &[char], bar: usize) -> bool {
+    let end = chars[..bar]
+        .iter()
+        .rposition(|character| !character.is_whitespace())
+        .map_or(0, |at| at + 1);
+    let before = &chars[..end];
+    before.is_empty()
+        || matches!(before.last(), Some('(' | '[' | '{' | ',' | ';' | '='))
+        || before.ends_with(&['=', '>'])
+        || ["move", "return"].iter().any(|keyword| {
+            end.checked_sub(keyword.len())
+                .is_some_and(|at| keyword_at(before, at, keyword))
+        })
+}
+
+fn skip_whitespace_chars(chars: &[char], index: &mut usize) {
+    while chars
+        .get(*index)
+        .is_some_and(|character| character.is_whitespace())
+    {
+        *index += 1;
+    }
+}
+
+/// First index from `start` at bracket depth zero that satisfies `stop`, skipping literals,
+/// comments, and macro bodies; stops at an unmatched closing bracket.
+fn top_level_position(chars: &[char], start: usize, stop: impl Fn(usize) -> bool) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut index = start;
+    while index < chars.len() {
+        if let Some(end) =
+            opaque_span_end(chars, index).or_else(|| macro_invocation_end(chars, index))
+        {
+            index = end + 1;
+            continue;
+        }
+        if depth == 0 && stop(index) {
+            return Some(index);
+        }
+        match chars[index] {
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' if depth == 0 => return None,
+            ')' | ']' | '}' => depth -= 1,
+            _ => {}
+        }
+        index += 1;
+    }
+    None
 }
 
 fn lower_format_macros(text: &str) -> String {
