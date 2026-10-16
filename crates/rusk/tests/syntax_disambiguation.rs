@@ -305,3 +305,10 @@ fn block_headers_without_a_body_emit_an_empty_block() {
     assert_eq!(rust("fn main():\n"), "fn main() {\n}\n");
     assert_eq!(rust("impl A:\n    fn f(&self):\n"), "impl A {\n    fn f(&self) {\n    }\n}\n");
 }
+
+#[test]
+fn formatting_drops_trailing_blank_lines() {
+    let once = format_source("fn main():\n    f()\n\n    \n", FormatOptions::default()).unwrap();
+    assert_eq!(once, "fn main():\n    f()\n");
+    assert_eq!(format_source(&once, FormatOptions::default()).unwrap(), once);
+}

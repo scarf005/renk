@@ -182,7 +182,7 @@ pub fn format_source(source: &str, options: FormatOptions) -> Result<String, Tra
 
     let in_literal = lines_ending_in_literal(source);
     Ok(ensure_trailing_newline(
-        &source
+        source
             .lines()
             .zip(in_literal)
             .map(|(line, in_literal)| {
@@ -193,7 +193,8 @@ pub fn format_source(source: &str, options: FormatOptions) -> Result<String, Tra
                 }
             })
             .collect::<Vec<_>>()
-            .join("\n"),
+            .join("\n")
+            .trim_end_matches('\n'),
     ))
 }
 
