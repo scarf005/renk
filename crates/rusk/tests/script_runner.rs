@@ -58,3 +58,60 @@ fn script_reports_transpile_errors_with_the_script_path_and_line() {
     assert!(!dir.join("cache").exists());
     let _ = fs::remove_dir_all(dir);
 }
+
+#[test]
+fn script_no_cargo_execs_the_cached_binary_and_rebuilds_after_edits() {
+    let dir = temp_dir("script-no-cargo");
+    let script = dir.join("greet.rsk");
+    let body = |greeting: &str| {
+        format!(
+            "#!/usr/bin/env -S rusk script --no-cargo\n---\n[package]\nedition = \"2024\"\n---\n\nfn main():\n    let args = std::env::args().skip(1).collect[Vec[String]]()\n    println!(\"{greeting} {{}}\", args.join(\"|\"))\n    println!(\"{{}}\", std::env::var(\"RUSK_SCRIPT\").unwrap())\n    std::process::exit(4)\n"
+        )
+    };
+    let run = |path: &str| {
+        Command::new(env!("CARGO_BIN_EXE_rusk"))
+            .args([
+                "script",
+                "--no-cargo",
+                script.to_str().unwrap(),
+                "a b",
+                "--flag",
+            ])
+            .env("XDG_CACHE_HOME", dir.join("cache"))
+            .env("PATH", path)
+            .output()
+            .unwrap()
+    };
+    let expected = |greeting: &str| {
+        format!(
+            "{greeting} a b|--flag\n{}\n",
+            script.canonicalize().unwrap().display()
+        )
+    };
+    let path = env::var("PATH").unwrap();
+    let no_cargo = dir.join("empty-path");
+    fs::create_dir_all(&no_cargo).unwrap();
+
+    fs::write(&script, body("hi")).unwrap();
+    for path in [path.as_str(), no_cargo.to_str().unwrap()] {
+        let output = run(path);
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            expected("hi"),
+            "stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(output.status.code(), Some(4));
+    }
+
+    fs::write(&script, body("bye")).unwrap();
+    assert_ne!(run(no_cargo.to_str().unwrap()).status.code(), Some(4));
+    let output = run(&path);
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        expected("bye"),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let _ = fs::remove_dir_all(dir);
+}
