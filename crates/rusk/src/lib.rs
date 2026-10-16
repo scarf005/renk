@@ -2810,10 +2810,40 @@ fn process_attribute_body(text: &str) -> String {
 }
 
 fn lower_signature(text: &str) -> String {
+    if without_visibility(text).starts_with("use ") {
+        return lower_use_tree(text);
+    }
     replace_dotted_paths(
         &replace_square_generics(text, GenericMode::Type),
         PathMode::Type,
     )
+}
+
+/// Every `.` between use-tree segments, including before `*` and `{...}` groups, is `::`.
+fn lower_use_tree(text: &str) -> String {
+    let chars = text.chars().collect::<Vec<_>>();
+    let mut output = String::new();
+    let mut index = 0;
+    while index < chars.len() {
+        if let Some(end) = opaque_span_end(&chars, index) {
+            output.extend(&chars[index..=end]);
+            index = end + 1;
+            continue;
+        }
+        let separates = chars[index] == '.'
+            && index > 0
+            && is_ident_continue(chars[index - 1])
+            && chars
+                .get(index + 1)
+                .is_some_and(|&next| is_ident_start(next) || matches!(next, '*' | '{'));
+        if separates {
+            output.push_str("::");
+        } else {
+            output.push(chars[index]);
+        }
+        index += 1;
+    }
+    output
 }
 
 fn lower_field_or_variant(text: &str) -> String {
@@ -4132,7 +4162,24 @@ fn is_let(text: &str) -> bool {
 }
 
 fn is_use_or_extern_crate(text: &str) -> bool {
+    let text = without_visibility(text);
     text.starts_with("use ") || text.starts_with("extern crate ")
+}
+
+/// `text` without a leading `pub` or `pub(...)`.
+fn without_visibility(text: &str) -> &str {
+    let Some(rest) = text.strip_prefix("pub") else {
+        return text;
+    };
+    let rest = rest
+        .strip_prefix('(')
+        .and_then(|scoped| Some(&scoped[scoped.find(')')? + 1..]))
+        .unwrap_or(rest);
+    if rest.starts_with(' ') {
+        rest.trim_start()
+    } else {
+        text
+    }
 }
 
 fn are_continuations(nodes: &[Node]) -> bool {
