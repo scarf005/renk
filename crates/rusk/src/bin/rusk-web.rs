@@ -125,7 +125,16 @@ async fn main() -> std::io::Result<()> {
         dist: PathBuf::from(env::var("RUSK_WEB_DIST").unwrap_or_else(|_| DEFAULT_DIST.to_string())),
         run_deps,
     };
-    let app = Router::new()
+    let listener = tokio::net::TcpListener::bind(&addr).await?;
+    eprintln!("rusk-web listening on http://{addr}");
+    axum::serve(listener, router(state))
+        .with_graceful_shutdown(shutdown_signal())
+        .await
+        .map_err(std::io::Error::other)
+}
+
+fn router(state: AppState) -> Router {
+    Router::new()
         .route("/api/run", post(handle_run_request))
         .fallback(handle_static_request)
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
@@ -134,13 +143,7 @@ async fn main() -> std::io::Result<()> {
             limit_active_requests,
         ))
         .layer(middleware::map_response(add_security_headers))
-        .with_state(state);
-    let listener = tokio::net::TcpListener::bind(&addr).await?;
-    eprintln!("rusk-web listening on http://{addr}");
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await
-        .map_err(std::io::Error::other)
+        .with_state(state)
 }
 
 async fn shutdown_signal() {
@@ -752,3 +755,4 @@ fn insert_static_header(headers: &mut HeaderMap, name: &'static str, value: &'st
         HeaderValue::from_static(value),
     );
 }
+
