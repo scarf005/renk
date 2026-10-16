@@ -6,7 +6,9 @@ use std::{
 };
 
 use proc_macro2::{TokenStream, TokenTree};
-use rusk::{SourceSyntax, ruk_to_rust, rust_to_ruk, rust_to_rusk, to_rust};
+use rusk::{
+    SourceSyntax, ruk_to_rust, rust_to_ruk, rust_to_rusk, rust_to_rusk_aggressive, to_rust,
+};
 
 const CORPUS: &[(&str, &str)] = &[
     ("basic_items", include_str!("rust_corpus/basic_items.rs")),
@@ -63,6 +65,18 @@ fn rust_corpus_roundtrips_to_compilable_rust() {
         });
         compile_rust(&out_dir, name, "second-roundtrip", &second_roundtrip);
 
+        let aggressive = rust_to_rusk_aggressive(rust).unwrap_or_else(|error| {
+            panic!("failed to convert corpus case {name} aggressively: {error}")
+        });
+        let aggressive_rust = to_rust(&aggressive, SourceSyntax::Rusk).unwrap_or_else(|error| {
+            panic!("failed to convert aggressive corpus case {name} back to Rust: {error}\nRusk:\n{aggressive}")
+        });
+        assert_eq!(
+            tokens(&aggressive_rust),
+            tokens(&roundtripped),
+            "{name} changed tokens\nRusk:\n{aggressive}"
+        );
+
         let ruk = rust_to_ruk(rust).unwrap_or_else(|error| {
             panic!("failed to convert corpus case {name} from Rust to Ruk: {error}")
         });
@@ -83,6 +97,14 @@ fn rust_conversion_emits_idiomatic_rusk() {
         rust_to_rusk(rust).unwrap(),
         include_str!("rust_corpus/idiomatic.rsk")
     );
+    assert_eq!(
+        rust_to_rusk_aggressive(rust).unwrap(),
+        include_str!("rust_corpus/idiomatic.aggressive.rsk")
+    );
+}
+
+fn tokens(rust: &str) -> String {
+    rust.parse::<TokenStream>().unwrap().to_string()
 }
 
 #[test]

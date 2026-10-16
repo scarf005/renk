@@ -652,6 +652,16 @@ struct RustBlock {
 }
 
 pub fn rust_to_rusk(source: &str) -> Result<String, TranspileError> {
+    convert_rust_to_rusk(source, false)
+}
+
+/// Like [`rust_to_rusk`], but also keeps idiomatic rewrites that change only the layout of the
+/// generated Rust, so converting back no longer reproduces the original line structure.
+pub fn rust_to_rusk_aggressive(source: &str) -> Result<String, TranspileError> {
+    convert_rust_to_rusk(source, true)
+}
+
+fn convert_rust_to_rusk(source: &str, aggressive: bool) -> Result<String, TranspileError> {
     let mut output = Vec::new();
     let mut stack = Vec::<RustBlock>::new();
     // Delimiter depth inside a multi-line `macro_rules!` arm body, whose lines stay Rust tokens.
@@ -748,35 +758,56 @@ pub fn rust_to_rusk(source: &str) -> Result<String, TranspileError> {
         }
     }
 
-    let output = idiomatic_rusk(trim_outer_blank_lines(output));
+    let output = idiomatic_rusk(trim_outer_blank_lines(output), aggressive);
     Ok(ensure_trailing_newline(&output.join("\n")))
 }
 
 /// Replaces `lines[start..end]` with `text`.
+#[derive(Clone)]
 struct Rewrite {
     start: usize,
     end: usize,
     text: String,
 }
 
-/// Rewrites literal Rust-shaped Rusk into idiomatic forms, keeping each rewrite only when the
-/// Rusk still transpiles to the same Rust.
-fn idiomatic_rusk(lines: Vec<String>) -> Vec<String> {
+/// Rewrites literal Rust-shaped Rusk into idiomatic forms. A rewrite is kept only when the Rusk
+/// still transpiles to the same Rust or, when `aggressive`, to the same Rust tokens.
+fn idiomatic_rusk(lines: Vec<String>, aggressive: bool) -> Vec<String> {
     let Ok(expected) = transpile(&lines.join("\n")) else {
         return lines;
     };
+    let expected_tokens = rust_tokens(&expected.rust);
     type Pass = fn(&[String]) -> Vec<Rewrite>;
-    let passes: [Pass; 4] = [
+    let passes: [Pass; 5] = [
         |lines| line_rewrites(lines, drop_semicolon),
         |lines| line_rewrites(lines, dot_rust_paths),
         |lines| line_rewrites(lines, inline_if_rewrite),
+        if_chain_rewrites,
         expression_body_rewrites,
     ];
     passes.into_iter().fold(lines, |lines, pass| {
         let rewrites = pass(&lines);
-        let (accepted, _) = equivalent_rewrites(&lines, rewrites, &expected.rust);
+        let (mut accepted, rejected) = equivalent_rewrites(&lines, rewrites, &expected.rust);
+        if aggressive && expected_tokens.is_some() {
+            for rewrite in rejected {
+                let mut trial = accepted.clone();
+                let at = trial.partition_point(|kept| kept.start < rewrite.start);
+                trial.insert(at, rewrite);
+                let rust = transpile(&apply_rewrites(&lines, &trial).0.join("\n"));
+                if rust.is_ok_and(|output| rust_tokens(&output.rust) == expected_tokens) {
+                    accepted = trial;
+                }
+            }
+        }
         apply_rewrites(&lines, &accepted).0
     })
+}
+
+/// Rust tokens without layout or comments; `None` when the text does not lex.
+fn rust_tokens(rust: &str) -> Option<String> {
+    rust.parse::<proc_macro2::TokenStream>()
+        .ok()
+        .map(|tokens| tokens.to_string())
 }
 
 fn line_rewrites(lines: &[String], rewrite: fn(&str) -> Option<String>) -> Vec<Rewrite> {
@@ -1008,6 +1039,82 @@ fn expression_body_rewrites(lines: &[String]) -> Vec<Rewrite> {
             index = end;
         } else {
             index += 1;
+        }
+    }
+    rewrites
+}
+
+/// The single-expression line of an `if` branch at `indent`.
+fn branch_body(line: Option<&String>, indent: usize) -> Option<&str> {
+    let line = line?;
+    let code = line.trim();
+    (raw_indent(line) == indent + 4
+        && !line.contains('\n')
+        && !code.contains("//")
+        && !code.ends_with([':', '{', ';', ',', '(', '[']))
+    .then_some(code)
+}
+
+/// An `if` whose branches are single expressions becomes `if c then a else if d then b else e`
+/// when it fits in 100 columns.
+fn if_chain_rewrites(lines: &[String]) -> Vec<Rewrite> {
+    let mut rewrites = Vec::new();
+    let mut index = 0;
+    while index < lines.len() {
+        let line = &lines[index];
+        let indent = raw_indent(line);
+        let code = line.trim();
+        let start = ["= if ", "return if ", "=> if "]
+            .into_iter()
+            .filter_map(|prefix| Some(code.find(prefix)? + prefix.len() - "if ".len()))
+            .min()
+            .or_else(|| code.starts_with("if ").then_some(0));
+        let mut chain = None;
+        if let Some(start) = start
+            && !line.contains('\n')
+            && !code.contains("//")
+            && let Some(condition) = code[start + "if ".len()..].strip_suffix([':', '{'])
+            && let Some(then_expr) = branch_body(lines.get(index + 1), indent)
+        {
+            let prefix = &code[..start];
+            let mut text = format!(
+                "{}{prefix}if {} then {then_expr}",
+                spaces(indent),
+                condition.trim()
+            );
+            let mut next = index + 2;
+            while let Some(else_line) = lines.get(next).filter(|line| raw_indent(line) == indent) {
+                let else_code = else_line.trim().trim_start_matches('}').trim_start();
+                let Some(body) = branch_body(lines.get(next + 1), indent) else {
+                    break;
+                };
+                if let Some(condition) = else_code
+                    .strip_prefix("else if ")
+                    .and_then(|rest| rest.strip_suffix([':', '{']))
+                {
+                    text.push_str(&format!(" else if {} then {body}", condition.trim()));
+                    next += 2;
+                } else if matches!(else_code, "else:" | "else {") {
+                    text.push_str(&format!(" else {body}"));
+                    if block_ends_at(lines, next + 2, indent) && text.chars().count() <= 100 {
+                        chain = Some((next + 2, text));
+                    }
+                    break;
+                } else {
+                    break;
+                }
+            }
+        }
+        match chain {
+            Some((end, text)) => {
+                rewrites.push(Rewrite {
+                    start: index,
+                    end,
+                    text,
+                });
+                index = end;
+            }
+            None => index += 1,
         }
     }
     rewrites
@@ -3333,12 +3440,16 @@ fn lower_if_then_else(text: &str) -> Option<String> {
     if let Some(else_index) = find_else_for_then_body(body) {
         let then_expr = body[..else_index].trim();
         let else_expr = body[else_index + "else".len()..].trim();
+        let else_branch = match lower_if_then_else(else_expr) {
+            Some(chained) if chained.starts_with("if ") => chained,
+            _ => format!("{{ {} }}", lower_expr(else_expr)),
+        };
         Some(format!(
-            "{} {} {{ {} }} else {{ {} }}",
+            "{} {} {{ {} }} else {}",
             prefix,
             condition,
             lower_expr(then_expr),
-            lower_expr(else_expr)
+            else_branch
         ))
     } else {
         Some(format!(
@@ -4297,7 +4408,7 @@ fn clamp(value: i32, min: i32, max: i32) -> i32:
         assert_eq!(
             rust(source),
             r#"fn clamp(value: i32, min: i32, max: i32) -> i32 {
-    if value < min { min } else { if value > max { max } else { value } }
+    if value < min { min } else if value > max { max } else { value }
 }
 "#
         );

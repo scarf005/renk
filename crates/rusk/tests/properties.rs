@@ -1,6 +1,7 @@
 use proptest::prelude::*;
 use rusk::{
-    FormatOptions, format_source, ruk_to_rust, rusk_to_ruk, rust_to_ruk, rust_to_rusk, transpile,
+    FormatOptions, format_source, ruk_to_rust, rusk_to_ruk, rust_to_ruk, rust_to_rusk,
+    rust_to_rusk_aggressive, transpile,
 };
 
 const FRAGMENTS: &[&str] = &[
@@ -112,6 +113,7 @@ proptest! {
         let _ = rusk_to_ruk(&source);
         let _ = ruk_to_rust(&source);
         let _ = rust_to_rusk(&source);
+        let _ = rust_to_rusk_aggressive(&source);
         let _ = rust_to_ruk(&source);
     }
 

@@ -81,7 +81,7 @@ fn writes_output_and_a_json_source_map() {
 fn reports_errors_on_stderr_with_exit_code_one() {
     let dir = temp_dir("errors");
     fs::write(dir.join("bad.rsk"), "fn main():\n\tx\n").unwrap();
-    let cases: [(&[&str], &str); 8] = [
+    let cases: [(&[&str], &str); 9] = [
         (&["bad.rsk"], "rusk: line 2: tabs are not supported"),
         (&["missing.rsk"], "rusk: "),
         (&["--bogus"], "rusk: unknown option: --bogus"),
@@ -101,6 +101,10 @@ fn reports_errors_on_stderr_with_exit_code_one() {
         (
             &["from-rust", "bad.rsk", "--source-map", "x.json"],
             "rusk: --source-map is not supported with syntax conversion",
+        ),
+        (
+            &["fmt", "bad.rsk", "--aggressive"],
+            "rusk: --aggressive is only supported with from-rust",
         ),
     ];
     for (args, expected) in cases {
@@ -152,11 +156,16 @@ fn subcommands_dispatch_on_the_input_extension() {
     )
     .unwrap();
     fs::write(
+        dir.join("b.rs"),
+        "fn f(c: bool) -> i32 {\n    if c {\n        1\n    } else {\n        2\n    }\n}\n",
+    )
+    .unwrap();
+    fs::write(
         dir.join("a.rsk"),
         "fn f() -> i32:\n    let x = 1  \n    x\n",
     )
     .unwrap();
-    let cases: [(&[&str], &str); 6] = [
+    let cases: [(&[&str], &str); 7] = [
         (
             &["from-rust", "a.rs"],
             "fn f() -> i32:\n    let x = 1\n    x\n",
@@ -171,6 +180,10 @@ fn subcommands_dispatch_on_the_input_extension() {
         ),
         (&["a.rk"], "fn f() -> i32 {\n    let x = 1;\n    x\n}\n"),
         (&["fmt", "a.rsk"], "fn f() -> i32:\n    let x = 1\n    x\n"),
+        (
+            &["from-rust", "--aggressive", "b.rs"],
+            "fn f(c: bool) -> i32 = if c then 1 else 2\n",
+        ),
         (
             &["fmt", "a.rk"],
             "fn f() -> i32 {\n    let x = 1\n    x\n}\n",

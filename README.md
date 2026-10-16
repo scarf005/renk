@@ -50,6 +50,7 @@ rusk input.rsk -o output.rs
 rusk input.rk -o output.rs
 rusk transpile input.rsk --source-map output.map.json
 rusk from-rust input.rs -o output.rsk
+rusk from-rust input.rs -o output.rsk --aggressive
 rusk to-ruk input.rs -o output.rk
 rusk fmt input.rsk -o input.rsk --line-width 100
 cat input.rsk | rusk
@@ -85,7 +86,7 @@ just web # open web editor
 - source formatter that preserves existing line break style; only line width is configurable
 - hierarchical JSON source map generation
 - Rust-to-Rusk, Rust-to-Ruk, Ruk-to-Rust, Ruk-to-Rusk, and Rusk-to-Ruk conversion
-- `from-rust` writes idiomatic Rusk (dotted paths, `[T]` generics, `fn f() -> T = expr`, inferred `;`, `if c then a else b`) only where the result transpiles back to the same Rust
+- `from-rust` writes idiomatic Rusk (dotted paths, `[T]` generics, `fn f() -> T = expr`, inferred `;`, `if c then a else b`) only where the result transpiles back to the same Rust; `--aggressive` also accepts rewrites that keep the Rust tokens but not their line layout, such as multi-line `if`/`else` value chains
 
 ## Formatter
 
