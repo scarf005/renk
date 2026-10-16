@@ -26,10 +26,9 @@ impl Counter:
 impl fmt.Display for Counter:
     fn fmt(&self, f: &mut fmt.Formatter['_]) -> fmt.Result = write!(f, "{}", self.total())
 
-fn kind_name(kind: &Kind) -> &'static str:
-    match kind:
-        Kind.Unit => "unit"
-        Kind.Pair(..) => "pair"
+fn kind_name(kind: &Kind) -> &'static str = match kind:
+    Kind.Unit => "unit"
+    Kind.Pair(..) => "pair"
 
 fn read(path: &str) -> std.io.Result[()]:
     let text = fs::read_to_string(path)?
