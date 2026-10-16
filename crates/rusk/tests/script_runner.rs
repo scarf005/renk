@@ -8,12 +8,12 @@ fn temp_dir(name: &str) -> PathBuf {
 }
 
 #[test]
-fn script_runs_through_cargo_script_and_forwards_args_and_exit_code() {
+fn script_runs_through_cargo_script_with_args_exit_code_and_source_path() {
     let dir = temp_dir("script-runner");
     let script = dir.join("echo-args.rsk");
     fs::write(
         &script,
-        "#!/usr/bin/env -S rusk script\n---\n[package]\nedition = \"2024\"\n---\n\nfn main():\n    let args = std::env::args().skip(1).collect[Vec[String]]()\n    println!(\"{}\", args.join(\"|\"))\n    std::process::exit(3)\n",
+        "#!/usr/bin/env -S rusk script\n---\n[package]\nedition = \"2024\"\n---\n\nfn main():\n    let args = std::env::args().skip(1).collect[Vec[String]]()\n    println!(\"{}\", args.join(\"|\"))\n    println!(\"{}\", std::env::var(\"RUSK_SCRIPT\").unwrap())\n    std::process::exit(3)\n",
     )
     .unwrap();
 
@@ -25,7 +25,10 @@ fn script_runs_through_cargo_script_and_forwards_args_and_exit_code() {
 
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        "a b|--flag|-x\n",
+        format!(
+            "a b|--flag|-x\n{}\n",
+            script.canonicalize().unwrap().display()
+        ),
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
@@ -37,7 +40,11 @@ fn script_runs_through_cargo_script_and_forwards_args_and_exit_code() {
 fn script_reports_transpile_errors_with_the_script_path_and_line() {
     let dir = temp_dir("script-error");
     let script = dir.join("broken.rsk");
-    fs::write(&script, "#!/usr/bin/env -S rusk script\nfn main():\n\tprintln!()\n").unwrap();
+    fs::write(
+        &script,
+        "#!/usr/bin/env -S rusk script\nfn main():\n\tprintln!()\n",
+    )
+    .unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_rusk"))
         .args(["script", script.to_str().unwrap()])

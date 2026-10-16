@@ -109,7 +109,7 @@ Existing non-generated `.rs` files are never overwritten.
 
 ## Scripts
 
-`rusk script FILE.rsk [ARGS...]` runs a single-file script with `cargo +nightly -Zscript`. It keeps the cargo-script `---` frontmatter, transpiles the rest into `$XDG_CACHE_HOME/rusk/scripts/` (rewritten only when it changes), and exits with the script's exit code.
+`rusk script FILE.rsk [ARGS...]` runs a single-file script with `cargo +nightly -Zscript`. It keeps the cargo-script `---` frontmatter, transpiles the rest into `$XDG_CACHE_HOME/rusk/scripts/` (rewritten only when it changes), sets `RUSK_SCRIPT` to the script's absolute path, and exits with the script's exit code.
 
 ```rsk
 #!/usr/bin/env -S rusk script

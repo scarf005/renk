@@ -167,11 +167,13 @@ fn run_script(raw_args: Vec<String>) -> Result<i32, Box<dyn std::error::Error>> 
         .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache")))
         .ok_or("script requires XDG_CACHE_HOME or HOME")?
         .join("rusk/scripts");
-    let rust_path = script_cache_path(&cache_root, &fs::canonicalize(&source_path)?);
+    let source_path = fs::canonicalize(&source_path)?;
+    let rust_path = script_cache_path(&cache_root, &source_path);
     write_script_cache(&rust_path, &rust)?;
     let status = Command::new("cargo")
         .args(["+nightly", "-Zscript", "--quiet"])
         .arg(&rust_path)
+        .env("RUSK_SCRIPT", &source_path)
         .args(raw_args)
         .status()?;
 
@@ -414,7 +416,7 @@ fn ensure_cli_trailing_newline(source: &str) -> String {
 
 fn print_help() {
     println!(
-        "rusk - indentation-based Rust syntax transpiler\n\nUSAGE:\n    rusk [transpile] [INPUT.rsk|INPUT.rk] [-o OUTPUT.rs] [--source-map SOURCE_MAP]\n    rusk from-rust [INPUT.rs] [-o OUTPUT.rsk]\n    rusk to-ruk [INPUT.rs|INPUT.rsk] [-o OUTPUT.rk]\n    rusk fmt [INPUT.rsk|INPUT.rk] [-o INPUT] [--line-width N]\n    rusk [cargo] <CARGO_COMMAND> [CARGO_ARGS...]\n    rusk script <SCRIPT.rsk|SCRIPT.rk> [ARGS...]\n\nScripts keep their cargo-script frontmatter, are transpiled to $XDG_CACHE_HOME/rusk/scripts, and run with cargo +nightly -Zscript; use #!/usr/bin/env -S rusk script as the shebang.\n\nCargo wrapper commands transpile Cargo source roots (*.rsk and *.rk under src, examples, tests, benches, plus build.rsk/build.rk) to cached generated .rs files, then run cargo.\n\nExamples:\n    rusk from-rust src/main.rs -o src/main.rsk\n    rusk to-ruk src/main.rs -o src/main.rk\n    rusk fmt src/main.rsk -o src/main.rsk\n    rusk run\n    rusk cargo fmt\n    rusk cargo test\n\nIf INPUT is omitted, rusk reads source from stdin when stdin is piped; otherwise it prints this help."
+        "rusk - indentation-based Rust syntax transpiler\n\nUSAGE:\n    rusk [transpile] [INPUT.rsk|INPUT.rk] [-o OUTPUT.rs] [--source-map SOURCE_MAP]\n    rusk from-rust [INPUT.rs] [-o OUTPUT.rsk]\n    rusk to-ruk [INPUT.rs|INPUT.rsk] [-o OUTPUT.rk]\n    rusk fmt [INPUT.rsk|INPUT.rk] [-o INPUT] [--line-width N]\n    rusk [cargo] <CARGO_COMMAND> [CARGO_ARGS...]\n    rusk script <SCRIPT.rsk|SCRIPT.rk> [ARGS...]\n\nScripts keep their cargo-script frontmatter, are transpiled to $XDG_CACHE_HOME/rusk/scripts, and run with cargo +nightly -Zscript and RUSK_SCRIPT set to the script path; use #!/usr/bin/env -S rusk script as the shebang.\n\nCargo wrapper commands transpile Cargo source roots (*.rsk and *.rk under src, examples, tests, benches, plus build.rsk/build.rk) to cached generated .rs files, then run cargo.\n\nExamples:\n    rusk from-rust src/main.rs -o src/main.rsk\n    rusk to-ruk src/main.rs -o src/main.rk\n    rusk fmt src/main.rsk -o src/main.rsk\n    rusk run\n    rusk cargo fmt\n    rusk cargo test\n\nIf INPUT is omitted, rusk reads source from stdin when stdin is piped; otherwise it prints this help."
     );
 }
 
