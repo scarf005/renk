@@ -2027,7 +2027,33 @@ fn require_block_opener(node: &Node) -> Result<(), TranspileError> {
     }
 }
 
+/// `fn f() = match x:` owns its block like `fn f():` whose only body line is `match x:`.
+fn inline_block_body(node: &Node) -> Option<Node> {
+    let (text, has_block) = strip_block_marker(node.text.trim());
+    let (_, body) = split_once_top_level(text, '=')?;
+    let body = body.trim();
+    (has_block
+        && !body.is_empty()
+        && !node.children.is_empty()
+        && !are_continuations(&node.children))
+    .then(|| Node {
+        line: node.line,
+        indent: node.indent + 4,
+        text: format!("{body}:"),
+        children: node
+            .children
+            .iter()
+            .map(|child| offset_node_indent(child, 4))
+            .collect(),
+        closing: node.closing.clone(),
+        comment: None,
+    })
+}
+
 fn validate_function_node(node: &Node) -> Result<(), TranspileError> {
+    if let Some(body) = inline_block_body(node) {
+        return validate_nodes(&[body], Context::Block);
+    }
     let (text, _) = strip_block_marker(node.text.trim());
     let Some((_, body)) = split_once_top_level(text, '=') else {
         require_block_opener(node)?;
@@ -2436,6 +2462,15 @@ fn emit_function(node: &Node, emitter: &mut Emitter) {
     let text = node.text.trim();
     let (text, has_block) = strip_block_marker(text);
     let indent = spaces(node.indent);
+    if let Some(body) = inline_block_body(node)
+        && let Some((signature, _)) = split_once_top_level(text, '=')
+    {
+        let signature = signature.trim();
+        emitter.push(node, format!("{}{} {{", indent, lower_signature(signature)));
+        emit_function_body(&[body], function_returns_value(signature), emitter);
+        emitter.push_generated(format!("{}}}", indent));
+        return;
+    }
     let Some((signature, body)) = split_once_top_level(text, '=') else {
         if node.children.is_empty() && !has_block {
             emitter.push(node, format!("{}{}", indent, lower_signature(text)));
