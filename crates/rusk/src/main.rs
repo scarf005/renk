@@ -53,6 +53,9 @@ fn run(raw_args: Vec<String>) -> Result<i32, Box<dyn std::error::Error>> {
     if is_cargo_wrapper_command(&raw_args) {
         return run_cargo_wrapper(raw_args);
     }
+    if raw_args.first().is_some_and(|arg| arg == "script") {
+        return run_script(raw_args);
+    }
 
     let args = parse_args(raw_args)?;
     if args.input.is_none() && io::stdin().is_terminal() {
@@ -149,6 +152,80 @@ fn run_cargo_wrapper(raw_args: Vec<String>) -> Result<i32, Box<dyn std::error::E
     let status = Command::new("cargo").args(&cargo_args).status();
 
     Ok(status?.code().unwrap_or(1))
+}
+
+fn run_script(raw_args: Vec<String>) -> Result<i32, Box<dyn std::error::Error>> {
+    let mut raw_args = raw_args.into_iter().skip(1);
+    let Some(source_path) = raw_args.next().map(PathBuf::from) else {
+        return Err("script requires an input path".into());
+    };
+    let source = fs::read_to_string(&source_path)?;
+    let rust = script_rust(&source, source_syntax(Some(&source_path)))
+        .map_err(|error| format!("{}: {error}", source_path.display()))?;
+    let cache_root = env::var_os("XDG_CACHE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache")))
+        .ok_or("script requires XDG_CACHE_HOME or HOME")?
+        .join("rusk/scripts");
+    let rust_path = script_cache_path(&cache_root, &fs::canonicalize(&source_path)?);
+    write_script_cache(&rust_path, &rust)?;
+    let status = Command::new("cargo")
+        .args(["+nightly", "-Zscript", "--quiet"])
+        .arg(&rust_path)
+        .args(raw_args)
+        .status()?;
+
+    Ok(status.code().unwrap_or(1))
+}
+
+/// Transpiles a single-file script, keeping the cargo-script frontmatter in front of the generated
+/// Rust. Header lines become blank lines so transpile errors keep the script's line numbers.
+fn script_rust(source: &str, syntax: SourceSyntax) -> Result<String, Box<dyn std::error::Error>> {
+    let lines = source.split_inclusive('\n').collect::<Vec<_>>();
+    let mut body_start = usize::from(
+        lines
+            .first()
+            .is_some_and(|line| line.starts_with("#!") && !line.starts_with("#![")),
+    );
+    let mut frontmatter = String::new();
+    let fence_start = (body_start..lines.len()).find(|&index| !lines[index].trim().is_empty());
+    if let Some(start) = fence_start.filter(|&index| lines[index].starts_with("---")) {
+        let fence = &lines[start][..lines[start].len() - lines[start].trim_start_matches('-').len()];
+        let Some(end) = (start + 1..lines.len()).find(|&index| lines[index].trim_end() == fence)
+        else {
+            return Err(format!("line {}: unclosed frontmatter", start + 1).into());
+        };
+        frontmatter = lines[start..=end].concat();
+        if !frontmatter.ends_with('\n') {
+            frontmatter.push('\n');
+        }
+        body_start = end + 1;
+    }
+
+    let body = "\n".repeat(body_start) + &lines[body_start..].concat();
+    Ok(frontmatter + &to_rust(&body, syntax)?)
+}
+
+fn script_cache_path(cache_root: &Path, source_path: &Path) -> PathBuf {
+    use std::hash::{DefaultHasher, Hash, Hasher};
+
+    let mut hasher = DefaultHasher::new();
+    source_path.hash(&mut hasher);
+    let mut file_name = source_path.file_stem().unwrap_or_default().to_owned();
+    file_name.push(".rs");
+    cache_root
+        .join(format!("{:016x}", hasher.finish()))
+        .join(file_name)
+}
+
+fn write_script_cache(path: &Path, rust: &str) -> io::Result<()> {
+    if fs::read_to_string(path).is_ok_and(|existing| existing == rust) {
+        return Ok(());
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(path, rust)
 }
 
 fn transpile_cargo_sources(root: &Path) -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
@@ -337,7 +414,7 @@ fn ensure_cli_trailing_newline(source: &str) -> String {
 
 fn print_help() {
     println!(
-        "rusk - indentation-based Rust syntax transpiler\n\nUSAGE:\n    rusk [transpile] [INPUT.rsk|INPUT.rk] [-o OUTPUT.rs] [--source-map SOURCE_MAP]\n    rusk from-rust [INPUT.rs] [-o OUTPUT.rsk]\n    rusk to-ruk [INPUT.rs|INPUT.rsk] [-o OUTPUT.rk]\n    rusk fmt [INPUT.rsk|INPUT.rk] [-o INPUT] [--line-width N]\n    rusk [cargo] <CARGO_COMMAND> [CARGO_ARGS...]\n\nCargo wrapper commands transpile Cargo source roots (*.rsk and *.rk under src, examples, tests, benches, plus build.rsk/build.rk) to cached generated .rs files, then run cargo.\n\nExamples:\n    rusk from-rust src/main.rs -o src/main.rsk\n    rusk to-ruk src/main.rs -o src/main.rk\n    rusk fmt src/main.rsk -o src/main.rsk\n    rusk run\n    rusk cargo fmt\n    rusk cargo test\n\nIf INPUT is omitted, rusk reads source from stdin when stdin is piped; otherwise it prints this help."
+        "rusk - indentation-based Rust syntax transpiler\n\nUSAGE:\n    rusk [transpile] [INPUT.rsk|INPUT.rk] [-o OUTPUT.rs] [--source-map SOURCE_MAP]\n    rusk from-rust [INPUT.rs] [-o OUTPUT.rsk]\n    rusk to-ruk [INPUT.rs|INPUT.rsk] [-o OUTPUT.rk]\n    rusk fmt [INPUT.rsk|INPUT.rk] [-o INPUT] [--line-width N]\n    rusk [cargo] <CARGO_COMMAND> [CARGO_ARGS...]\n    rusk script <SCRIPT.rsk|SCRIPT.rk> [ARGS...]\n\nScripts keep their cargo-script frontmatter, are transpiled to $XDG_CACHE_HOME/rusk/scripts, and run with cargo +nightly -Zscript; use #!/usr/bin/env -S rusk script as the shebang.\n\nCargo wrapper commands transpile Cargo source roots (*.rsk and *.rk under src, examples, tests, benches, plus build.rsk/build.rk) to cached generated .rs files, then run cargo.\n\nExamples:\n    rusk from-rust src/main.rs -o src/main.rsk\n    rusk to-ruk src/main.rs -o src/main.rk\n    rusk fmt src/main.rsk -o src/main.rsk\n    rusk run\n    rusk cargo fmt\n    rusk cargo test\n\nIf INPUT is omitted, rusk reads source from stdin when stdin is piped; otherwise it prints this help."
     );
 }
 
@@ -405,6 +482,82 @@ mod tests {
         let rust = fs::read_to_string(&rust_path).unwrap();
         assert!(rust.starts_with(GENERATED_HEADER));
         assert!(rust.contains("println!(\"hello\");"));
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn script_rust_keeps_frontmatter_first_and_drops_the_shebang() {
+        let source = "#!/usr/bin/env -S rusk script\n---\n[dependencies]\nregex = \"1\"\n---\n\nfn main():\n    println!(\"hi\")\n";
+
+        let rust = script_rust(source, SourceSyntax::Rusk).unwrap();
+        assert!(rust.starts_with("---\n[dependencies]\nregex = \"1\"\n---\n"));
+        assert!(!rust.contains("#!/usr/bin/env"));
+        assert!(rust.contains("println!(\"hi\");"));
+    }
+
+    #[test]
+    fn script_rust_treats_inner_attributes_and_later_dashes_as_body() {
+        let source = "#![allow(unused)]\nfn main():\n    let s = \"\n---\n\"\n    print!(\"{s}\")\n";
+
+        let rust = script_rust(source, SourceSyntax::Rusk).unwrap();
+        assert!(rust.starts_with("#![allow(unused)]"));
+        assert!(rust.contains("\n---\n"));
+    }
+
+    #[test]
+    fn script_rust_accepts_infostrings_and_longer_fences() {
+        let source = "#!/usr/bin/env -S rusk script\n----cargo\n[package]\nedition = \"2024\"\n---\n----\nfn main() = ()\n";
+
+        let rust = script_rust(source, SourceSyntax::Rusk).unwrap();
+        assert!(rust.starts_with("----cargo\n[package]\nedition = \"2024\"\n---\n----\n"));
+        assert!(rust.contains("fn main()"));
+    }
+
+    #[test]
+    fn script_rust_rejects_unclosed_frontmatter() {
+        let error = script_rust("---\n[dependencies]\nfn main() = ()\n", SourceSyntax::Rusk)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("unclosed frontmatter"), "{error}");
+    }
+
+    #[test]
+    fn script_errors_report_the_physical_script_line() {
+        let source = "#!/usr/bin/env -S rusk script\n---\n[package]\n---\nfn main():\n\tprintln!(\"tab\")\n";
+
+        let error = script_rust(source, SourceSyntax::Rusk).unwrap_err().to_string();
+        assert!(error.contains("line 6"), "{error}");
+    }
+
+    #[test]
+    fn script_cache_is_per_source_path_and_keeps_the_stem() {
+        let root = Path::new("/cache");
+        let first = script_cache_path(root, Path::new("/a/tool.rsk"));
+        let second = script_cache_path(root, Path::new("/b/tool.rsk"));
+
+        assert_ne!(first, second);
+        assert_eq!(first.file_name().unwrap(), "tool.rs");
+        assert!(first.starts_with("/cache"));
+        assert_eq!(first, script_cache_path(root, Path::new("/a/tool.rsk")));
+        let dotted = script_cache_path(root, Path::new("/a/setup-itch.io.rsk"));
+        assert_eq!(dotted.file_name().unwrap(), "setup-itch.io.rs");
+    }
+
+    #[test]
+    fn script_cache_is_rewritten_only_when_the_rust_changes() {
+        let project = temp_project("script-cache");
+        let path = project.join("tool.rs");
+
+        write_script_cache(&path, "fn main() {}\n").unwrap();
+        let writable = fs::metadata(&path).unwrap().permissions();
+        let mut permissions = writable.clone();
+        permissions.set_readonly(true);
+        fs::set_permissions(&path, permissions).unwrap();
+        write_script_cache(&path, "fn main() {}\n").unwrap();
+
+        fs::set_permissions(&path, writable).unwrap();
+        write_script_cache(&path, "fn main() { () }\n").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "fn main() { () }\n");
         let _ = fs::remove_dir_all(project);
     }
 

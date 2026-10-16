@@ -55,6 +55,7 @@ rusk fmt input.rsk -o input.rsk --line-width 100
 cat input.rsk | rusk
 rusk run
 rusk cargo test
+rusk script tool.rsk arg
 rusk-lsp
 just web # open web editor
 ```
@@ -105,6 +106,21 @@ rusk cargo test # cargo test
 ```
 
 Existing non-generated `.rs` files are never overwritten.
+
+## Scripts
+
+`rusk script FILE.rsk [ARGS...]` runs a single-file script with `cargo +nightly -Zscript`. It keeps the cargo-script `---` frontmatter, transpiles the rest into `$XDG_CACHE_HOME/rusk/scripts/` (rewritten only when it changes), and exits with the script's exit code.
+
+```rsk
+#!/usr/bin/env -S rusk script
+---
+[dependencies]
+regex = "1"
+---
+
+fn main():
+    println!("{}", regex::Regex::new("a+").unwrap().is_match("caab"))
+```
 
 ## Self-hosted web runner
 
