@@ -780,7 +780,7 @@ fn idiomatic_rusk(lines: Vec<String>, aggressive: bool) -> Vec<String> {
     let expected = canonical_format_macros(&expected.rust);
     let expected_tokens = rust_tokens(&expected);
     type Pass = fn(&[String]) -> Vec<Rewrite>;
-    let passes: [Pass; 6] = [
+    let passes: [Pass; 7] = [
         |lines| line_rewrites(lines, drop_semicolon),
         |lines| {
             line_rewrites(lines, |line| {
@@ -792,6 +792,7 @@ fn idiomatic_rusk(lines: Vec<String>, aggressive: bool) -> Vec<String> {
         |lines| line_rewrites(lines, inline_if_rewrite),
         if_chain_rewrites,
         expression_body_rewrites,
+        |lines| line_rewrites(lines, let_else_rewrite),
     ];
     passes
         .into_iter()
@@ -994,6 +995,13 @@ fn dot_rust_paths(line: &str) -> Option<String> {
         index = end;
     }
     (output != line).then_some(output)
+}
+
+/// `let PAT = EXPR else {` opening a multi-line block as `let PAT = EXPR else:`.
+fn let_else_rewrite(line: &str) -> Option<String> {
+    let (code, comment) = split_trailing_comment(line);
+    let head = code.strip_suffix(" else {")?;
+    (!line.contains('\n') && is_let(head.trim_start())).then(|| format!("{head} else:{comment}"))
 }
 
 /// `let x = if c { a } else { b }`, `return if ...`, and `p => if ...` as `if c then a else b`.
@@ -2112,7 +2120,7 @@ fn validate_statement_node(node: &Node) -> Result<(), TranspileError> {
         && is_multiline_closure_head(rhs.trim())
     {
         validate_nodes(&node.children, Context::Block)
-    } else if is_raw_braced_expr_head(text) {
+    } else if is_raw_braced_expr_head(text) || let_else_head(text).is_some() {
         validate_nodes(&node.children, Context::Block)
     } else if looks_like_struct_literal(node) {
         require_block_opener(node)?;
@@ -2559,6 +2567,10 @@ fn emit_statement(node: &Node, _context: Context, is_last: bool, emitter: &mut E
         emit_multiline_closure_assignment(node, lhs.trim(), rhs.trim(), emitter);
     } else if !node.children.is_empty() && is_raw_braced_expr_head(text) {
         emit_raw_braced_expr(node, text, is_last && !has_explicit_semicolon, emitter);
+    } else if !node.children.is_empty()
+        && let Some(head) = let_else_head(text)
+    {
+        emit_raw_braced_expr(node, &format!("{head} else {{"), false, emitter);
     } else if is_use_or_extern_crate(text) || starts_item(text, "type") {
         emitter.push(node, format!("{}{};", indent, lower_signature(text)));
     } else if is_let(text) || is_assignment(text) || is_jump_statement(text) {
@@ -3013,6 +3025,14 @@ fn is_multiline_closure_head(text: &str) -> bool {
     };
     let tail = rest[end + 1..].trim();
     tail.is_empty() || tail == "{" || tail.starts_with("->")
+}
+
+/// `let PAT = EXPR` of a `let PAT = EXPR else:` line that owns the diverging block.
+fn let_else_head(text: &str) -> Option<&str> {
+    let (head, has_block) = strip_block_marker(text);
+    (has_block && is_let(head))
+        .then(|| head.strip_suffix(" else"))
+        .flatten()
 }
 
 fn is_raw_braced_expr_head(text: &str) -> bool {
