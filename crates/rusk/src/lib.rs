@@ -1245,8 +1245,14 @@ fn source_lines(source: &str) -> Result<Vec<SourceLine>, TranspileError> {
             raw_lines.peek().map(|(_, next)| *next),
             raw_indent(without_comment),
             &mut group,
-        ) && let Some((index, next)) = raw_lines.next()
-        {
+        ) {
+            let Some((index, next)) = raw_lines.next() else {
+                return Err(TranspileError {
+                    line,
+                    message: "unclosed delimiter, literal, or `=` continuation at end of file"
+                        .to_string(),
+                });
+            };
             reject_tabs(next, index + 1)?;
             text.push('\n');
             text.push_str(keep_literal_end(next, in_literal[index]));
