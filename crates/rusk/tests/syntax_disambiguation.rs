@@ -313,3 +313,10 @@ fn formatting_drops_trailing_blank_lines() {
     assert_eq!(once, "fn main():\n    f()\n");
     assert_eq!(format_source(&once, FormatOptions::default()).unwrap(), once);
 }
+
+#[test]
+fn raw_strings_stay_open_until_their_closing_hashes() {
+    let source = "fn main():\n    let s = r#\"say \"\" \nhi\"#\n    print!(\"{s}\")\n";
+    assert_eq!(format_source(source, FormatOptions::default()).unwrap(), source);
+    assert!(rust(source).contains("r#\"say \"\" \nhi\"#;"), "{}", rust(source));
+}
