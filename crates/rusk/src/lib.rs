@@ -995,7 +995,7 @@ fn block_ends_at(lines: &[String], end: usize, indent: usize) -> bool {
 }
 
 /// A function returning a value whose body is one expression, including its deeper continuation
-/// lines, becomes `fn f() -> T = expr`.
+/// lines, becomes `fn f() -> T = expr` when its first line fits in 100 columns.
 fn expression_body_rewrites(lines: &[String]) -> Vec<Rewrite> {
     let mut rewrites = Vec::new();
     let mut index = 0;
@@ -1024,6 +1024,10 @@ fn expression_body_rewrites(lines: &[String]) -> Vec<Rewrite> {
                 header.trim_end().trim_end_matches(':'),
                 body.trim()
             );
+            if text.chars().count() > 100 {
+                index += 1;
+                continue;
+            }
             for line in lines[index + 2..end]
                 .iter()
                 .flat_map(|line| line.split('\n'))
