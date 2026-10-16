@@ -159,7 +159,8 @@ fn run_cargo_wrapper(raw_args: Vec<String>) -> Result<i32, Box<dyn std::error::E
 }
 
 fn run_script(raw_args: Vec<String>) -> Result<i32, Box<dyn std::error::Error>> {
-    let mut raw_args = raw_args.into_iter().skip(1);
+    let mut raw_args = raw_args.into_iter().skip(1).peekable();
+    let no_cargo = raw_args.next_if(|arg| arg == "--no-cargo").is_some();
     let Some(source_path) = raw_args.next().map(PathBuf::from) else {
         return Err("script requires an input path".into());
     };
@@ -174,6 +175,21 @@ fn run_script(raw_args: Vec<String>) -> Result<i32, Box<dyn std::error::Error>> 
     let source_path = fs::canonicalize(&source_path)?;
     let rust_path = script_cache_path(&cache_root, &source_path);
     write_script_cache(&rust_path, &rust)?;
+    if no_cargo {
+        let binary = rust_path.with_extension("");
+        if !is_newer(&binary, &rust_path) {
+            let code = build_script_binary(&rust_path, &binary)?;
+            if code != 0 {
+                return Ok(code);
+            }
+        }
+        let mut command = Command::new(&binary);
+        command.env("RUSK_SCRIPT", &source_path).args(raw_args);
+        #[cfg(unix)]
+        return Err(std::os::unix::process::CommandExt::exec(&mut command).into());
+        #[cfg(not(unix))]
+        return Ok(command.status()?.code().unwrap_or(1));
+    }
     let status = Command::new("cargo")
         .args(["+nightly", "-Zscript", "--quiet"])
         .arg(&rust_path)
@@ -182,6 +198,36 @@ fn run_script(raw_args: Vec<String>) -> Result<i32, Box<dyn std::error::Error>> 
         .status()?;
 
     Ok(status.code().unwrap_or(1))
+}
+
+fn is_newer(path: &Path, than: &Path) -> bool {
+    let modified = |path: &Path| fs::metadata(path).and_then(|metadata| metadata.modified());
+    matches!((modified(path), modified(than)), (Ok(path), Ok(than)) if path > than)
+}
+
+/// Builds the cached script with cargo-script and copies its executable next to the cached Rust,
+/// so `--no-cargo` runs can exec it without cargo until the Rust changes. scriptr does the same
+/// but ships only as a binary, which would make rusk scripts need a second launcher installed.
+fn build_script_binary(rust_path: &Path, binary: &Path) -> Result<i32, Box<dyn std::error::Error>> {
+    let output = Command::new("cargo")
+        .args(["+nightly", "-Zscript", "build", "--quiet"])
+        .arg("--message-format=json-render-diagnostics")
+        .arg("--manifest-path")
+        .arg(rust_path)
+        .stderr(process::Stdio::inherit())
+        .output()?;
+    if !output.status.success() {
+        return Ok(output.status.code().unwrap_or(1));
+    }
+    let executable = String::from_utf8(output.stdout)?
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .find_map(|message| message["executable"].as_str().map(PathBuf::from))
+        .ok_or("cargo built no script executable")?;
+    let staged = rust_path.with_extension(format!("{}.tmp", process::id()));
+    fs::copy(executable, &staged)?;
+    fs::rename(staged, binary)?;
+    Ok(0)
 }
 
 /// Transpiles a single-file script, keeping the cargo-script frontmatter in front of the generated
@@ -424,7 +470,7 @@ fn ensure_cli_trailing_newline(source: &str) -> String {
 
 fn print_help() {
     println!(
-        "rusk - indentation-based Rust syntax transpiler\n\nUSAGE:\n    rusk [transpile] [INPUT.rsk|INPUT.rk] [-o OUTPUT.rs] [--source-map SOURCE_MAP]\n    rusk from-rust [INPUT.rs] [-o OUTPUT.rsk] [--aggressive]\n    rusk to-ruk [INPUT.rs|INPUT.rsk] [-o OUTPUT.rk]\n    rusk fmt [INPUT.rsk|INPUT.rk] [-o INPUT] [--line-width N]\n    rusk [cargo] <CARGO_COMMAND> [CARGO_ARGS...]\n    rusk script <SCRIPT.rsk|SCRIPT.rk> [ARGS...]\n\nScripts keep their cargo-script frontmatter, are transpiled to $XDG_CACHE_HOME/rusk/scripts, and run with cargo +nightly -Zscript and RUSK_SCRIPT set to the script path; use #!/usr/bin/env -S rusk script as the shebang.\n\nCargo wrapper commands transpile Cargo source roots (*.rsk and *.rk under src, examples, tests, benches, plus build.rsk/build.rk) to cached generated .rs files, then run cargo.\n\nExamples:\n    rusk from-rust src/main.rs -o src/main.rsk\n    rusk to-ruk src/main.rs -o src/main.rk\n    rusk fmt src/main.rsk -o src/main.rsk\n    rusk run\n    rusk cargo fmt\n    rusk cargo test\n\nIf INPUT is omitted, rusk reads source from stdin when stdin is piped; otherwise it prints this help."
+        "rusk - indentation-based Rust syntax transpiler\n\nUSAGE:\n    rusk [transpile] [INPUT.rsk|INPUT.rk] [-o OUTPUT.rs] [--source-map SOURCE_MAP]\n    rusk from-rust [INPUT.rs] [-o OUTPUT.rsk] [--aggressive]\n    rusk to-ruk [INPUT.rs|INPUT.rsk] [-o OUTPUT.rk]\n    rusk fmt [INPUT.rsk|INPUT.rk] [-o INPUT] [--line-width N]\n    rusk [cargo] <CARGO_COMMAND> [CARGO_ARGS...]\n    rusk script [--no-cargo] <SCRIPT.rsk|SCRIPT.rk> [ARGS...]\n\nScripts keep their cargo-script frontmatter, are transpiled to $XDG_CACHE_HOME/rusk/scripts, and run with cargo +nightly -Zscript and RUSK_SCRIPT set to the script path; use #!/usr/bin/env -S rusk script as the shebang. --no-cargo execs the binary cached next to the generated Rust, building it with cargo only when the Rust changed; dependency and toolchain updates then need an edit to the script.\n\nCargo wrapper commands transpile Cargo source roots (*.rsk and *.rk under src, examples, tests, benches, plus build.rsk/build.rk) to cached generated .rs files, then run cargo.\n\nExamples:\n    rusk from-rust src/main.rs -o src/main.rsk\n    rusk to-ruk src/main.rs -o src/main.rk\n    rusk fmt src/main.rsk -o src/main.rsk\n    rusk run\n    rusk cargo fmt\n    rusk cargo test\n\nIf INPUT is omitted, rusk reads source from stdin when stdin is piped; otherwise it prints this help."
     );
 }
 

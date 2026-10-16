@@ -113,6 +113,8 @@ Existing non-generated `.rs` files are never overwritten.
 
 `rusk script FILE.rsk [ARGS...]` runs a single-file script with `cargo +nightly -Zscript`. It keeps the cargo-script `---` frontmatter, transpiles the rest into `$XDG_CACHE_HOME/rusk/scripts/` (rewritten only when it changes), sets `RUSK_SCRIPT` to the script's absolute path, and exits with the script's exit code.
 
+`rusk script --no-cargo FILE.rsk` skips cargo's per-run resolution and freshness checks: it execs the binary cached next to the generated Rust and rebuilds it only when that Rust changes, so dependency or toolchain updates are not picked up until the script changes.
+
 ```rsk
 #!/usr/bin/env -S rusk script
 ---
