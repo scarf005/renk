@@ -33,7 +33,7 @@ fn kind_name(kind: &Kind) -> &'static str = match kind:
 fn read(path: &str) -> std.io.Result[()]:
     let text = fs::read_to_string(path)?
     let suffix = if text.is_empty() then ".txt" else ".xml"
-    let size = if text.len() > 10 {
+    let size = if text.len() > 10:
         2
     else if text.is_empty():
         0

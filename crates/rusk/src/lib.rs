@@ -1246,7 +1246,11 @@ fn classify_rust_block_header(header: &str, parent: Option<RustBlockKind>) -> Ru
         RustBlockKind::Macro
     } else if is_trait_item(header) || is_rust_impl_or_mod_item(header) {
         RustBlockKind::Item
-    } else if is_control(header) || header == "else" || header.starts_with("else ") {
+    } else if is_control(header)
+        || is_trailing_if(header)
+        || header == "else"
+        || header.starts_with("else ")
+    {
         RustBlockKind::Item
     } else {
         RustBlockKind::Raw
@@ -1971,6 +1975,7 @@ fn accepts_closing_line(text: &str, siblings: &[Node]) -> bool {
     let text = text.trim();
     text.ends_with('{')
         || is_trailing_match(strip_block_marker(text).0)
+        || is_trailing_if(strip_block_marker(text).0)
         || (is_else_branch(text)
             && siblings
                 .iter()
@@ -2034,7 +2039,7 @@ fn validate_general_node(node: &Node) -> Result<(), TranspileError> {
     } else if is_match(block_text) || is_trailing_match(block_text) {
         require_block_opener(node)?;
         validate_nodes(&node.children, Context::Match)
-    } else if is_control(block_text) {
+    } else if is_control(block_text) || is_trailing_if(block_text) {
         require_block_opener(node)?;
         validate_nodes(&node.children, Context::Block)
     } else if looks_like_struct_literal(node) {
@@ -2415,10 +2420,17 @@ fn emit_general(node: &Node, context: Context, is_last: bool, emitter: &mut Emit
                 lower_expr(block_text),
                 has_explicit_semicolon,
             );
-        } else if is_trailing_match(block_text) {
+        } else if is_trailing_match(block_text)
+            || (!node.children.is_empty() && is_trailing_if(block_text))
+        {
             let indent = spaces(node.indent);
             emitter.push(node, format!("{}{} {{", indent, lower_expr(block_text)));
-            emit_nodes(&node.children, Context::Match, emitter);
+            let context = if is_trailing_match(block_text) {
+                Context::Match
+            } else {
+                Context::Block
+            };
+            emit_nodes(&node.children, context, emitter);
             let is_statement = is_let(block_text) || is_assignment(block_text);
             let (closing, closing_semicolon) = node
                 .closing
@@ -4311,6 +4323,22 @@ fn is_trailing_match(text: &str) -> bool {
                 && !text[at..].contains(['{', '}'])
                 && open_delimiters(&text[at..]).is_some_and(|open| open.is_empty())
         })
+}
+
+/// Whether `text` ends in a block-owning `if` head after a binding or `return`, such as
+/// `let x = if c` or `return if c`; `if c then a else b` stays an inline expression.
+fn is_trailing_if(text: &str) -> bool {
+    text.match_indices("if ").any(|(at, _)| {
+        let before = text[..at].trim_end();
+        !text[..at].ends_with(is_ident_continue)
+            && (before.ends_with('=')
+                || before
+                    .strip_suffix("return")
+                    .is_some_and(|rest| !rest.ends_with(is_ident_continue)))
+            && !text[at..].contains(['{', '}'])
+            && !is_inline_if_expression(&text[at..])
+            && open_delimiters(&text[at..]).is_some_and(|open| open.is_empty())
+    })
 }
 
 fn is_control(text: &str) -> bool {

@@ -460,7 +460,7 @@ fn trailing_if_owns_a_colon_block_chain() {
     );
     assert!(
         output.contains(
-            "        let size = if n > 10 {\n            1\n        } else if n < 0 { // negative\n            2\n        } else {\n            3\n        };\n"
+            "        let size = if n > 10 {\n            1\n        }\n        else if n < 0 { // negative\n            2\n        }\n        else {\n            3\n        };\n"
         ),
         "{output}"
     );
@@ -470,13 +470,13 @@ fn trailing_if_owns_a_colon_block_chain() {
     );
     assert!(
         output.contains(
-            "        total += if Self::BIG < n {\n            let inner = if n % 2 == 0 {\n                n\n            } else {\n                -n\n            };\n            inner\n        } else {\n            0\n        };\n"
+            "        total += if Self::BIG < n {\n            let inner = if n % 2 == 0 {\n                n\n            }\n            else {\n                -n\n            };\n            inner\n        }\n        else {\n            0\n        };\n"
         ),
         "{output}"
     );
     assert!(
         output.contains(
-            "        return if total == 0 {\n            notif + t\n        } else {\n            s.len() as i32\n        };\n"
+            "        return if total == 0 {\n            notif + t\n        }\n        else {\n            s.len() as i32\n        }\n"
         ),
         "{output}"
     );
@@ -492,7 +492,10 @@ fn rust_conversion_writes_trailing_if_blocks_with_a_colon() {
         output.contains("    let size = if n > 10:\n        1\n    else if n < 0:\n        2\n    else:\n        3\n"),
         "{output}"
     );
-    assert!(output.contains("let t = if n > 0 then 1 else 2"), "{output}");
+    assert!(
+        output.contains("let t = if n > 0 then 1 else 2"),
+        "{output}"
+    );
     assert!(
         output.contains(
             "    return if size == t:\n        let inner = if n % 2 == 0:\n            n\n        else:\n            -n\n        inner\n    else:\n        t\n"

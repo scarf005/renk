@@ -68,6 +68,7 @@ just web # open web editor
 - single-expression function shorthand with `=`, e.g. `fn id(value: i32) -> i32 = value`, including a block head such as `fn name(n: i32) -> &str = match n:` followed by its indented arms
 - `if condition then expr else expr` expressions
 - `let PAT = expr else:` with an indented diverging block
+- `let x = if c:`, `x += if c:`, and `return if c:` with indented branches and `else if d:` / `else:` siblings
 - Rust-style inline struct literals, e.g. `Self{ id, name }`
 - trailing `;` for explicit semicolon/discard statements when inference is not enough
 - Rust-style `#[...]` / `#![...]` attributes; attribute payloads use Rust token syntax unchanged
@@ -80,7 +81,7 @@ just web # open web editor
 - type positions inside statements keep `[T]`: `let`/`static`/`const` annotations and closure parameter/return types, e.g. `let found: Option[i32] = None`
 - multi-line Rust groups: a line ending with `(` or `[`, a struct literal or `use` tree ending with `{`, an unterminated string, or a trailing `=` continues on the next lines until the group closes; group contents stay Rust syntax, and same-indent `.method()` / `?` lines after the group extend it
 - a `})?` / `}).method()` closing line keeps its suffix after a `{` block, a trailing `match` head, or the last `else` of a chain whose head ends with `{`
-- `match` at the end of a larger expression, e.g. `let x = match y:` or `.filter(|v| match v:`, and `else` branches after `let ... = if c {` or `let pattern = value` (`let ... else`)
+- `match` at the end of a larger expression, e.g. `let x = match y:` or `.filter(|v| match v:`, and `else` branches after `f(if c {` or `let pattern = value` (`let ... else`)
 - dotted path lowering for obvious item paths, e.g. `std.io.Read` -> `std::io::Read`, `Foo.new()` -> `Foo::new()`
 - escape hatches: Rust `::` / `::<...>` force path/generic syntax, while parentheses force a value receiver, e.g. `(TEXT).len()`
 - macro definitions with indentation-based `macro_rules!` arms; macro patterns, bodies, and arbitrary macro invocation token trees use Rust syntax unchanged, and a multi-line `pattern =>:` arm keeps every indented body line, including closing delimiters (std format macros keep their inline-format-expression sugar)
