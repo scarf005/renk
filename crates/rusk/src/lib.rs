@@ -180,10 +180,18 @@ pub fn format_source(source: &str, options: FormatOptions) -> Result<String, Tra
     let lines = source_lines(source)?;
     parse_source_lines(&lines)?;
 
+    let in_literal = lines_ending_in_literal(source);
     Ok(ensure_trailing_newline(
         &source
             .lines()
-            .map(format_line)
+            .zip(in_literal)
+            .map(|(line, in_literal)| {
+                if in_literal {
+                    line.to_string()
+                } else {
+                    format_line(line)
+                }
+            })
             .collect::<Vec<_>>()
             .join("\n"),
     ))
@@ -233,17 +241,15 @@ pub fn ruk_to_rusk(source: &str) -> Result<String, TranspileError> {
 /// Drops every Rust semicolon that Ruk inference restores, keeping the rest.
 pub fn rust_to_ruk(source: &str) -> Result<String, TranspileError> {
     let mut rust = Vec::new();
-    for (index, raw) in source.lines().enumerate() {
+    let mut output = Vec::new();
+    for ((index, raw), in_literal) in source.lines().enumerate().zip(lines_ending_in_literal(source)) {
         reject_tabs(raw, index + 1)?;
-        let raw = raw.trim_end();
+        let raw = keep_literal_end(raw, in_literal);
         if raw.trim() != GENERATED_HEADER.trim_end() {
             rust.push(raw);
+            output.push(if in_literal { raw.to_string() } else { strip_rust_semicolon(raw) });
         }
     }
-    let mut output = rust
-        .iter()
-        .map(|raw| strip_rust_semicolon(raw))
-        .collect::<Vec<_>>();
     loop {
         let inferred = ruk_to_rust(&output.join("\n"))?;
         let mut restored = false;
@@ -263,7 +269,7 @@ pub fn rust_to_ruk(source: &str) -> Result<String, TranspileError> {
 }
 
 pub fn ruk_to_rust(source: &str) -> Result<String, TranspileError> {
-    RukSemicolonInferer::new(source).infer()
+    RukSemicolonInferer::new(source)?.infer()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -287,17 +293,31 @@ struct RukScope {
 }
 
 #[derive(Debug)]
-struct RukSemicolonInferer<'a> {
-    lines: Vec<&'a str>,
+struct RukSemicolonInferer {
+    /// Logical lines: a line ending inside a string literal or block comment joins the next one.
+    lines: Vec<String>,
     scopes: Vec<RukScope>,
 }
 
-impl<'a> RukSemicolonInferer<'a> {
-    fn new(source: &'a str) -> Self {
-        Self {
-            lines: source.lines().collect(),
-            scopes: Vec::new(),
+impl RukSemicolonInferer {
+    fn new(source: &str) -> Result<Self, TranspileError> {
+        let mut lines = Vec::<String>::new();
+        let mut joins_next = false;
+        for ((index, raw), in_literal) in source.lines().enumerate().zip(lines_ending_in_literal(source)) {
+            reject_tabs(raw, index + 1)?;
+            match lines.last_mut() {
+                Some(line) if joins_next => {
+                    line.push('\n');
+                    line.push_str(raw);
+                }
+                _ => lines.push(raw.to_string()),
+            }
+            joins_next = in_literal;
         }
+        Ok(Self {
+            lines,
+            scopes: Vec::new(),
+        })
     }
 
     fn infer(mut self) -> Result<String, TranspileError> {
@@ -308,14 +328,8 @@ impl<'a> RukSemicolonInferer<'a> {
         // A function signature continued over several lines, until the line opening its body.
         let mut signature = None::<String>;
         for index in 0..self.lines.len() {
-            let line_number = index + 1;
-            let raw = self.lines[index].trim_end();
-            if raw.contains('\t') {
-                return Err(TranspileError {
-                    line: line_number,
-                    message: "tabs are not supported; use spaces".to_string(),
-                });
-            }
+            let raw = self.lines[index].trim_end().to_string();
+            let raw = raw.as_str();
             let text = raw.trim_start();
             let indent = raw_indent(raw);
             let next_delimiter_depth = delimiter_depth_after_line(delimiter_depth, text);
@@ -429,7 +443,7 @@ impl<'a> RukSemicolonInferer<'a> {
     }
 
     fn next_code_line(&self, index: usize) -> Option<&str> {
-        self.lines.iter().skip(index + 1).copied().find(|line| {
+        self.lines.iter().skip(index + 1).map(String::as_str).find(|line| {
             let text = line.trim();
             !text.is_empty() && !text.starts_with("//")
         })
@@ -641,10 +655,11 @@ pub fn rust_to_rusk(source: &str) -> Result<String, TranspileError> {
     // Delimiter depth inside a multi-line `macro_rules!` arm body, whose lines stay Rust tokens.
     let mut arm_depth = None;
 
+    let in_literal = lines_ending_in_literal(source);
     let mut raw_lines = source.lines().enumerate().peekable();
     while let Some((index, raw)) = raw_lines.next() {
         reject_tabs(raw, index + 1)?;
-        let raw = raw.trim_end();
+        let raw = keep_literal_end(raw, in_literal[index]);
         if let Some(depth) = arm_depth {
             let depth = macro_depth_after_line(depth, raw);
             if depth > 0 {
@@ -718,7 +733,7 @@ pub fn rust_to_rusk(source: &str) -> Result<String, TranspileError> {
         {
             reject_tabs(next, index + 1)?;
             text.push('\n');
-            text.push_str(next.trim_end());
+            text.push_str(keep_literal_end(next, in_literal[index]));
         }
         let (text, comment) = split_trailing_comment(&text);
         let converted = convert_rust_statement(text, stack.last().map(|block| block.kind));
@@ -1188,9 +1203,10 @@ fn source_lines(source: &str) -> Result<Vec<SourceLine>, TranspileError> {
     // Indents of the enclosing `macro_rules!` item and of the multi-line arm being read.
     let mut macro_indent = None;
     let mut arm_indent = None;
+    let in_literal = lines_ending_in_literal(source);
     while let Some((index, raw)) = raw_lines.next() {
         let line = index + 1;
-        let without_comment = raw.trim_end();
+        let without_comment = keep_literal_end(raw, in_literal[index]);
         let trimmed = without_comment.trim();
         let indent = raw_indent(without_comment);
         if !trimmed.is_empty() && arm_indent.is_some_and(|arm| indent > arm) {
@@ -1233,7 +1249,7 @@ fn source_lines(source: &str) -> Result<Vec<SourceLine>, TranspileError> {
         {
             reject_tabs(next, index + 1)?;
             text.push('\n');
-            text.push_str(next.trim_end());
+            text.push_str(keep_literal_end(next, in_literal[index]));
         }
         if is_macro_item(&text) {
             macro_indent = Some(indent);
@@ -1394,6 +1410,29 @@ fn ends_in_condition(head: &str) -> bool {
 }
 
 /// Unclosed delimiters at the end of `text`, or `None` while a literal or block comment is open.
+/// For each line of `source`, whether it ends inside a string literal or block comment, whose
+/// trailing whitespace and delimiters are contents rather than code.
+fn lines_ending_in_literal(source: &str) -> Vec<bool> {
+    let mut statement = String::new();
+    source
+        .lines()
+        .map(|line| {
+            statement.push_str(line);
+            let open = open_delimiters(&statement).is_none();
+            if open {
+                statement.push('\n');
+            } else {
+                statement.clear();
+            }
+            open
+        })
+        .collect()
+}
+
+fn keep_literal_end(line: &str, in_literal: bool) -> &str {
+    if in_literal { line } else { line.trim_end() }
+}
+
 fn open_delimiters(text: &str) -> Option<Vec<char>> {
     let chars = text.chars().collect::<Vec<_>>();
     let mut open = Vec::new();
