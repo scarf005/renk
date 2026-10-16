@@ -998,7 +998,8 @@ fn block_ends_at(lines: &[String], end: usize, indent: usize) -> bool {
 }
 
 /// A function returning a value whose body is one expression, including its deeper continuation
-/// lines, becomes `fn f() -> T = expr` when its first line fits in 100 columns.
+/// or block lines, becomes `fn f() -> T = expr` (or `= match x:`) when its first line fits in
+/// 100 columns.
 fn expression_body_rewrites(lines: &[String]) -> Vec<Rewrite> {
     let mut rewrites = Vec::new();
     let mut index = 0;
@@ -1019,7 +1020,7 @@ fn expression_body_rewrites(lines: &[String]) -> Vec<Rewrite> {
             && !body.trim_start().starts_with("//")
             && !split_trailing_comment(body.trim())
                 .0
-                .ends_with([':', '{', ';'])
+                .ends_with(['{', ';'])
             && block_ends_at(lines, end, indent)
         {
             let mut text = format!(
