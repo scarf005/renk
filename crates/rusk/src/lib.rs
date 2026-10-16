@@ -757,6 +757,7 @@ fn is_raw_rust_block_header(header: &str, kind: RustBlockKind) -> bool {
 
 fn lower_rust_syntax(text: &str) -> String {
     let text = parenthesize_value_receivers(text);
+    let text = parenthesize_index_calls(&text);
     let text = replace_rust_turbofish(&text);
     replace_angle_generics_with_square(&text)
 }
@@ -797,6 +798,84 @@ fn parenthesize_value_receivers(text: &str) -> String {
     output
 }
 
+/// Rust `x.field[i](` indexes a field and calls the result, while Rusk reads `.field[...](` as
+/// generic application; parenthesize the indexed receiver as `(x.field[i])(` or
+/// `(make!(x).field[i])(`.
+fn parenthesize_index_calls(text: &str) -> String {
+    let chars = text.chars().collect::<Vec<_>>();
+    // Start of the postfix expression being read, one entry per open delimiter.
+    let mut starts = vec![0usize];
+    let mut opens = vec![0usize; chars.len() + 1];
+    let mut closes = vec![0usize; chars.len() + 1];
+    let mut index = 0usize;
+    while index < chars.len() {
+        if let Some(end) =
+            opaque_span_end(&chars, index).or_else(|| macro_invocation_end(&chars, index))
+        {
+            index = end + 1;
+            continue;
+        }
+        let character = chars[index];
+        let name_end = read_ident(&chars, index + 1);
+        if character == '.'
+            && (index == 0 || chars[index - 1] != '.')
+            && chars.get(index + 1).copied().is_some_and(is_ident_start)
+            && chars.get(name_end) == Some(&'[')
+        {
+            let mut close = name_end;
+            while chars.get(close) == Some(&'[')
+                && let Some(end) = matching_bracket(&chars, close, '[', ']')
+            {
+                close = end + 1;
+            }
+            if close > name_end && chars.get(close) == Some(&'(') {
+                // A line starting with `.method` continues a receiver on an earlier line.
+                let start = *starts.last().expect("outermost level");
+                if start < index && chars[start] != '.' {
+                    opens[start] += 1;
+                    closes[close] += 1;
+                }
+                index = close;
+                continue;
+            }
+        }
+        match character {
+            '(' | '[' | '{' => starts.push(index + 1),
+            ')' | ']' | '}' => {
+                if starts.len() > 1 {
+                    starts.pop();
+                }
+            }
+            '.' | '?' | ':' | '\'' => {}
+            character if is_ident_continue(character) => {}
+            character if character.is_whitespace() => {
+                // `value\n    .method()` continues the chain across the line break.
+                let next = chars[index..]
+                    .iter()
+                    .position(|character| !character.is_whitespace())
+                    .map_or(chars.len(), |offset| index + offset);
+                if chars.get(next) != Some(&'?')
+                    && (chars.get(next) != Some(&'.') || chars.get(next + 1) == Some(&'.'))
+                {
+                    *starts.last_mut().expect("outermost level") = next;
+                }
+                index = next;
+                continue;
+            }
+            _ => *starts.last_mut().expect("outermost level") = index + 1,
+        }
+        index += 1;
+    }
+    let mut output = String::new();
+    for (index, character) in chars.iter().enumerate() {
+        output.push_str(&")".repeat(closes[index]));
+        output.push_str(&"(".repeat(opens[index]));
+        output.push(*character);
+    }
+    output.push_str(&")".repeat(closes[chars.len()]));
+    output
+}
+
 fn replace_rust_turbofish(text: &str) -> String {
     let chars = text.chars().collect::<Vec<_>>();
     let mut output = String::new();
@@ -815,7 +894,17 @@ fn replace_rust_turbofish(text: &str) -> String {
             && chars[index + 2] == '<'
             && let Some(close) = matching_bracket(&chars, index + 2, '<', '>')
         {
-            output.push_str(".[");
+            // A method turbofish `.name::<T>(` becomes `.name[T](`; other paths keep `.[T]`.
+            let name_start = (0..index)
+                .rev()
+                .take_while(|at| is_ident_continue(chars[*at]))
+                .last()
+                .unwrap_or(index);
+            let method_call = name_start < index
+                && name_start > 0
+                && chars[name_start - 1] == '.'
+                && chars.get(close + 1) == Some(&'(');
+            output.push_str(if method_call { "[" } else { ".[" });
             output.push_str(&replace_angle_generics_with_square(
                 &chars[index + 3..close].iter().collect::<String>(),
             ));
@@ -2913,6 +3002,25 @@ fn replace_square_generics(text: &str, mode: GenericMode) -> String {
         let in_type_const_expr = mode == GenericMode::Type
             && (curly_depth > 0 || square_const.last().copied().unwrap_or(false));
 
+        // `.name[...](` is generic application; `(x.name[i])(` forces index-then-call.
+        let name_end = read_ident(&chars, index + 1);
+        if (mode == GenericMode::Expr || in_type_const_expr)
+            && chars[index] == '.'
+            && (index == 0 || chars[index - 1] != '.')
+            && chars.get(index + 1).copied().is_some_and(is_ident_start)
+            && chars.get(name_end) == Some(&'[')
+            && let Some(close) = matching_bracket(&chars, name_end, '[', ']')
+            && chars.get(close + 1) == Some(&'(')
+        {
+            let content: String = chars[name_end + 1..close].iter().collect();
+            output.extend(chars[index..name_end].iter());
+            output.push_str("::<");
+            output.push_str(&lower_generic_content(&content));
+            output.push('>');
+            index = close + 1;
+            continue;
+        }
+
         if chars[index] == '.'
             && chars.get(index + 1) == Some(&'[')
             && has_generic_base_before(&chars, index)
@@ -4214,8 +4322,8 @@ impl[T] Boxed[T]:
 
 pub fn parse(raw: &str) -> Option[(i32, i32)]:
     let (left, right) = raw.split_once(',')?
-    let left = left.trim().parse.[i32]().ok()?
-    let right = right.trim().parse.[i32]().ok()?
+    let left = left.trim().parse[i32]().ok()?
+    let right = right.trim().parse[i32]().ok()?
     if left < right then Some((left, right)) else None
 "#
         );

@@ -74,7 +74,7 @@ fn rust_conversion_preserves_paths_and_marks_generic_application() {
     .unwrap();
     assert!(output.contains("fn id[T](x: Vec[T]) -> Option[T]:"));
     assert!(output.contains("std::mem::drop(x)"));
-    assert!(output.contains("value.parse.[i32]()"));
+    assert!(output.contains("value.parse[i32]()"));
 }
 
 #[test]
@@ -128,6 +128,33 @@ fn unicode_identifiers_lower_like_ascii_ones() {
     assert!(output.contains("fn 변환<T>(값: T) -> T {"), "{output}");
     assert!(output.contains("fn demo() -> 상자<i32> {"), "{output}");
     assert!(output.contains("let 수 = 변환::<i32>(1);"), "{output}");
+}
+
+#[test]
+fn method_brackets_before_a_call_are_generic_application() {
+    let output = rust(
+        "fn demo(iter: I, raw: &str, h: H, xs: X, i: usize, pair: P, 목록: L):\n    let a = iter.collect[Vec[i32]]()\n    let b = raw.parse[i32]()\n    let c = (h.handlers[i])()\n    let d = xs[i]()\n    let e = h.handlers[i]\n    let f = 목록.변환[Vec[문자열]]()\n    let g = pair.0[i]()\n    let h = iter.map[u8, _](f).sum[u8]()\n",
+    );
+    assert!(output.contains("let a = iter.collect::<Vec<i32>>();"), "{output}");
+    assert!(output.contains("let b = raw.parse::<i32>();"), "{output}");
+    assert!(output.contains("let c = (h.handlers[i])();"), "{output}");
+    assert!(output.contains("let d = xs[i]();"), "{output}");
+    assert!(output.contains("let e = h.handlers[i];"), "{output}");
+    assert!(output.contains("let f = 목록.변환::<Vec<문자열>>();"), "{output}");
+    assert!(output.contains("let g = pair.0[i]();"), "{output}");
+    assert!(output.contains("let h = iter.map::<u8, _>(f).sum::<u8>();"), "{output}");
+}
+
+#[test]
+fn rust_conversion_parenthesizes_index_then_call() {
+    let output = rust_to_rusk(
+        "fn run(h: &H, i: usize, v: Vec<u8>) -> u8 {\n    (h.handlers[i])();\n    h.handlers[i]();\n    self.table.rows[i][0](i);\n    v.iter().sum::<u8>()\n}\n",
+    )
+    .unwrap();
+    assert!(!output.contains("((h.handlers[i]))()"), "{output}");
+    assert_eq!(output.matches("(h.handlers[i])()").count(), 2, "{output}");
+    assert!(output.contains("(self.table.rows[i][0])(i)"), "{output}");
+    assert!(output.contains("v.iter().sum[u8]()"), "{output}");
 }
 
 #[test]

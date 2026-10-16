@@ -140,3 +140,13 @@ fn names_from(count: usize) -> Vec<String> {
 fn names_len(names: &[&str]) -> usize {
     names.len()
 }
+
+pub struct Handlers {
+    pub calls: Vec<fn(usize) -> usize>,
+}
+
+pub fn dispatch(handlers: &Handlers, index: usize) -> usize {
+    let total = handlers.calls[index](index) + (handlers.calls[0])(index);
+    let parsed = "7".parse::<usize>().unwrap_or_default();
+    total + parsed + [1usize, 2].iter().sum::<usize>()
+}
