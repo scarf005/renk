@@ -73,3 +73,8 @@ pub fn commented_continuation() -> i32:
 
         1
     x
+
+pub fn raw_quotes() -> usize:
+    let s = r#"say "" 
+hi"#
+    s.len()

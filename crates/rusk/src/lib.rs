@@ -1483,7 +1483,10 @@ fn opaque_span_is_closed(chars: &[char], start: usize, end: usize) -> bool {
                 .take_while(|character| **character == '\\')
                 .count();
             let raw = raw_string_span_end(chars, start).is_some();
-            closing > quote && chars[closing] == '"' && (raw || escapes % 2 == 0)
+            closing > quote
+                && chars[closing] == '"'
+                && chars[closing + 1..=end].iter().all(|character| *character == '#')
+                && (raw || escapes % 2 == 0)
         }
     }
 }
