@@ -3203,9 +3203,11 @@ fn matching_bracket(chars: &[char], open_index: usize, open: char, close: char) 
             index = end + 1;
             continue;
         }
+        // The `>` of `->` and `=>` never closes a generic argument list.
+        let arrow = close == '>' && index > 0 && matches!(chars[index - 1], '-' | '=');
         if chars[index] == open {
             depth += 1;
-        } else if chars[index] == close {
+        } else if chars[index] == close && !arrow {
             depth = depth.checked_sub(1)?;
             if depth == 0 {
                 return Some(index);
