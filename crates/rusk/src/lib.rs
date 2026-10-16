@@ -535,7 +535,8 @@ fn strip_rust_semicolon(raw: &str) -> String {
             .map(|line| line.trim_end().to_string())
             .unwrap_or_else(|| raw.to_string());
     };
-    code.strip_suffix(';')
+    code.trim_end()
+        .strip_suffix(';')
         .map(|line| format!("{} {comment}", line.trim_end()))
         .unwrap_or_else(|| raw.to_string())
 }
@@ -747,14 +748,269 @@ pub fn rust_to_rusk(source: &str) -> Result<String, TranspileError> {
         }
     }
 
-    while output.first().is_some_and(String::is_empty) {
-        output.remove(0);
-    }
-    while output.last().is_some_and(String::is_empty) {
-        output.pop();
-    }
-
+    let output = idiomatic_rusk(trim_outer_blank_lines(output));
     Ok(ensure_trailing_newline(&output.join("\n")))
+}
+
+/// Replaces `lines[start..end]` with `text`.
+struct Rewrite {
+    start: usize,
+    end: usize,
+    text: String,
+}
+
+/// Rewrites literal Rust-shaped Rusk into idiomatic forms, keeping each rewrite only when the
+/// Rusk still transpiles to the same Rust.
+fn idiomatic_rusk(lines: Vec<String>) -> Vec<String> {
+    let Ok(expected) = transpile(&lines.join("\n")) else {
+        return lines;
+    };
+    type Pass = fn(&[String]) -> Vec<Rewrite>;
+    let passes: [Pass; 4] = [
+        |lines| line_rewrites(lines, drop_semicolon),
+        |lines| line_rewrites(lines, dot_rust_paths),
+        |lines| line_rewrites(lines, inline_if_rewrite),
+        expression_body_rewrites,
+    ];
+    passes.into_iter().fold(lines, |lines, pass| {
+        let rewrites = pass(&lines);
+        let (accepted, _) = equivalent_rewrites(&lines, rewrites, &expected.rust);
+        apply_rewrites(&lines, &accepted).0
+    })
+}
+
+fn line_rewrites(lines: &[String], rewrite: fn(&str) -> Option<String>) -> Vec<Rewrite> {
+    lines
+        .iter()
+        .enumerate()
+        .filter_map(|(index, line)| {
+            rewrite(line).map(|text| Rewrite {
+                start: index,
+                end: index + 1,
+                text,
+            })
+        })
+        .collect()
+}
+
+/// Candidate lines with each sorted, disjoint rewrite applied, and the rewrite that produced each
+/// candidate source line.
+fn apply_rewrites(lines: &[String], rewrites: &[Rewrite]) -> (Vec<String>, Vec<Option<usize>>) {
+    let mut candidate = Vec::new();
+    let mut origins = Vec::new();
+    let mut next = 0;
+    for (index, rewrite) in rewrites.iter().enumerate() {
+        for line in &lines[next..rewrite.start] {
+            origins.extend(line.split('\n').map(|_| None));
+            candidate.push(line.clone());
+        }
+        origins.extend(rewrite.text.split('\n').map(|_| Some(index)));
+        candidate.push(rewrite.text.clone());
+        next = rewrite.end;
+    }
+    candidate.extend_from_slice(&lines[next..]);
+    (candidate, origins)
+}
+
+/// Splits rewrites into those whose Rusk transpiles to exactly `expected` and the rest.
+fn equivalent_rewrites(
+    lines: &[String],
+    mut rewrites: Vec<Rewrite>,
+    expected: &str,
+) -> (Vec<Rewrite>, Vec<Rewrite>) {
+    let mut rejected = Vec::new();
+    while !rewrites.is_empty() {
+        let (candidate, origins) = apply_rewrites(lines, &rewrites);
+        let rejected_lines = match transpile(&candidate.join("\n")) {
+            Ok(output) if output.rust == expected => break,
+            Ok(output) => differing_source_lines(&output, expected),
+            Err(error) => vec![error.line],
+        };
+        let failed = rejected_lines
+            .into_iter()
+            .filter_map(|line| origins.get(line.checked_sub(1)?).copied().flatten())
+            .collect::<Vec<_>>();
+        if failed.is_empty() {
+            rejected.append(&mut rewrites);
+            break;
+        }
+        let (bad, good) = rewrites
+            .into_iter()
+            .enumerate()
+            .partition::<Vec<_>, _>(|(index, _)| failed.contains(index));
+        rejected.extend(bad.into_iter().map(|(_, rewrite)| rewrite));
+        rewrites = good.into_iter().map(|(_, rewrite)| rewrite).collect();
+    }
+    rejected.sort_by_key(|rewrite| rewrite.start);
+    (rewrites, rejected)
+}
+
+/// Source lines whose generated Rust differs from `expected`; after a line count change only the
+/// first difference is aligned.
+fn differing_source_lines(output: &TranspileOutput, expected: &str) -> Vec<usize> {
+    let actual = output.rust.lines().collect::<Vec<_>>();
+    let expected = expected.lines().collect::<Vec<_>>();
+    let differing = (0..actual.len().max(expected.len()))
+        .filter(|&index| actual.get(index) != expected.get(index))
+        .take(if actual.len() == expected.len() {
+            usize::MAX
+        } else {
+            1
+        });
+    differing
+        .filter_map(|index| deepest_source_line(&output.source_tree, index + 1))
+        .collect()
+}
+
+fn deepest_source_line(nodes: &[SourceMapNode], generated_line: usize) -> Option<usize> {
+    let node = nodes.iter().find(|node| {
+        (node.generated_start_line..=node.generated_end_line).contains(&generated_line)
+    })?;
+    deepest_source_line(&node.children, generated_line).or(Some(node.source_line))
+}
+
+fn drop_semicolon(line: &str) -> Option<String> {
+    let (head, last) = line.rsplit_once('\n').unwrap_or(("", line));
+    let stripped = strip_rust_semicolon(last);
+    (stripped != last).then(|| {
+        if head.is_empty() {
+            stripped
+        } else {
+            format!("{head}\n{stripped}")
+        }
+    })
+}
+
+/// Writes `A::b` paths as `A.b`: every path in `use` lines and item headers, and expression
+/// paths whose head Rusk lowers back (`std`, `crate`, `Self`, uppercase names).
+fn dot_rust_paths(line: &str) -> Option<String> {
+    let code = line.trim_start();
+    let code = code.strip_prefix("pub ").unwrap_or(code);
+    let any_head = is_use_or_extern_crate(code)
+        || is_impl_or_mod_item(code)
+        || (is_function(code) && code.ends_with(':'));
+    let chars = line.chars().collect::<Vec<_>>();
+    let mut output = String::new();
+    let mut index = 0;
+    while index < chars.len() {
+        if let Some(end) =
+            opaque_span_end(&chars, index).or_else(|| macro_invocation_end(&chars, index))
+        {
+            output.extend(&chars[index..=end]);
+            index = end + 1;
+            continue;
+        }
+        // `Vec[T]::new` as `Vec[T].new`.
+        if chars[index..].starts_with(&[':', ':'])
+            && index > 0
+            && chars[index - 1] == ']'
+            && chars.get(index + 2).copied().is_some_and(is_ident_start)
+        {
+            output.push('.');
+            index += 2;
+            continue;
+        }
+        let starts_path = is_ident_start(chars[index])
+            && (index == 0
+                || !(is_ident_continue(chars[index - 1])
+                    || matches!(chars[index - 1], '.' | ':' | '\'' | '#')));
+        if !starts_path {
+            output.push(chars[index]);
+            index += 1;
+            continue;
+        }
+        let mut end = read_ident(&chars, index);
+        let head = chars[index..end].iter().collect::<String>();
+        let dotted = any_head
+            || matches!(
+                head.as_str(),
+                "std" | "core" | "alloc" | "crate" | "super" | "Self"
+            )
+            || head.starts_with(char::is_uppercase);
+        output.push_str(&head);
+        while dotted
+            && chars[end..].starts_with(&[':', ':'])
+            && chars.get(end + 2).copied().is_some_and(is_ident_start)
+        {
+            let segment_end = read_ident(&chars, end + 2);
+            output.push('.');
+            output.extend(&chars[end + 2..segment_end]);
+            end = segment_end;
+        }
+        index = end;
+    }
+    (output != line).then_some(output)
+}
+
+/// `let x = if c { a } else { b }`, `return if ...`, and `p => if ...` as `if c then a else b`.
+fn inline_if_rewrite(line: &str) -> Option<String> {
+    if line.contains('\n') {
+        return None;
+    }
+    let start = ["= if ", "return if ", "=> if "]
+        .into_iter()
+        .filter_map(|prefix| Some(line.find(prefix)? + prefix.len() - "if ".len()))
+        .min()?;
+    let inline = rust_inline_if_to_rusk(&line[start..], str::to_string)?;
+    Some(format!("{}{inline}", &line[..start]))
+}
+
+/// Whether the block at `indent` has no lines left from `end` on.
+fn block_ends_at(lines: &[String], end: usize, indent: usize) -> bool {
+    lines[end..]
+        .iter()
+        .find(|line| !line.trim().is_empty())
+        .is_none_or(|next| raw_indent(next) <= indent)
+}
+
+/// A function returning a value whose body is one expression, including its deeper continuation
+/// lines, becomes `fn f() -> T = expr`.
+fn expression_body_rewrites(lines: &[String]) -> Vec<Rewrite> {
+    let mut rewrites = Vec::new();
+    let mut index = 0;
+    while index + 1 < lines.len() {
+        let (header, body) = (&lines[index], &lines[index + 1]);
+        let indent = raw_indent(header);
+        let end = index
+            + 2
+            + lines[index + 2..]
+                .iter()
+                .take_while(|line| !line.trim().is_empty() && raw_indent(line) > indent + 4)
+                .count();
+        if let Some(signature) = header.trim().strip_suffix(':')
+            && is_function(signature)
+            && function_returns_value(signature)
+            && !header.contains("//")
+            && raw_indent(body) == indent + 4
+            && !body.trim_start().starts_with("//")
+            && !split_trailing_comment(body.trim())
+                .0
+                .ends_with([':', '{', ';'])
+            && block_ends_at(lines, end, indent)
+        {
+            let mut text = format!(
+                "{} = {}",
+                header.trim_end().trim_end_matches(':'),
+                body.trim()
+            );
+            for line in lines[index + 2..end]
+                .iter()
+                .flat_map(|line| line.split('\n'))
+            {
+                text.push('\n');
+                text.push_str(line.strip_prefix("    ").unwrap_or(line));
+            }
+            rewrites.push(Rewrite {
+                start: index,
+                end,
+                text,
+            });
+            index = end;
+        } else {
+            index += 1;
+        }
+    }
+    rewrites
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -779,7 +1035,7 @@ fn convert_rust_statement(text: &str, parent: Option<RustBlockKind>) -> Converte
             opens: None,
         };
     }
-    if let Some(inline_if) = rust_inline_if_to_rusk(text) {
+    if let Some(inline_if) = rust_inline_if_to_rusk(text, lower_rust_syntax) {
         return ConvertedRustStatement {
             text: inline_if,
             opens: None,
@@ -1085,34 +1341,35 @@ fn rust_generic_content(content: &str) -> bool {
     !trimmed.is_empty()
         && (trimmed.contains('\'')
             || trimmed.contains(',')
+            || trimmed.chars().all(|character| matches!(character, '(' | ')' | ' '))
             || type_like_generic(trimmed)
             || generic_tokens(trimmed)
                 .into_iter()
                 .any(|token| token.len() == 1))
 }
 
-fn rust_inline_if_to_rusk(text: &str) -> Option<String> {
-    let rest = text.strip_prefix("if ")?;
-    let open = rest.find('{')?;
-    let condition = rest[..open].trim();
-    let chars = rest.chars().collect::<Vec<_>>();
+/// `if c { a } else if d { b } else { e }` as `if c then a else if d then b else e`, with each
+/// part passed through `lower`.
+fn rust_inline_if_to_rusk(text: &str, lower: fn(&str) -> String) -> Option<String> {
+    let chars = text.strip_prefix("if ")?.chars().collect::<Vec<_>>();
+    let open = chars.iter().position(|character| *character == '{')?;
     let close = matching_bracket(&chars, open, '{', '}')?;
-    let then_expr = chars[open + 1..close]
-        .iter()
-        .collect::<String>()
-        .trim()
-        .to_string();
+    let branch = |range: std::ops::Range<usize>| {
+        let text = chars[range].iter().collect::<String>();
+        (!text.contains(';')).then(|| lower(text.trim()))
+    };
+    let condition = branch(0..open)?;
+    let then_expr = branch(open + 1..close)?;
     let after = chars[close + 1..].iter().collect::<String>();
-    let after = after.trim();
-    let else_body = after.strip_prefix("else")?.trim();
-    let else_body = else_body.strip_prefix('{')?.trim();
-    let else_body = else_body.strip_suffix('}')?.trim();
-    Some(format!(
-        "if {} then {} else {}",
-        lower_rust_syntax(condition),
-        lower_rust_syntax(&then_expr),
-        rust_inline_if_to_rusk(else_body).unwrap_or_else(|| lower_rust_syntax(else_body))
-    ))
+    let else_body = after.trim().strip_prefix("else")?.trim();
+    let else_expr = match else_body.strip_prefix('{') {
+        Some(body) => {
+            let body = body.strip_suffix('}')?;
+            (!body.contains(';')).then(|| lower(body.trim()))?
+        }
+        None => rust_inline_if_to_rusk(else_body, lower)?,
+    };
+    Some(format!("if {condition} then {then_expr} else {else_expr}"))
 }
 
 fn parse_source_lines(lines: &[SourceLine]) -> Result<(), TranspileError> {
@@ -4294,7 +4551,7 @@ fn id(value: i32) -> i32 {
             ruk_to_rust(&ruk).unwrap(),
             ensure_trailing_newline(rust_source.trim_start())
         );
-        assert!(ruk_to_rusk(&ruk).unwrap().contains("let user = User::new"));
+        assert!(ruk_to_rusk(&ruk).unwrap().contains("let user = User.new"));
         assert!(
             rusk_to_ruk("fn main():\n    println!(\"hello\")\n")
                 .unwrap()
@@ -4454,15 +4711,13 @@ pub struct User:
     pub name: String
 
 impl User:
-    pub fn new(id: u64, name: String) -> Self:
-        Self { id, name }
+    pub fn new(id: u64, name: String) -> Self = Self { id, name }
 
-    pub fn display_name(&self) -> &str:
-        &self.name
+    pub fn display_name(&self) -> &str = &self.name
 
 pub fn main():
-    let user = User::new(1, "Ada".to_string())
-    println!("{}", user.display_name());
+    let user = User.new(1, "Ada".to_string())
+    println!("{}", user.display_name())
 "#
         );
     }
@@ -4532,8 +4787,7 @@ pub fn parse(raw: &str) -> Option<(i32, i32)> {
     pub value: T
 
 impl[T] Boxed[T]:
-    pub fn new(value: T) -> Self:
-        Self { value }
+    pub fn new(value: T) -> Self = Self { value }
 
 pub fn parse(raw: &str) -> Option[(i32, i32)]:
     let (left, right) = raw.split_once(',')?

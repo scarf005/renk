@@ -85,6 +85,7 @@ just web # open web editor
 - source formatter that preserves existing line break style; only line width is configurable
 - hierarchical JSON source map generation
 - Rust-to-Rusk, Rust-to-Ruk, Ruk-to-Rust, Ruk-to-Rusk, and Rusk-to-Ruk conversion
+- `from-rust` writes idiomatic Rusk (dotted paths, `[T]` generics, `fn f() -> T = expr`, inferred `;`, `if c then a else b`) only where the result transpiles back to the same Rust
 
 ## Formatter
 

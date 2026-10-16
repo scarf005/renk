@@ -75,20 +75,20 @@ fn type_lowering_reenters_expression_context_for_consts() {
 }
 
 #[test]
-fn rust_conversion_preserves_paths_and_marks_generic_application() {
+fn rust_conversion_dots_paths_and_marks_generic_application() {
     let output = rust_to_rusk(
         "fn id<T>(x: Vec<T>) -> Option<T> {\n    std::mem::drop(x);\n    None\n}\n\nfn parse(value: &str) {\n    let _ = value.parse::<i32>();\n    let _ = std::mem::size_of::<Vec<u8>>();\n    let _ = Vec::<String>::new();\n    let _ = serde_json::from_str::<Config>(value);\n    let _ = [\"1\"].map(str::parse::<Vec<i32>>);\n    let _ = TABLE[0].len();\n    let _ = crate::config::TABLE[0].len();\n}\n",
     )
     .unwrap();
     assert!(output.contains("fn id[T](x: Vec[T]) -> Option[T]:"), "{output}");
-    assert!(output.contains("std::mem::drop(x)"), "{output}");
+    assert!(output.contains("std.mem.drop(x)"), "{output}");
     assert!(output.contains("value.parse[i32]()"), "{output}");
-    assert!(output.contains("std::mem::size_of[Vec[u8]]()"), "{output}");
-    assert!(output.contains("Vec[String]::new()"), "{output}");
+    assert!(output.contains("std.mem.size_of[Vec[u8]]()"), "{output}");
+    assert!(output.contains("Vec[String].new()"), "{output}");
     assert!(output.contains("serde_json::from_str[Config](value)"), "{output}");
     assert!(output.contains("str::parse::<Vec<i32>>"), "{output}");
     assert!(output.contains("(TABLE)[0].len()"), "{output}");
-    assert!(output.contains("(crate::config::TABLE)[0].len()"), "{output}");
+    assert!(output.contains("(crate.config.TABLE)[0].len()"), "{output}");
 }
 
 #[test]
@@ -319,4 +319,14 @@ fn raw_strings_stay_open_until_their_closing_hashes() {
     let source = "fn main():\n    let s = r#\"say \"\" \nhi\"#\n    print!(\"{s}\")\n";
     assert_eq!(format_source(source, FormatOptions::default()).unwrap(), source);
     assert!(rust(source).contains("r#\"say \"\" \nhi\"#;"), "{}", rust(source));
+}
+
+#[test]
+fn ruk_conversion_drops_semicolons_before_trailing_comments() {
+    let output = rust_to_ruk("fn f() {\n    g(); // c\n    h();\n}\n").unwrap();
+    assert_eq!(output, "fn f() {\n    g() // c\n    h()\n}\n");
+    assert_eq!(
+        ruk_to_rust(&output).unwrap(),
+        "fn f() {\n    g(); // c\n    h();\n}\n"
+    );
 }
