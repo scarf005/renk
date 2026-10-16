@@ -251,3 +251,14 @@ fn ruk_lines_ending_in_an_operator_continue_the_statement() {
     let output = ruk_to_rust("static TOTAL: i32 =\n    1 +\n    2\n").unwrap();
     assert_eq!(output, "static TOTAL: i32 =\n    1 +\n    2;\n");
 }
+
+#[test]
+fn rust_brace_else_lines_continue_the_brace_chain() {
+    let output = rust("fn pick(a: bool, b: bool) -> i32:\n    if a {\n        1\n    } else if b {\n        2\n    } else {\n        3\n    }\n");
+    assert_eq!(
+        output,
+        "fn pick(a: bool, b: bool) -> i32 {\n    if a {\n        1\n    }\n    else if b {\n        2\n    }\n    else {\n        3\n    }\n}\n"
+    );
+    let output = rust("fn pick(a: bool) -> usize:\n    let v = if a {\n        vec![1]\n    } else {\n        vec![]\n    }\n    v.len()\n");
+    assert!(output.contains("    }\n    else {\n        vec![]\n    };\n"), "{output}");
+}
