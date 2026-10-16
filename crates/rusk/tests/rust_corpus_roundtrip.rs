@@ -27,6 +27,7 @@ const CORPUS: &[(&str, &str)] = &[
     ("edge_cases", include_str!("rust_corpus/edge_cases.rs")),
     ("macro_rules", include_str!("rust_corpus/macro_rules.rs")),
     ("value_blocks", include_str!("rust_corpus/value_blocks.rs")),
+    ("idiomatic", include_str!("rust_corpus/idiomatic.rs")),
 ];
 
 const RUSK_CORPUS: &[(&str, &str)] = &[
@@ -73,6 +74,15 @@ fn rust_corpus_roundtrips_to_compilable_rust() {
     }
 
     let _ = fs::remove_dir_all(out_dir);
+}
+
+#[test]
+fn rust_conversion_emits_idiomatic_rusk() {
+    let rust = include_str!("rust_corpus/idiomatic.rs");
+    assert_eq!(
+        rust_to_rusk(rust).unwrap(),
+        include_str!("rust_corpus/idiomatic.rsk")
+    );
 }
 
 #[test]
