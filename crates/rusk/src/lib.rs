@@ -116,6 +116,8 @@ struct SourceLine {
     text: String,
     /// A line of a multi-line `macro_rules!` arm body, kept as Rust tokens.
     raw: bool,
+    /// Trailing `//` comment with its leading spaces, moved after the generated line.
+    comment: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -126,6 +128,7 @@ struct Node {
     children: Vec<Node>,
     /// Source closing line of a `{` head after its `}`, such as `)?` in `})?`.
     closing: Option<String>,
+    comment: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -146,6 +149,8 @@ struct Emitter {
     source_map: Vec<SourceMapEntry>,
     source_tree: Vec<SourceMapNode>,
     tree_stack: Vec<SourceMapNode>,
+    /// Trailing source comments by generated line, appended once every line is final.
+    comments: Vec<(usize, String)>,
 }
 
 pub fn transpile(source: &str) -> Result<TranspileOutput, TranspileError> {
@@ -154,6 +159,9 @@ pub fn transpile(source: &str) -> Result<TranspileOutput, TranspileError> {
 
     let mut emitter = Emitter::default();
     emit_nodes(&nodes, Context::Root, &mut emitter);
+    for (line, comment) in &emitter.comments {
+        emitter.lines[*line].push_str(comment);
+    }
     Ok(TranspileOutput {
         rust: ensure_trailing_newline(&emitter.lines.join("\n")),
         source_map: emitter.source_map,
@@ -624,13 +632,12 @@ pub fn rust_to_rusk(source: &str) -> Result<String, TranspileError> {
             continue;
         }
 
+        let indent = spaces(raw_indent(raw));
+        let comment;
+        (text, comment) = split_trailing_comment(text);
         if closing_tail(text).is_some() {
             stack.pop();
-            output.push(format!(
-                "{}{}",
-                spaces(raw_indent(raw)),
-                lower_rust_syntax(text)
-            ));
+            output.push(format!("{indent}{}{comment}", lower_rust_syntax(text)));
             continue;
         }
         while let Some(rest) = text.strip_prefix('}') {
@@ -638,10 +645,13 @@ pub fn rust_to_rusk(source: &str) -> Result<String, TranspileError> {
             text = rest.trim_start_matches(|character| matches!(character, ',' | ';' | ' '));
         }
         if text.is_empty() || is_rust_closing_delimiter_line(text) {
+            // Rusk drops closing lines, so their comment becomes its own line.
+            if !comment.is_empty() {
+                output.push(format!("{indent}{}", comment.trim_start()));
+            }
             continue;
         }
 
-        let indent = spaces(raw_indent(raw));
         if stack.last().is_some_and(|block| block.kind == RustBlockKind::Macro) {
             // Macro arms keep Rust tokens; a multi-line arm becomes `pattern =>:` and its body.
             let arm = text.trim_end_matches(';');
@@ -654,11 +664,11 @@ pub fn rust_to_rusk(source: &str) -> Result<String, TranspileError> {
                     }
                     arm_depth = Some(macro_depth_after_line(0, body));
                 }
-                _ => output.push(format!("{indent}{arm}")),
+                _ => output.push(format!("{indent}{arm}{comment}")),
             }
             continue;
         }
-        let mut text = text.to_string();
+        let mut text = format!("{text}{comment}");
         let mut group = None;
         while joins_next_line(
             &text,
@@ -671,11 +681,12 @@ pub fn rust_to_rusk(source: &str) -> Result<String, TranspileError> {
             text.push('\n');
             text.push_str(next.trim_end());
         }
-        let converted = convert_rust_statement(&text, stack.last().map(|block| block.kind));
+        let (text, comment) = split_trailing_comment(&text);
+        let converted = convert_rust_statement(text, stack.last().map(|block| block.kind));
         if converted.text.is_empty() {
             continue;
         }
-        output.push(format!("{indent}{}", converted.text));
+        output.push(format!("{indent}{}{comment}", converted.text));
         if let Some(kind) = converted.opens {
             stack.push(RustBlock { kind });
         }
@@ -1150,6 +1161,7 @@ fn source_lines(source: &str) -> Result<Vec<SourceLine>, TranspileError> {
                 indent,
                 text: trimmed.to_string(),
                 raw: true,
+                comment: None,
             });
             continue;
         }
@@ -1183,11 +1195,13 @@ fn source_lines(source: &str) -> Result<Vec<SourceLine>, TranspileError> {
         {
             arm_indent = Some(indent);
         }
+        let (code, comment) = split_trailing_comment(&text);
         lines.push(SourceLine {
             line,
             indent,
-            text,
+            text: code.to_string(),
             raw: false,
+            comment: (!comment.is_empty()).then(|| comment.to_string()),
         });
     }
     Ok(lines)
@@ -1233,6 +1247,13 @@ fn joins_next_line(
         && !["==", "!=", "<=", ">="]
             .iter()
             .any(|operator| trimmed.ends_with(operator))
+}
+
+/// `text` split before a `//` comment that ends it, keeping the spaces before the comment with
+/// the comment; a line that is only a comment stays code.
+fn split_trailing_comment(text: &str) -> (&str, &str) {
+    let code_len = without_trailing_line_comment(text).trim_end().len();
+    text.split_at(if code_len == 0 { text.len() } else { code_len })
 }
 
 /// `text` without a `//` comment that runs to its end.
@@ -1439,6 +1460,7 @@ fn parse_nodes(
             text: line.text.clone(),
             children,
             closing,
+            comment: line.comment.clone(),
         });
     }
     Ok((nodes, index))
@@ -1727,7 +1749,15 @@ fn is_else_branch(text: &str) -> bool {
 
 fn emit_node(node: &Node, context: Context, is_last: bool, emitter: &mut Emitter) {
     emitter.begin_node(node, classify_node(node, context));
+    let head = emitter.lines.len();
     emit_node_body(node, context, is_last, emitter);
+    if let Some(comment) = &node.comment
+        && let Some(last) = emitter.lines.len().checked_sub(1)
+    {
+        // The comment follows the last physical line of the node's own head.
+        let line = (head + node.text.matches('\n').count()).min(last);
+        emitter.comments.push((line, comment.clone()));
+    }
     emitter.end_node();
 }
 
@@ -2108,6 +2138,7 @@ fn offset_node_indent(node: &Node, offset: usize) -> Node {
         indent: node.indent + offset,
         text: node.text.clone(),
         closing: node.closing.clone(),
+        comment: node.comment.clone(),
         children: node
             .children
             .iter()

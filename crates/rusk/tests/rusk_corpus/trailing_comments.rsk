@@ -7,3 +7,20 @@ pub fn trailing_comments(xs: Vec[i32]) -> i32: // signature comment
         return total // early
     println!("{label}") // print
     total + first // tail
+
+struct Point:
+    x: i32 // field
+
+fn pass(n: i32) -> i32 = n
+
+pub fn comments_in_chains(c: bool, d: bool, o: Option[i32]) -> i32:
+    let x = pass(if c { // head
+        1 // one
+    else if d then 2 else 3 // last branch
+    let y = match o: // scrutinee
+        Some(v) => v // arm
+        None => 0
+    let z = pass(
+        1, // argument
+    ) // group
+    x + y + z + Point { x: 1 }.x
