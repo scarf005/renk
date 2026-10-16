@@ -911,7 +911,7 @@ fn item_name(text: &str, keyword: &str) -> Option<String> {
     let index = text.find(keyword)? + keyword.len();
     let rest = text[index..].trim_start();
     let name = rest
-        .split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
+        .split(|character: char| !is_identifier_continue(character))
         .find(|part| !part.is_empty())?;
     Some(name.to_string())
 }
@@ -1194,28 +1194,19 @@ fn field_declaration(line: u32, indent: usize, text: &str) -> Option<Declaration
 
 fn word_at_position(text: &str, position: Position) -> Option<Word> {
     let raw = text.lines().nth(position.line as usize)?;
-    let character = (position.character as usize).min(raw.len());
-    let bytes = raw.as_bytes();
-    let mut start = character;
-    if start == raw.len() && start > 0 {
-        start -= 1;
+    let mut cursor = (position.character as usize).min(raw.len());
+    while !raw.is_char_boundary(cursor) {
+        cursor -= 1;
     }
-    if start < raw.len()
-        && !is_identifier_byte(bytes[start])
-        && start > 0
-        && is_identifier_byte(bytes[start - 1])
-    {
-        start -= 1;
-    }
-    if start >= raw.len() || !is_identifier_byte(bytes[start]) {
+    let start = raw[..cursor]
+        .char_indices()
+        .rev()
+        .take_while(|(_, character)| is_identifier_continue(*character))
+        .last()
+        .map_or(cursor, |(start, _)| start);
+    let end = identifier_end(raw, cursor);
+    if start == end {
         return None;
-    }
-    while start > 0 && is_identifier_byte(bytes[start - 1]) {
-        start -= 1;
-    }
-    let mut end = start;
-    while end < raw.len() && is_identifier_byte(bytes[end]) {
-        end += 1;
     }
 
     Some(Word {
@@ -1227,34 +1218,32 @@ fn word_at_position(text: &str, position: Position) -> Option<Word> {
 fn keyword_position(text: &str, keyword: &str) -> Option<usize> {
     text.match_indices(keyword)
         .find(|(index, _)| {
-            let before = index
-                .checked_sub(1)
-                .and_then(|before| text.as_bytes().get(before))
-                .is_none_or(|byte| !is_identifier_byte(*byte));
-            let after = text
-                .as_bytes()
-                .get(index + keyword.len())
-                .is_none_or(|byte| !is_identifier_byte(*byte));
+            let before = text[..*index]
+                .chars()
+                .next_back()
+                .is_none_or(|character| !is_identifier_continue(character));
+            let after = text[index + keyword.len()..]
+                .chars()
+                .next()
+                .is_none_or(|character| !is_identifier_continue(character));
             before && after
         })
         .map(|(index, _)| index)
 }
 
 fn identifier_end(text: &str, start: usize) -> usize {
-    let bytes = text.as_bytes();
-    let mut end = start;
-    while end < text.len() && is_identifier_byte(bytes[end]) {
-        end += 1;
-    }
-    end
+    text[start..]
+        .char_indices()
+        .find(|(_, character)| !is_identifier_continue(*character))
+        .map_or(text.len(), |(offset, _)| start + offset)
 }
 
 fn is_identifier_start(character: char) -> bool {
-    character == '_' || character.is_ascii_alphabetic()
+    character == '_' || unicode_ident::is_xid_start(character)
 }
 
-fn is_identifier_byte(byte: u8) -> bool {
-    byte == b'_' || byte.is_ascii_alphanumeric()
+fn is_identifier_continue(character: char) -> bool {
+    unicode_ident::is_xid_continue(character)
 }
 
 fn trim_assignment_tail(text: &str) -> &str {
@@ -1383,6 +1372,15 @@ mod tests {
         assert!(items.iter().any(|item| item.label == "User"));
         assert!(items.iter().any(|item| item.label == "greet"));
         assert!(items.iter().any(|item| item.label == "user"));
+    }
+
+    #[test]
+    fn completions_include_unicode_symbols() {
+        let items = completion_items("pub struct 사용자:\npub fn 인사(이름: 사용자) = 이름\n");
+
+        assert!(items.iter().any(|item| item.label == "사용자"));
+        assert!(items.iter().any(|item| item.label == "인사"));
+        assert!(items.iter().any(|item| item.label == "이름"));
     }
 
     #[test]

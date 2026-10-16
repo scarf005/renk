@@ -120,6 +120,17 @@ fn inline_if_lowers_after_bindings_and_returns() {
 }
 
 #[test]
+fn unicode_identifiers_lower_like_ascii_ones() {
+    let output = rust(
+        "pub struct 상자[T]:\n    값: T\n\nfn 변환[T](값: T) -> T = 값\n\nfn demo() -> 상자[i32]:\n    let 수 = 변환.[i32](1)\n    상자 { 값: 수 }\n",
+    );
+    assert!(output.contains("pub struct 상자<T> {"), "{output}");
+    assert!(output.contains("fn 변환<T>(값: T) -> T {"), "{output}");
+    assert!(output.contains("fn demo() -> 상자<i32> {"), "{output}");
+    assert!(output.contains("let 수 = 변환::<i32>(1);"), "{output}");
+}
+
+#[test]
 fn uppercase_operand_before_block_opener_is_not_a_struct_literal() {
     let output = rust_to_rusk(
         "fn pick(n: i32) -> i32 {\n    let x = match MODE {\n        1 => 10,\n        _ => 0,\n    };\n    if n > MAX {\n        1\n    } else {\n        x\n    }\n}\n",

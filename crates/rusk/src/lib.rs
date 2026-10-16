@@ -3316,11 +3316,11 @@ fn should_convert_path(segments: &[String], mode: PathMode, next: Option<char>) 
 }
 
 fn is_ident_start(character: char) -> bool {
-    character == '_' || character.is_ascii_alphabetic()
+    character == '_' || unicode_ident::is_xid_start(character)
 }
 
 fn is_ident_continue(character: char) -> bool {
-    character == '_' || character.is_ascii_alphanumeric()
+    unicode_ident::is_xid_continue(character)
 }
 
 fn read_ident(chars: &[char], mut index: usize) -> usize {
