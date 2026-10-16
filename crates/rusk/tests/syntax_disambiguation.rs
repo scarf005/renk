@@ -5,25 +5,33 @@ fn rust(source: &str) -> String {
 }
 
 #[test]
-fn explicit_generic_application_does_not_compete_with_indexing() {
+fn bracket_calls_and_uppercase_paths_are_generic_application() {
     let output = rust(
-        "fn demo(xs: &[fn() -> i32], i: usize, raw: &str):\n    let called = xs[i]()\n    let parsed = raw.parse.[i32]()\n",
+        "fn demo(xs: &[fn() -> i32], i: usize, raw: &str):\n    let called = (xs[i])()\n    let parsed = raw.parse[i32]()\n    let size = size_of[u8]()\n    let value = serde_json::from_str[Config](raw)\n    let length = xs[i].len()\n    let row = (TABLE)[i].len()\n    let rows = TABLE[i][0].len()\n    let item = (config::TABLE)[i].len()\n    let made = config::Type[u8].new()\n",
     );
-    assert!(output.contains("let called = xs[i]();"));
-    assert!(output.contains("let parsed = raw.parse::<i32>();"));
+    assert!(output.contains("let called = (xs[i])();"), "{output}");
+    assert!(output.contains("let parsed = raw.parse::<i32>();"), "{output}");
+    assert!(output.contains("let size = size_of::<u8>();"), "{output}");
+    assert!(output.contains("serde_json::from_str::<Config>(raw);"), "{output}");
+    assert!(output.contains("let length = xs[i].len();"), "{output}");
+    assert!(output.contains("let row = (TABLE)[i].len();"), "{output}");
+    assert!(output.contains("let rows = TABLE[i][0].len();"), "{output}");
+    assert!(output.contains("let item = (config::TABLE)[i].len();"), "{output}");
+    assert!(output.contains("let made = config::Type::<u8>::new();"), "{output}");
 
     let output = rust(
-        "fn make() -> Vec[String] = Vec.[String].new()\nfn collect(iter: Iter) = iter.collect.[Vec[String]]()\n",
+        "fn make() -> Vec[String] = Vec[String].new()\nfn empty() -> Vec[u8] = Vec[u8]::new()\nfn collect(iter: Iter) = iter.collect[Vec[String]]()\n",
     );
-    assert!(output.contains("fn make() -> Vec<String>"));
-    assert!(output.contains("Vec::<String>::new()"));
-    assert!(output.contains("iter.collect::<Vec<String>>()"));
+    assert!(output.contains("fn make() -> Vec<String>"), "{output}");
+    assert!(output.contains("Vec::<String>::new()"), "{output}");
+    assert!(output.contains("Vec::<u8>::new()"), "{output}");
+    assert!(output.contains("iter.collect::<Vec<String>>()"), "{output}");
 }
 
 #[test]
 fn explicit_paths_and_parentheses_bound_dot_inference() {
     let output = rust(
-        "fn demo():\n    let length = (TEXT).len()\n    let default_len = Config::DEFAULT.len()\n    let typed = Foo.[String]::DEFAULT.len()\n",
+        "fn demo():\n    let length = (TEXT).len()\n    let default_len = Config::DEFAULT.len()\n    let typed = Foo[String]::DEFAULT.len()\n",
     );
     assert!(output.contains("(TEXT).len()"));
     assert!(output.contains("Config::DEFAULT.len()"));
@@ -58,10 +66,10 @@ fn macro_rules_bodies_use_rust_tokens() {
 #[test]
 fn type_lowering_reenters_expression_context_for_consts() {
     let output = rust(
-        "fn bytes() -> [u8; TABLE[N].len()] = todo!()\nfn array() -> Array[u8, { TABLE[N].len() }] = todo!()\n",
+        "fn bytes() -> [u8; (TABLE)[N].len()] = todo!()\nfn array() -> Array[u8, { size_of[T]() }] = todo!()\n",
     );
-    assert!(output.contains("fn bytes() -> [u8; TABLE[N].len()]"));
-    assert!(output.contains("fn array() -> Array<u8, { TABLE[N].len() }>") );
+    assert!(output.contains("fn bytes() -> [u8; (TABLE)[N].len()]"), "{output}");
+    assert!(output.contains("fn array() -> Array<u8, { size_of::<T>() }>"), "{output}");
     assert!(!output.contains("TABLE<N>"));
     assert!(!output.contains("TABLE::"));
 }
@@ -69,12 +77,18 @@ fn type_lowering_reenters_expression_context_for_consts() {
 #[test]
 fn rust_conversion_preserves_paths_and_marks_generic_application() {
     let output = rust_to_rusk(
-        "fn id<T>(x: Vec<T>) -> Option<T> {\n    std::mem::drop(x);\n    None\n}\n\nfn parse(value: &str) {\n    let _ = value.parse::<i32>();\n}\n",
+        "fn id<T>(x: Vec<T>) -> Option<T> {\n    std::mem::drop(x);\n    None\n}\n\nfn parse(value: &str) {\n    let _ = value.parse::<i32>();\n    let _ = std::mem::size_of::<Vec<u8>>();\n    let _ = Vec::<String>::new();\n    let _ = serde_json::from_str::<Config>(value);\n    let _ = [\"1\"].map(str::parse::<Vec<i32>>);\n    let _ = TABLE[0].len();\n    let _ = crate::config::TABLE[0].len();\n}\n",
     )
     .unwrap();
-    assert!(output.contains("fn id[T](x: Vec[T]) -> Option[T]:"));
-    assert!(output.contains("std::mem::drop(x)"));
-    assert!(output.contains("value.parse[i32]()"));
+    assert!(output.contains("fn id[T](x: Vec[T]) -> Option[T]:"), "{output}");
+    assert!(output.contains("std::mem::drop(x)"), "{output}");
+    assert!(output.contains("value.parse[i32]()"), "{output}");
+    assert!(output.contains("std::mem::size_of[Vec[u8]]()"), "{output}");
+    assert!(output.contains("Vec[String]::new()"), "{output}");
+    assert!(output.contains("serde_json::from_str[Config](value)"), "{output}");
+    assert!(output.contains("str::parse::<Vec<i32>>"), "{output}");
+    assert!(output.contains("(TABLE)[0].len()"), "{output}");
+    assert!(output.contains("(crate::config::TABLE)[0].len()"), "{output}");
 }
 
 #[test]
@@ -122,7 +136,7 @@ fn inline_if_lowers_after_bindings_and_returns() {
 #[test]
 fn unicode_identifiers_lower_like_ascii_ones() {
     let output = rust(
-        "pub struct 상자[T]:\n    값: T\n\nfn 변환[T](값: T) -> T = 값\n\nfn demo() -> 상자[i32]:\n    let 수 = 변환.[i32](1)\n    상자 { 값: 수 }\n",
+        "pub struct 상자[T]:\n    값: T\n\nfn 변환[T](값: T) -> T = 값\n\nfn demo() -> 상자[i32]:\n    let 수 = 변환[i32](1)\n    상자 { 값: 수 }\n",
     );
     assert!(output.contains("pub struct 상자<T> {"), "{output}");
     assert!(output.contains("fn 변환<T>(값: T) -> T {"), "{output}");
@@ -133,12 +147,12 @@ fn unicode_identifiers_lower_like_ascii_ones() {
 #[test]
 fn method_brackets_before_a_call_are_generic_application() {
     let output = rust(
-        "fn demo(iter: I, raw: &str, h: H, xs: X, i: usize, pair: P, 목록: L):\n    let a = iter.collect[Vec[i32]]()\n    let b = raw.parse[i32]()\n    let c = (h.handlers[i])()\n    let d = xs[i]()\n    let e = h.handlers[i]\n    let f = 목록.변환[Vec[문자열]]()\n    let g = pair.0[i]()\n    let h = iter.map[u8, _](f).sum[u8]()\n",
+        "fn demo(iter: I, raw: &str, h: H, xs: X, i: usize, pair: P, 목록: L):\n    let a = iter.collect[Vec[i32]]()\n    let b = raw.parse[i32]()\n    let c = (h.handlers[i])()\n    let d = (xs[i])()\n    let e = h.handlers[i]\n    let f = 목록.변환[Vec[문자열]]()\n    let g = pair.0[i]()\n    let h = iter.map[u8, _](f).sum[u8]()\n",
     );
     assert!(output.contains("let a = iter.collect::<Vec<i32>>();"), "{output}");
     assert!(output.contains("let b = raw.parse::<i32>();"), "{output}");
     assert!(output.contains("let c = (h.handlers[i])();"), "{output}");
-    assert!(output.contains("let d = xs[i]();"), "{output}");
+    assert!(output.contains("let d = (xs[i])();"), "{output}");
     assert!(output.contains("let e = h.handlers[i];"), "{output}");
     assert!(output.contains("let f = 목록.변환::<Vec<문자열>>();"), "{output}");
     assert!(output.contains("let g = pair.0[i]();"), "{output}");
@@ -148,12 +162,14 @@ fn method_brackets_before_a_call_are_generic_application() {
 #[test]
 fn rust_conversion_parenthesizes_index_then_call() {
     let output = rust_to_rusk(
-        "fn run(h: &H, i: usize, v: Vec<u8>) -> u8 {\n    (h.handlers[i])();\n    h.handlers[i]();\n    self.table.rows[i][0](i);\n    v.iter().sum::<u8>()\n}\n",
+        "fn run(h: &H, i: usize, v: Vec<u8>) -> u8 {\n    (h.handlers[i])();\n    h.handlers[i]();\n    handlers[i](i);\n    HANDLERS[i](i);\n    self.table.rows[i][0](i);\n    v.iter().sum::<u8>()\n}\n",
     )
     .unwrap();
     assert!(!output.contains("((h.handlers[i]))()"), "{output}");
     assert_eq!(output.matches("(h.handlers[i])()").count(), 2, "{output}");
-    assert!(output.contains("(self.table.rows[i][0])(i)"), "{output}");
+    assert!(output.contains("(handlers[i])(i)"), "{output}");
+    assert!(output.contains("(HANDLERS[i])(i)"), "{output}");
+    assert!(output.contains("self.table.rows[i][0](i)"), "{output}");
     assert!(output.contains("v.iter().sum[u8]()"), "{output}");
 }
 

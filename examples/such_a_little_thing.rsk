@@ -9,7 +9,7 @@ pub fn powers() -> Vec[i32] = [1, 2, 3, 4]
         // The last expression has no semicolon and becomes the closure value.
         power
     })
-    .collect.[Vec[i32]]()
+    .collect[Vec[i32]]()
 
 // A for loop can return from the surrounding function, like the Rust example.
 pub fn find_even_with_return(values: &[i32]) -> Option[i32]:
@@ -39,7 +39,7 @@ pub fn discarded_units(values: &[i32]) -> Vec[()] = values
         // This semicolon matters: without it, the closure would yield i32.
         bump(*value);
     })
-    .collect.[Vec[()]]()
+    .collect[Vec[()]]()
 
 pub fn main():
     println!("{powers():?}")

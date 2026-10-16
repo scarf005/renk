@@ -762,8 +762,8 @@ fn lower_rust_syntax(text: &str) -> String {
     replace_angle_generics_with_square(&text)
 }
 
-/// Rust `NAME.field` is always a value access, while Rusk reads an uppercase dotted head as a
-/// path; parenthesize such receivers so the conversion does not depend on that heuristic.
+/// Rust `NAME.field` and `NAME[i].field` are value accesses, while Rusk reads an uppercase head
+/// as a path; parenthesize such receivers so the conversion does not depend on that heuristic.
 fn parenthesize_value_receivers(text: &str) -> String {
     let chars = text.chars().collect::<Vec<_>>();
     let mut output = String::new();
@@ -781,13 +781,28 @@ fn parenthesize_value_receivers(text: &str) -> String {
             index += 1;
             continue;
         }
-        let end = read_ident(&chars, index);
+        // Read the whole `a::b::C` path so `a::TABLE[i].x` is wrapped as `(a::TABLE)[i].x`.
+        let mut end = read_ident(&chars, index);
+        let mut last = index;
+        while chars[end..].starts_with(&[':', ':'])
+            && chars.get(end + 2).copied().is_some_and(is_ident_start)
+        {
+            last = end + 2;
+            end = read_ident(&chars, last);
+        }
         let continues_path = index > 0 && matches!(chars[index - 1], '.' | ':');
         let head = chars[index..end].iter().collect::<String>();
+        let member = |at: usize| {
+            chars.get(at) == Some(&'.') && chars.get(at + 1).copied().is_some_and(is_ident_start)
+        };
+        let indexed_member = chars.get(end) == Some(&'[')
+            && chars[last].is_uppercase()
+            && matching_bracket(&chars, end, '[', ']').is_some_and(|close| member(close + 1));
         if !continues_path
-            && chars.get(end) == Some(&'.')
-            && chars.get(end + 1).copied().is_some_and(is_ident_start)
-            && should_convert_path(std::slice::from_ref(&head), PathMode::Expr, None)
+            && (indexed_member
+                || last == index
+                    && member(end)
+                    && should_convert_path(std::slice::from_ref(&head), PathMode::Expr, None))
         {
             output.push_str(&format!("({head})"));
         } else {
@@ -798,9 +813,8 @@ fn parenthesize_value_receivers(text: &str) -> String {
     output
 }
 
-/// Rust `x.field[i](` indexes a field and calls the result, while Rusk reads `.field[...](` as
-/// generic application; parenthesize the indexed receiver as `(x.field[i])(` or
-/// `(make!(x).field[i])(`.
+/// Rust `xs[i](` indexes and calls the result, while Rusk reads `name[...](` as a generic call;
+/// parenthesize the indexed receiver as `(xs[i])(` or `(make!(x).field[i])(`.
 fn parenthesize_index_calls(text: &str) -> String {
     let chars = text.chars().collect::<Vec<_>>();
     // Start of the postfix expression being read, one entry per open delimiter.
@@ -816,28 +830,23 @@ fn parenthesize_index_calls(text: &str) -> String {
             continue;
         }
         let character = chars[index];
-        let name_end = read_ident(&chars, index + 1);
-        if character == '.'
-            && (index == 0 || chars[index - 1] != '.')
-            && chars.get(index + 1).copied().is_some_and(is_ident_start)
-            && chars.get(name_end) == Some(&'[')
-        {
-            let mut close = name_end;
-            while chars.get(close) == Some(&'[')
-                && let Some(end) = matching_bracket(&chars, close, '[', ']')
+        if is_ident_start(character) && (index == 0 || !is_ident_continue(chars[index - 1])) {
+            let name_end = read_ident(&chars, index);
+            if chars.get(name_end) == Some(&'[')
+                && let Some(close) = matching_bracket(&chars, name_end, '[', ']')
+                && chars.get(close + 1) == Some(&'(')
             {
-                close = end + 1;
-            }
-            if close > name_end && chars.get(close) == Some(&'(') {
                 // A line starting with `.method` continues a receiver on an earlier line.
                 let start = *starts.last().expect("outermost level");
-                if start < index && chars[start] != '.' {
+                if chars[start] != '.' {
                     opens[start] += 1;
-                    closes[close] += 1;
+                    closes[close + 1] += 1;
                 }
-                index = close;
-                continue;
+                index = close + 1;
+            } else {
+                index = name_end;
             }
+            continue;
         }
         match character {
             '(' | '[' | '{' => starts.push(index + 1),
@@ -894,21 +903,26 @@ fn replace_rust_turbofish(text: &str) -> String {
             && chars[index + 2] == '<'
             && let Some(close) = matching_bracket(&chars, index + 2, '<', '>')
         {
-            // A method turbofish `.name::<T>(` becomes `.name[T](`; other paths keep `.[T]`.
+            // `name::<T>(` and `Name::<T>::` become `[T]`; other turbofish stays Rust syntax.
             let name_start = (0..index)
                 .rev()
                 .take_while(|at| is_ident_continue(chars[*at]))
                 .last()
                 .unwrap_or(index);
-            let method_call = name_start < index
-                && name_start > 0
-                && chars[name_start - 1] == '.'
-                && chars.get(close + 1) == Some(&'(');
-            output.push_str(if method_call { "[" } else { ".[" });
-            output.push_str(&replace_angle_generics_with_square(
-                &chars[index + 3..close].iter().collect::<String>(),
-            ));
-            output.push(']');
+            let call = name_start < index && chars.get(close + 1) == Some(&'(');
+            let path = name_start < index
+                && chars[name_start].is_uppercase()
+                && (name_start == 0 || chars[name_start - 1] != '.')
+                && chars[close + 1..].starts_with(&[':', ':']);
+            if call || path {
+                output.push('[');
+                output.push_str(&replace_angle_generics_with_square(
+                    &chars[index + 3..close].iter().collect::<String>(),
+                ));
+                output.push(']');
+            } else {
+                output.extend(chars[index..=close].iter());
+            }
             index = close + 1;
             continue;
         }
@@ -928,6 +942,13 @@ fn replace_angle_generics_with_square(text: &str) -> String {
         {
             output.extend(chars[index..=end].iter());
             index = end + 1;
+            continue;
+        }
+        if chars[index..].starts_with(&[':', ':', '<'])
+            && let Some(close) = matching_bracket(&chars, index + 2, '<', '>')
+        {
+            output.extend(chars[index..=close].iter());
+            index = close + 1;
             continue;
         }
         if chars[index] == '<'
@@ -3002,46 +3023,43 @@ fn replace_square_generics(text: &str, mode: GenericMode) -> String {
         let in_type_const_expr = mode == GenericMode::Type
             && (curly_depth > 0 || square_const.last().copied().unwrap_or(false));
 
-        // `.name[...](` is generic application; `(x.name[i])(` forces index-then-call.
-        let name_end = read_ident(&chars, index + 1);
+        // `name[...](` is a generic call and an uppercase `Name[...]` before `::` or `.name` is a
+        // generic path; `(xs[i])(` and `(NAME)[i].name` force indexing.
         if (mode == GenericMode::Expr || in_type_const_expr)
-            && chars[index] == '.'
-            && (index == 0 || chars[index - 1] != '.')
-            && chars.get(index + 1).copied().is_some_and(is_ident_start)
-            && chars.get(name_end) == Some(&'[')
-            && let Some(close) = matching_bracket(&chars, name_end, '[', ']')
-            && chars.get(close + 1) == Some(&'(')
+            && is_ident_start(chars[index])
+            && (index == 0 || !is_ident_continue(chars[index - 1]))
         {
-            let content: String = chars[name_end + 1..close].iter().collect();
-            output.extend(chars[index..name_end].iter());
-            output.push_str("::<");
-            output.push_str(&lower_generic_content(&content));
-            output.push('>');
-            index = close + 1;
-            continue;
-        }
-
-        if chars[index] == '.'
-            && chars.get(index + 1) == Some(&'[')
-            && has_generic_base_before(&chars, index)
-            && let Some(close) = matching_bracket(&chars, index + 1, '[', ']')
-        {
-            let content: String = chars[index + 2..close].iter().collect();
-            let inner = lower_generic_content(&content);
-            if mode == GenericMode::Expr || in_type_const_expr {
-                output.push_str("::<");
-            } else {
-                output.push('<');
+            let name_end = read_ident(&chars, index);
+            if chars.get(name_end) == Some(&'[')
+                && let Some(close) = matching_bracket(&chars, name_end, '[', ']')
+            {
+                let after = &chars[close + 1..];
+                let path_head =
+                    chars[index].is_uppercase() && (index == 0 || chars[index - 1] != '.');
+                let dot_path = path_head
+                    && after.first() == Some(&'.')
+                    && after.get(1).copied().is_some_and(is_ident_start);
+                let colon_path = path_head && after.starts_with(&[':', ':']);
+                if after.first() == Some(&'(') || dot_path || colon_path {
+                    let content: String = chars[name_end + 1..close].iter().collect();
+                    output.extend(chars[index..name_end].iter());
+                    output.push_str("::<");
+                    output.push_str(&lower_generic_content(&content));
+                    output.push('>');
+                    if dot_path {
+                        output.push_str("::");
+                    }
+                    index = close + 1 + usize::from(dot_path);
+                    continue;
+                }
             }
-            output.push_str(&inner);
-            output.push('>');
-            index = close + 1;
+            output.extend(chars[index..name_end].iter());
+            index = name_end;
             continue;
         }
 
-        // Keep the old square form in type-only positions for source compatibility.
-        // Once a type grammar enters a const expression, plain `[...]` is indexing
-        // again and only explicit `.[...]` can denote generic application.
+        // Type-only positions read `Name[T]` as generics. Once a type grammar enters a const
+        // expression, the expression rules above apply again.
         if mode == GenericMode::Type
             && !in_type_const_expr
             && chars[index] == '['
@@ -3360,12 +3378,6 @@ fn has_ident_before(chars: &[char], index: usize) -> bool {
             || chars[index - 1] == '>')
 }
 
-fn has_generic_base_before(chars: &[char], dot_index: usize) -> bool {
-    dot_index > 0
-        && (is_ident_continue(chars[dot_index - 1])
-            || matches!(chars[dot_index - 1], ']' | '>' | ')'))
-}
-
 fn type_like_generic(content: &str) -> bool {
     let trimmed = content.trim();
     !trimmed.is_empty()
@@ -3557,7 +3569,7 @@ fn are_continuations(nodes: &[Node]) -> bool {
 
 fn is_expression_continuation(text: &str) -> bool {
     [
-        ".[", ".", "::", "(", "[", "?", "+", "-", "*", "/", "%", "&&", "||", "&",
+        ".", "::", "(", "[", "?", "+", "-", "*", "/", "%", "&&", "||", "&",
         "|", "^", "<<", ">>", "==", "!=", "<=", ">=", "<", ">",
     ]
     .iter()
@@ -3708,7 +3720,7 @@ impl User {
     fn lowers_explicit_semicolons_and_match_arms() {
         let source = r#"
 fn parse(line: &str) -> Result[i32, String]:
-    match line.parse.[i32]():
+    match line.parse[i32]():
         Ok(value):
             println!("{}", value);
             Ok(value)
@@ -3889,7 +3901,7 @@ fn discarded_units(values: &[i32]) -> Vec[()] = values
     .map(|value| {
         bump(*value);
     })
-    .collect.[Vec[()]]()
+    .collect[Vec[()]]()
 "#;
 
         assert_eq!(
@@ -3950,7 +3962,7 @@ pub fn normalized_names(lines: Vec[String]) -> Vec[String] = lines
         let trimmed = line.trim()
         if trimmed.is_empty() then None else Some(trimmed.to_ascii_lowercase())
     })
-    .collect.[Vec[String]]()
+    .collect[Vec[String]]()
 "#;
 
         assert_eq!(
@@ -4356,8 +4368,8 @@ pub fn normalized_names(lines: Vec<String>) -> Vec<String> {
 
     #[test]
     fn formats_without_reflowing_line_break_style() {
-        let inline = "pub fn even_squares(values: Vec[i32]) -> Vec[i32]:\n    values.into_iter().filter(|value| value % 2 == 0).map(|value| value * value).collect.[Vec[i32]]()\n";
-        let broken = "pub fn even_squares(values: Vec[i32]) -> Vec[i32] = values\n    .into_iter()\n    .filter(|value| value % 2 == 0)\n    .map(|value| value * value)\n    .collect.[Vec[i32]]()\n";
+        let inline = "pub fn even_squares(values: Vec[i32]) -> Vec[i32]:\n    values.into_iter().filter(|value| value % 2 == 0).map(|value| value * value).collect[Vec[i32]]()\n";
+        let broken = "pub fn even_squares(values: Vec[i32]) -> Vec[i32] = values\n    .into_iter()\n    .filter(|value| value % 2 == 0)\n    .map(|value| value * value)\n    .collect[Vec[i32]]()\n";
 
         assert_eq!(
             format_source(inline, FormatOptions { line_width: 80 }).unwrap(),
