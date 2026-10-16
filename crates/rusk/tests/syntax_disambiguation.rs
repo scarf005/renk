@@ -190,3 +190,16 @@ fn tab_errors_report_the_physical_line() {
     let error = rust_to_rusk("fn f() -> i32 {\n    g(\n        1,\n\t2,\n    )\n}\n").unwrap_err();
     assert_eq!(error.line, 4);
 }
+
+#[test]
+fn rust_conversion_keeps_arrows_inside_generic_arguments() {
+    let output = rust_to_rusk(
+        "pub struct Handlers {\n    pub list: Vec<fn(i32) -> i32>,\n    pub named: HashMap<String, Box<dyn Fn(&str) -> Option<usize>>>,\n}\n",
+    )
+    .unwrap();
+    assert!(output.contains("pub list: Vec[fn(i32) -> i32]\n"), "{output}");
+    assert!(
+        output.contains("pub named: HashMap[String, Box[dyn Fn(&str) -> Option[usize]]]\n"),
+        "{output}"
+    );
+}

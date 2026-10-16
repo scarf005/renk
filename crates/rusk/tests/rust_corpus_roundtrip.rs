@@ -24,9 +24,16 @@ const CORPUS: &[(&str, &str)] = &[
     ),
     ("wrapped_lines", include_str!("rust_corpus/wrapped_lines.rs")),
     ("edge_cases", include_str!("rust_corpus/edge_cases.rs")),
+    ("macro_rules", include_str!("rust_corpus/macro_rules.rs")),
 ];
 
-const RUSK_CORPUS: &[(&str, &str)] = &[("edge_cases", include_str!("rusk_corpus/edge_cases.rsk"))];
+const RUSK_CORPUS: &[(&str, &str)] = &[
+    ("edge_cases", include_str!("rusk_corpus/edge_cases.rsk")),
+    (
+        "trailing_comments",
+        include_str!("rusk_corpus/trailing_comments.rsk"),
+    ),
+];
 
 #[test]
 fn rust_corpus_roundtrips_to_compilable_rust() {

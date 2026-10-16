@@ -1,0 +1,9 @@
+// leading comment
+pub fn trailing_comments(xs: Vec[i32]) -> i32: // signature comment
+    let first = xs[0] // first value
+    let total = xs.iter().sum[i32]() // sum
+    let label = "a // b" // string with slashes
+    if first > 0: // positive
+        return total // early
+    println!("{label}") // print
+    total + first // tail
