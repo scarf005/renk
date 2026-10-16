@@ -27,3 +27,12 @@ pub fn macro_receiver_index_call(t: Table) -> i32 {
     let a = vec![t].remove(0).fs[0](1);
     a
 }
+
+pub fn multiline_literals() -> usize {
+    let text = "tail  
+semicolon; // not a comment
+  indented";
+    let raw = r#"quote " and {  
+"#;
+    text.len() + raw.len()
+}

@@ -584,6 +584,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "libc",
+ "proc-macro2",
  "serde",
  "serde_json",
  "tokio",

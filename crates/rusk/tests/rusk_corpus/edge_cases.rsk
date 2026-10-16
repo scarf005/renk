@@ -57,3 +57,11 @@ pub fn brace_else_chain(a: bool, b: bool) -> i32:
     } else {
         v.len() as i32
     }
+
+pub fn multiline_literals() -> usize:
+    let text = "tail  
+semicolon; // not a comment
+  indented"
+    let raw = r#"quote " and {  
+"#
+    text.len() + raw.len()

@@ -5,6 +5,7 @@ use std::{
     process::{Command, Stdio},
 };
 
+use proc_macro2::{TokenStream, TokenTree};
 use rusk::{SourceSyntax, ruk_to_rust, rust_to_ruk, rust_to_rusk, to_rust};
 
 const CORPUS: &[(&str, &str)] = &[
@@ -51,6 +52,7 @@ fn rust_corpus_roundtrips_to_compilable_rust() {
             panic!("failed to convert corpus case {name} back to Rust: {error}\nRusk:\n{rusk}")
         });
         compile_rust(&out_dir, name, "roundtrip", &roundtripped);
+        assert_eq!(multiline_literals(&roundtripped), multiline_literals(rust), "{name}");
 
         let second_rusk = rust_to_rusk(&roundtripped).unwrap_or_else(|error| {
             panic!("failed to convert roundtripped corpus case {name} to Rusk: {error}")
@@ -67,6 +69,7 @@ fn rust_corpus_roundtrips_to_compilable_rust() {
             panic!("failed to convert corpus case {name} back from Ruk: {error}\nRuk:\n{ruk}")
         });
         compile_rust(&out_dir, name, "ruk-roundtrip", &ruk_rust);
+        assert_eq!(multiline_literals(&ruk_rust), multiline_literals(rust), "{name} via Ruk");
     }
 
     let _ = fs::remove_dir_all(out_dir);
@@ -83,6 +86,9 @@ fn rusk_corpus_transpiles_to_compilable_rust() {
             panic!("failed to convert Rusk corpus case {name} to Rust: {error}")
         });
         compile_rust(&out_dir, name, "rusk", &rust);
+        for literal in multiline_literals(&rust) {
+            assert!(rusk.contains(&literal), "{name} changed {literal}");
+        }
         let second_rusk = rust_to_rusk(&rustfmt(&rust)).unwrap_or_else(|error| {
             panic!("failed to convert Rusk corpus case {name} back to Rusk: {error}")
         });
@@ -90,9 +96,32 @@ fn rusk_corpus_transpiles_to_compilable_rust() {
             panic!("failed second Rust conversion for Rusk corpus case {name}: {error}\nRusk:\n{second_rusk}")
         });
         compile_rust(&out_dir, name, "rusk-roundtrip", &roundtripped);
+        assert_eq!(multiline_literals(&roundtripped), multiline_literals(&rust), "{name}");
     }
 
     let _ = fs::remove_dir_all(out_dir);
+}
+
+/// Multi-line string literals, which every conversion must keep byte for byte.
+fn multiline_literals(source: &str) -> Vec<String> {
+    fn collect(tokens: TokenStream, literals: &mut Vec<String>) {
+        for token in tokens {
+            match token {
+                TokenTree::Group(group) => collect(group.stream(), literals),
+                TokenTree::Literal(literal) => {
+                    let text = literal.to_string();
+                    if text.contains('\n') {
+                        literals.push(text);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut literals = Vec::new();
+    collect(source.parse().unwrap(), &mut literals);
+    literals.sort();
+    literals
 }
 
 fn compile_rust(out_dir: &Path, name: &str, phase: &str, source: &str) {
