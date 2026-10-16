@@ -1,6 +1,6 @@
 use std.collections.HashMap
 use std.sync.LazyLock
-use std::{fmt, fs}
+use std.{fmt, fs}
 
 static WORDS: LazyLock[Vec[String]] = LazyLock.new(|| Vec.from([String.from("a::b;")]))
 
