@@ -80,7 +80,7 @@ just web # open web editor
 - `match` at the end of a larger expression, e.g. `let x = match y:` or `.filter(|v| match v:`, and `else` branches after `let ... = if c {` or `let pattern = value` (`let ... else`)
 - dotted path lowering for obvious item paths, e.g. `std.io.Read` -> `std::io::Read`, `Foo.new()` -> `Foo::new()`
 - escape hatches: Rust `::` / `::<...>` force path/generic syntax, while parentheses force a value receiver, e.g. `(TEXT).len()`
-- macro definitions with indentation-based `macro_rules!` arms; macro patterns, bodies, and arbitrary macro invocation token trees use Rust syntax unchanged (`println!` / `format!` keep their existing inline-format-expression sugar)
+- macro definitions with indentation-based `macro_rules!` arms; macro patterns, bodies, and arbitrary macro invocation token trees use Rust syntax unchanged, and a multi-line `pattern =>:` arm keeps every indented body line, including closing delimiters (`println!` / `format!` keep their existing inline-format-expression sugar)
 - source formatter that preserves existing line break style; only line width is configurable
 - hierarchical JSON source map generation
 - Rust-to-Rusk, Rust-to-Ruk, Ruk-to-Rust, Ruk-to-Rusk, and Rusk-to-Ruk conversion

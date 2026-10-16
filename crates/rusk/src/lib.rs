@@ -114,6 +114,8 @@ struct SourceLine {
     line: usize,
     indent: usize,
     text: String,
+    /// A line of a multi-line `macro_rules!` arm body, kept as Rust tokens.
+    raw: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -479,6 +481,10 @@ fn brace_depth_after_line(depth: usize, text: &str) -> usize {
         .saturating_sub(count_unquoted(text, '}'))
 }
 
+fn macro_depth_after_line(depth: usize, text: &str) -> usize {
+    brace_depth_after_line(delimiter_depth_after_line(depth, text), text)
+}
+
 fn count_unquoted(text: &str, needle: char) -> usize {
     let mut count = 0usize;
     let mut in_string = false;
@@ -568,6 +574,7 @@ fn looks_like_trait_item_without_body(text: &str) -> bool {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RustBlockKind {
     Item,
+    Macro,
     Function,
     StructLike,
     Enum,
@@ -584,11 +591,30 @@ struct RustBlock {
 pub fn rust_to_rusk(source: &str) -> Result<String, TranspileError> {
     let mut output = Vec::new();
     let mut stack = Vec::<RustBlock>::new();
+    // Delimiter depth inside a multi-line `macro_rules!` arm body, whose lines stay Rust tokens.
+    let mut arm_depth = None;
 
     let mut raw_lines = source.lines().enumerate().peekable();
     while let Some((index, raw)) = raw_lines.next() {
         reject_tabs(raw, index + 1)?;
         let raw = raw.trim_end();
+        if let Some(depth) = arm_depth {
+            let depth = macro_depth_after_line(depth, raw);
+            if depth > 0 {
+                output.push(raw.to_string());
+                arm_depth = Some(depth);
+            } else {
+                // The arm's closing line, such as `};` or `}};`; anything before its last
+                // delimiter still belongs to the body.
+                let close = raw.trim_end_matches([';', ',']);
+                let rest = close[..close.len() - 1].trim();
+                if !rest.is_empty() {
+                    output.push(format!("{}{rest}", spaces(raw_indent(raw) + 4)));
+                }
+                arm_depth = None;
+            }
+            continue;
+        }
         let mut text = raw.trim_start();
         if text == GENERATED_HEADER.trim_end() {
             continue;
@@ -616,6 +642,22 @@ pub fn rust_to_rusk(source: &str) -> Result<String, TranspileError> {
         }
 
         let indent = spaces(raw_indent(raw));
+        if stack.last().is_some_and(|block| block.kind == RustBlockKind::Macro) {
+            // Macro arms keep Rust tokens; a multi-line arm becomes `pattern =>:` and its body.
+            let arm = text.trim_end_matches(';');
+            match split_arrow(arm) {
+                Some((pattern, body)) if macro_depth_after_line(0, body) > 0 => {
+                    output.push(format!("{indent}{} =>:", pattern.trim_end()));
+                    let inner = body.trim()[1..].trim();
+                    if !inner.is_empty() {
+                        output.push(format!("{indent}    {inner}"));
+                    }
+                    arm_depth = Some(macro_depth_after_line(0, body));
+                }
+                _ => output.push(format!("{indent}{arm}")),
+            }
+            continue;
+        }
         let mut text = text.to_string();
         let mut group = None;
         while joins_next_line(
@@ -735,7 +777,9 @@ fn classify_rust_block_header(header: &str, parent: Option<RustBlockKind>) -> Ru
         RustBlockKind::StructLike
     } else if is_function(header) {
         RustBlockKind::Function
-    } else if is_trait_item(header) || is_rust_impl_or_mod_item(header) || is_macro_item(header) {
+    } else if is_macro_item(header) {
+        RustBlockKind::Macro
+    } else if is_trait_item(header) || is_rust_impl_or_mod_item(header) {
         RustBlockKind::Item
     } else if is_control(header) || header == "else" || header.starts_with("else ") {
         RustBlockKind::Item
@@ -1091,14 +1135,32 @@ fn reject_tabs(raw: &str, line: usize) -> Result<(), TranspileError> {
 fn source_lines(source: &str) -> Result<Vec<SourceLine>, TranspileError> {
     let mut lines = Vec::new();
     let mut raw_lines = source.lines().enumerate().peekable();
+    // Indents of the enclosing `macro_rules!` item and of the multi-line arm being read.
+    let mut macro_indent = None;
+    let mut arm_indent = None;
     while let Some((index, raw)) = raw_lines.next() {
         let line = index + 1;
         let without_comment = raw.trim_end();
         let trimmed = without_comment.trim();
+        let indent = raw_indent(without_comment);
+        if !trimmed.is_empty() && arm_indent.is_some_and(|arm| indent > arm) {
+            reject_tabs(raw, line)?;
+            lines.push(SourceLine {
+                line,
+                indent,
+                text: trimmed.to_string(),
+                raw: true,
+            });
+            continue;
+        }
         if trimmed.is_empty()
             || (is_closing_delimiter_line(trimmed) && closing_tail(trimmed).is_none())
         {
             continue;
+        }
+        arm_indent = None;
+        if macro_indent.is_some_and(|item| indent <= item) {
+            macro_indent = None;
         }
         reject_tabs(raw, line)?;
         let mut text = without_comment.trim_start().to_string();
@@ -1114,10 +1176,18 @@ fn source_lines(source: &str) -> Result<Vec<SourceLine>, TranspileError> {
             text.push('\n');
             text.push_str(next.trim_end());
         }
+        if is_macro_item(&text) {
+            macro_indent = Some(indent);
+        } else if macro_indent.is_some()
+            && split_arrow(strip_block_marker(&text).0).is_some_and(|(_, body)| body.trim().is_empty())
+        {
+            arm_indent = Some(indent);
+        }
         lines.push(SourceLine {
             line,
-            indent: raw_indent(without_comment),
+            indent,
             text,
+            raw: false,
         });
     }
     Ok(lines)
@@ -1351,6 +1421,7 @@ fn parse_nodes(
         let mut closing = None;
         if let Some(next) = lines.get(index)
             && next.indent == indent
+            && !next.raw
             && let Some(tail) = closing_tail(&next.text)
         {
             if !accepts_closing_line(&line.text, &nodes) {
@@ -1572,8 +1643,8 @@ fn validate_macro_arm(node: &Node) -> Result<(), TranspileError> {
     let (text, _) = strip_block_marker(node.text.trim());
     if let Some((_, expr)) = split_arrow(text) {
         if expr.trim().is_empty() {
-            require_block_opener(node)?;
-            validate_nodes(&node.children, Context::Block)
+            // The body is Rust tokens, emitted line by line.
+            require_block_opener(node)
         } else if node.children.is_empty() {
             Ok(())
         } else {
