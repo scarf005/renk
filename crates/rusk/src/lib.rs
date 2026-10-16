@@ -2057,10 +2057,10 @@ fn emit_braced_item_statement(
 
 fn emit_function(node: &Node, emitter: &mut Emitter) {
     let text = node.text.trim();
-    let (text, _) = strip_block_marker(text);
+    let (text, has_block) = strip_block_marker(text);
     let indent = spaces(node.indent);
     let Some((signature, body)) = split_once_top_level(text, '=') else {
-        if node.children.is_empty() {
+        if node.children.is_empty() && !has_block {
             emitter.push(node, format!("{}{}", indent, lower_signature(text)));
         } else {
             let signature = strip_open_brace(text.trim());

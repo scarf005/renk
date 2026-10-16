@@ -65,3 +65,5 @@ semicolon; // not a comment
     let raw = r#"quote " and {  
 "#
     text.len() + raw.len()
+
+pub fn empty_body():
