@@ -17,6 +17,7 @@ const CORPUS: &[(&str, &str)] = &[
         "macros_closures",
         include_str!("rust_corpus/macros_closures.rs"),
     ),
+    ("wrapped_lines", include_str!("rust_corpus/wrapped_lines.rs")),
 ];
 
 #[test]

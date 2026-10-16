@@ -122,6 +122,8 @@ struct Node {
     indent: usize,
     text: String,
     children: Vec<Node>,
+    /// Source closing line of a `{` head after its `}`, such as `)?` in `})?`.
+    closing: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -583,15 +585,9 @@ pub fn rust_to_rusk(source: &str) -> Result<String, TranspileError> {
     let mut output = Vec::new();
     let mut stack = Vec::<RustBlock>::new();
 
-    for (index, raw) in source.lines().enumerate() {
-        let line = index + 1;
-        if raw.contains('\t') {
-            return Err(TranspileError {
-                line,
-                message: "tabs are not supported; use spaces".to_string(),
-            });
-        }
-
+    let mut raw_lines = source.lines().enumerate().peekable();
+    while let Some((index, raw)) = raw_lines.next() {
+        reject_tabs(raw, index + 1)?;
         let raw = raw.trim_end();
         let mut text = raw.trim_start();
         if text == GENERATED_HEADER.trim_end() {
@@ -602,6 +598,15 @@ pub fn rust_to_rusk(source: &str) -> Result<String, TranspileError> {
             continue;
         }
 
+        if closing_tail(text).is_some() {
+            stack.pop();
+            output.push(format!(
+                "{}{}",
+                spaces(raw_indent(raw)),
+                lower_rust_syntax(text)
+            ));
+            continue;
+        }
         while let Some(rest) = text.strip_prefix('}') {
             stack.pop();
             text = rest.trim_start_matches(|character| matches!(character, ',' | ';' | ' '));
@@ -611,7 +616,20 @@ pub fn rust_to_rusk(source: &str) -> Result<String, TranspileError> {
         }
 
         let indent = spaces(raw_indent(raw));
-        let converted = convert_rust_statement(text, stack.last().map(|block| block.kind));
+        let mut text = text.to_string();
+        let mut group = None;
+        while joins_next_line(
+            &text,
+            raw_lines.peek().map(|(_, next)| *next),
+            raw_indent(raw),
+            &mut group,
+        ) && let Some((index, next)) = raw_lines.next()
+        {
+            reject_tabs(next, index + 1)?;
+            text.push('\n');
+            text.push_str(next.trim_end());
+        }
+        let converted = convert_rust_statement(&text, stack.last().map(|block| block.kind));
         if converted.text.is_empty() {
             continue;
         }
@@ -709,7 +727,7 @@ fn classify_rust_block_header(header: &str, parent: Option<RustBlockKind>) -> Ru
         RustBlockKind::StructLike
     } else if is_enum_item(header) {
         RustBlockKind::Enum
-    } else if is_match(header) {
+    } else if is_match(header) || is_trailing_match(header) {
         RustBlockKind::Match
     } else if matches!(parent, Some(RustBlockKind::Match)) && header.contains("=>") {
         RustBlockKind::MatchArm
@@ -738,8 +756,45 @@ fn is_raw_rust_block_header(header: &str, kind: RustBlockKind) -> bool {
 }
 
 fn lower_rust_syntax(text: &str) -> String {
-    let text = replace_rust_turbofish(text);
+    let text = parenthesize_value_receivers(text);
+    let text = replace_rust_turbofish(&text);
     replace_angle_generics_with_square(&text)
+}
+
+/// Rust `NAME.field` is always a value access, while Rusk reads an uppercase dotted head as a
+/// path; parenthesize such receivers so the conversion does not depend on that heuristic.
+fn parenthesize_value_receivers(text: &str) -> String {
+    let chars = text.chars().collect::<Vec<_>>();
+    let mut output = String::new();
+    let mut index = 0usize;
+    while index < chars.len() {
+        if let Some(end) =
+            opaque_span_end(&chars, index).or_else(|| macro_invocation_end(&chars, index))
+        {
+            output.extend(chars[index..=end].iter());
+            index = end + 1;
+            continue;
+        }
+        if !is_ident_start(chars[index]) {
+            output.push(chars[index]);
+            index += 1;
+            continue;
+        }
+        let end = read_ident(&chars, index);
+        let continues_path = index > 0 && matches!(chars[index - 1], '.' | ':');
+        let head = chars[index..end].iter().collect::<String>();
+        if !continues_path
+            && chars.get(end) == Some(&'.')
+            && chars.get(end + 1).copied().is_some_and(is_ident_start)
+            && should_convert_path(std::slice::from_ref(&head), PathMode::Expr, None)
+        {
+            output.push_str(&format!("({head})"));
+        } else {
+            output.push_str(&head);
+        }
+        index = end;
+    }
+    output
 }
 
 fn replace_rust_turbofish(text: &str) -> String {
@@ -913,34 +968,227 @@ fn escape_json(text: &str) -> String {
     escaped
 }
 
+fn reject_tabs(raw: &str, line: usize) -> Result<(), TranspileError> {
+    if raw.contains('\t') {
+        return Err(TranspileError {
+            line,
+            message: "tabs are not supported; use spaces".to_string(),
+        });
+    }
+    Ok(())
+}
+
 fn source_lines(source: &str) -> Result<Vec<SourceLine>, TranspileError> {
-    source
-        .lines()
-        .enumerate()
-        .filter_map(|(index, raw)| {
-            let line = index + 1;
-            let without_comment = raw.trim_end();
-            let trimmed = without_comment.trim();
-            if trimmed.is_empty() || is_closing_delimiter_line(trimmed) {
+    let mut lines = Vec::new();
+    let mut raw_lines = source.lines().enumerate().peekable();
+    while let Some((index, raw)) = raw_lines.next() {
+        let line = index + 1;
+        let without_comment = raw.trim_end();
+        let trimmed = without_comment.trim();
+        if trimmed.is_empty()
+            || (is_closing_delimiter_line(trimmed) && closing_tail(trimmed).is_none())
+        {
+            continue;
+        }
+        reject_tabs(raw, line)?;
+        let mut text = without_comment.trim_start().to_string();
+        let mut group = None;
+        while joins_next_line(
+            &text,
+            raw_lines.peek().map(|(_, next)| *next),
+            raw_indent(without_comment),
+            &mut group,
+        ) && let Some((index, next)) = raw_lines.next()
+        {
+            reject_tabs(next, index + 1)?;
+            text.push('\n');
+            text.push_str(next.trim_end());
+        }
+        lines.push(SourceLine {
+            line,
+            indent: raw_indent(without_comment),
+            text,
+        });
+    }
+    Ok(lines)
+}
+
+/// Whether the logical line `text` continues on the `next` physical line: inside a literal or
+/// block comment, after a trailing `=`, or in a group opened by a line ending with `(`/`[` (or a
+/// struct literal or `use` tree `{`). A group lasts until its outer delimiter closes, so blocks
+/// inside it stay Rust syntax, and then extends over following `.method` / `?` lines at the same
+/// `indent`; any other line ending with `{` or `:` owns an indented block.
+fn joins_next_line(
+    text: &str,
+    next: Option<&str>,
+    indent: usize,
+    group: &mut Option<char>,
+) -> bool {
+    let Some(open) = open_delimiters(text) else {
+        return true;
+    };
+    if let Some(outer) = *group {
+        // Once the group's outer delimiter closes, a trailing `{` opens an indented block.
+        return match open.first() {
+            Some(first) => *first == outer,
+            None => next.is_some_and(|next| {
+                let chained = next.trim_start();
+                raw_indent(next) == indent
+                    && (chained.starts_with('?')
+                        || (chained.starts_with('.') && !chained.starts_with("..")))
+            }),
+        };
+    }
+    let code = without_trailing_line_comment(text);
+    if code.trim_end().ends_with(['(', '['])
+        || opens_struct_literal(code)
+        || (open.last() == Some(&'{') && is_use_or_extern_crate(code))
+    {
+        *group = open.first().copied();
+        return true;
+    }
+    let trimmed = code.trim_end();
+    open.is_empty()
+        && trimmed.ends_with('=')
+        && !["==", "!=", "<=", ">="]
+            .iter()
+            .any(|operator| trimmed.ends_with(operator))
+}
+
+/// `text` without a `//` comment that runs to its end.
+fn without_trailing_line_comment(text: &str) -> &str {
+    let chars = text.chars().collect::<Vec<_>>();
+    let mut index = 0usize;
+    while index < chars.len() {
+        if let Some(end) = opaque_span_end(&chars, index) {
+            if chars[index..].starts_with(&['/', '/']) && end + 1 == chars.len() {
+                let at = text.char_indices().nth(index).map_or(text.len(), |(at, _)| at);
+                return &text[..at];
+            }
+            index = end + 1;
+            continue;
+        }
+        index += 1;
+    }
+    text
+}
+
+/// A trailing `{` after an uppercase path opens a struct literal, which stays Rust syntax like a
+/// `(`/`[` group; item, control, and return-type headers own blocks instead.
+fn opens_struct_literal(text: &str) -> bool {
+    let Some(head) = text.trim_end().strip_suffix('{') else {
+        return false;
+    };
+    let head = head.trim_end();
+    let path_start = head
+        .rfind(|character: char| !is_ident_continue(character) && character != ':')
+        .map_or(0, |at| at + 1);
+    let name = head[path_start..].rsplit("::").next().unwrap_or_default();
+    let header = text.lines().next().unwrap_or_default().trim_start();
+    let header = match header.strip_prefix("pub(") {
+        Some(rest) => rest.split_once(") ").map_or(rest, |(_, item)| item),
+        None => header.strip_prefix("pub ").unwrap_or(header),
+    };
+    name.starts_with(|character: char| character.is_ascii_uppercase())
+        && !head[..path_start].trim_end().ends_with("->")
+        && !ends_in_condition(&head[..path_start])
+        && ![
+            "fn ",
+            "impl",
+            "struct ",
+            "enum ",
+            "union ",
+            "trait ",
+            "mod ",
+            "loop",
+            "else",
+            "where",
+            "unsafe ",
+            "async ",
+            "const fn ",
+            "extern ",
+        ]
+        .iter()
+        .any(|keyword| header.starts_with(keyword))
+}
+
+/// Whether `head` ends inside an `if`/`while`/`match`/`for ... in` condition, where Rust reads a
+/// trailing `Path {` as the block rather than a struct literal.
+fn ends_in_condition(head: &str) -> bool {
+    let chars = head.chars().collect::<Vec<_>>();
+    let mut conditions = vec![false];
+    let mut index = 0usize;
+    while index < chars.len() {
+        if let Some(end) = opaque_span_end(&chars, index) {
+            index = end + 1;
+            continue;
+        }
+        let level = conditions.len() - 1;
+        match chars[index] {
+            '(' | '[' | '{' => conditions.push(false),
+            ')' | ']' | '}' if level > 0 => {
+                conditions.pop();
+            }
+            ',' | ';' => conditions[level] = false,
+            '=' if chars.get(index + 1) == Some(&'>') => conditions[level] = false,
+            _ if ["if", "while", "match", "in"]
+                .iter()
+                .any(|keyword| keyword_at(&chars, index, keyword)) =>
+            {
+                conditions[level] = true;
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+    conditions.last() == Some(&true)
+}
+
+/// Unclosed delimiters at the end of `text`, or `None` while a literal or block comment is open.
+fn open_delimiters(text: &str) -> Option<Vec<char>> {
+    let chars = text.chars().collect::<Vec<_>>();
+    let mut open = Vec::new();
+    let mut index = 0usize;
+    while index < chars.len() {
+        if let Some(end) = opaque_span_end(&chars, index) {
+            if !opaque_span_is_closed(&chars, index, end) {
                 return None;
             }
-            if without_comment.contains('\t') {
-                return Some(Err(TranspileError {
-                    line,
-                    message: "tabs are not supported; use spaces".to_string(),
-                }));
+            index = end + 1;
+            continue;
+        }
+        match chars[index] {
+            delimiter @ ('(' | '[' | '{') => open.push(delimiter),
+            ')' | ']' | '}' => {
+                open.pop();
             }
-            let indent = without_comment
-                .chars()
-                .take_while(|character| *character == ' ')
+            _ => {}
+        }
+        index += 1;
+    }
+    Some(open)
+}
+
+fn opaque_span_is_closed(chars: &[char], start: usize, end: usize) -> bool {
+    match (chars[start], chars.get(start + 1)) {
+        ('/', Some('/')) | ('\'', _) | ('b', Some('\'')) => true,
+        ('/', Some('*')) => end >= start + 3 && chars[end - 1..=end] == ['*', '/'],
+        _ => {
+            let quote = (start..=end).find(|&at| chars[at] == '"').unwrap_or(end);
+            let hashes = chars[start..quote]
+                .iter()
+                .filter(|character| **character == '#')
                 .count();
-            Some(Ok(SourceLine {
-                line,
-                indent,
-                text: without_comment.trim_start().to_string(),
-            }))
-        })
-        .collect()
+            let closing = end.saturating_sub(hashes);
+            let escapes = chars[quote + 1..closing.max(quote + 1)]
+                .iter()
+                .rev()
+                .take_while(|character| **character == '\\')
+                .count();
+            let raw = raw_string_span_end(chars, start).is_some();
+            closing > quote && chars[closing] == '"' && (raw || escapes % 2 == 0)
+        }
+    }
 }
 
 fn is_closing_delimiter_line(text: &str) -> bool {
@@ -990,14 +1238,51 @@ fn parse_nodes(
             children = parsed.0;
             index = parsed.1;
         }
+        let mut closing = None;
+        if let Some(next) = lines.get(index)
+            && next.indent == indent
+            && let Some(tail) = closing_tail(&next.text)
+        {
+            if !accepts_closing_line(&line.text, &nodes) {
+                return Err(TranspileError {
+                    line: next.line,
+                    message: "a `}` closing line must follow a line ending with `{`, a trailing `match` head, or the last `else` of a `{` chain".to_string(),
+                });
+            }
+            closing = Some(tail.to_string());
+            index += 1;
+        }
         nodes.push(Node {
             line: line.line,
             indent: line.indent,
             text: line.text.clone(),
             children,
+            closing,
         });
     }
     Ok((nodes, index))
+}
+
+/// Whether a `}` closing line may follow `text`: a `{` head, a trailing `match` head, or the last
+/// `else` branch of a chain whose head (the last non-`else` of `siblings`) ends with `{`.
+fn accepts_closing_line(text: &str, siblings: &[Node]) -> bool {
+    let text = text.trim();
+    text.ends_with('{')
+        || is_trailing_match(strip_block_marker(text).0)
+        || (is_else_branch(text)
+            && siblings
+                .iter()
+                .rev()
+                .find(|node| !is_else_branch(node.text.trim()))
+                .is_some_and(|head| head.text.trim_end().ends_with('{')))
+}
+
+/// The part after `}` of a closing line that continues the expression, such as `)?` in `})?`.
+fn closing_tail(text: &str) -> Option<&str> {
+    let tail = text.trim().strip_prefix('}')?;
+    tail.trim_start_matches([')', ']'])
+        .starts_with(['?', '.'])
+        .then_some(tail)
 }
 
 fn validate_nodes(nodes: &[Node], context: Context) -> Result<(), TranspileError> {
@@ -1044,7 +1329,7 @@ fn validate_general_node(node: &Node) -> Result<(), TranspileError> {
     } else if is_impl_or_mod_item(block_text) {
         require_block_opener(node)?;
         validate_nodes(&node.children, Context::Block)
-    } else if is_match(block_text) {
+    } else if is_match(block_text) || is_trailing_match(block_text) {
         require_block_opener(node)?;
         validate_nodes(&node.children, Context::Match)
     } else if is_control(block_text) {
@@ -1159,6 +1444,8 @@ fn validate_match_arm(node: &Node) -> Result<(), TranspileError> {
             validate_nodes(&node.children, Context::Block)
         } else if node.children.is_empty() {
             Ok(())
+        } else if are_continuations(&node.children) {
+            validate_nodes(&node.children, Context::Block)
         } else {
             Err(TranspileError {
                 line: node.line,
@@ -1206,9 +1493,55 @@ fn reject_children(node: &Node, message: &str) -> Result<(), TranspileError> {
 }
 
 fn emit_nodes(nodes: &[Node], context: Context, emitter: &mut Emitter) {
+    emit_sequence(nodes, context, true, emitter);
+}
+
+/// Emits sibling nodes. An `else` sibling continues the previous braced expression, so the
+/// closing suffix of the chain head (such as `);` in `let x = f(if c {`) moves to the last
+/// branch of the chain.
+fn emit_sequence(nodes: &[Node], context: Context, tail_is_value: bool, emitter: &mut Emitter) {
+    let mut chain: Option<(String, bool)> = None;
     for (index, node) in nodes.iter().enumerate() {
-        emit_node(node, context, index + 1 == nodes.len(), emitter);
+        let is_last = tail_is_value && index + 1 == nodes.len();
+        emit_node(node, context, is_last, emitter);
+        let continues = nodes
+            .get(index + 1)
+            .is_some_and(|next| is_else_branch(next.text.trim()));
+        if !continues && chain.is_none() {
+            continue;
+        }
+        let Some(closing) = emitter.lines.last_mut() else {
+            continue;
+        };
+        // A branch ends with a `}` line, or is a single line such as `else if c then a else b`
+        // or the value of `let pattern = value` before a `let ... else`.
+        let brace = closing
+            .find('}')
+            .filter(|brace| closing[..*brace].trim().is_empty());
+        let end = brace.map_or(closing.trim_end().trim_end_matches(';').len(), |brace| brace + 1);
+        if continues {
+            let suffix = closing.split_off(end);
+            if chain.is_none() {
+                let head = node.text.trim();
+                let (suffix, _) = strip_explicit_semicolon(&suffix);
+                chain = Some((suffix.to_string(), is_let(head) || is_assignment(head)));
+            }
+        } else if let Some((suffix, is_statement)) = chain.take() {
+            let (suffix, has_explicit_semicolon) = match &node.closing {
+                Some(tail) => closing_suffix(tail),
+                None => (suffix, false),
+            };
+            closing.truncate(end);
+            closing.push_str(&suffix);
+            if is_statement || has_explicit_semicolon || !is_last {
+                closing.push(';');
+            }
+        }
     }
+}
+
+fn is_else_branch(text: &str) -> bool {
+    text == "else" || text.starts_with("else:") || text.starts_with("else ")
 }
 
 fn emit_node(node: &Node, context: Context, is_last: bool, emitter: &mut Emitter) {
@@ -1346,6 +1679,25 @@ fn emit_general(node: &Node, context: Context, is_last: bool, emitter: &mut Emit
                 lower_expr(block_text),
                 has_explicit_semicolon,
             );
+        } else if is_trailing_match(block_text) {
+            let indent = spaces(node.indent);
+            emitter.push(node, format!("{}{} {{", indent, lower_expr(block_text)));
+            emit_nodes(&node.children, Context::Match, emitter);
+            let is_statement = is_let(block_text) || is_assignment(block_text);
+            let (closing, closing_semicolon) = node
+                .closing
+                .as_deref()
+                .map_or_else(|| (closing_delimiters(block_text), false), closing_suffix);
+            emitter.push_generated(format!(
+                "{}}}{}{}",
+                indent,
+                closing,
+                if is_statement || has_explicit_semicolon || closing_semicolon || !is_last {
+                    ";"
+                } else {
+                    ""
+                }
+            ));
         } else if is_control(block_text) {
             emit_braced_item_statement(
                 node,
@@ -1382,7 +1734,12 @@ fn emit_braced_item_statement(
     let (header, _) = strip_block_marker(&header);
     let header = strip_open_brace(header);
     if node.children.is_empty() && matches!(child_context, Context::Struct | Context::Enum) {
-        emitter.push(node, format!("{}{};", indent, header));
+        let terminator = if header.ends_with(['}', ';']) {
+            ""
+        } else {
+            ";"
+        };
+        emitter.push(node, format!("{}{}{}", indent, header, terminator));
         return;
     }
     emitter.push(node, format!("{}{} {{", indent, header));
@@ -1441,10 +1798,7 @@ fn emit_function(node: &Node, emitter: &mut Emitter) {
 }
 
 fn emit_function_body(nodes: &[Node], returns_value: bool, emitter: &mut Emitter) {
-    for (index, node) in nodes.iter().enumerate() {
-        let is_tail_value = returns_value && index + 1 == nodes.len();
-        emit_node(node, Context::Block, is_tail_value, emitter);
-    }
+    emit_sequence(nodes, Context::Block, returns_value, emitter);
 }
 
 fn emit_statement(node: &Node, _context: Context, is_last: bool, emitter: &mut Emitter) {
@@ -1468,7 +1822,7 @@ fn emit_statement(node: &Node, _context: Context, is_last: bool, emitter: &mut E
         emit_multiline_closure_assignment(node, lhs.trim(), rhs.trim(), emitter);
     } else if !node.children.is_empty() && is_raw_braced_expr_head(text) {
         emit_raw_braced_expr(node, text, is_last && !has_explicit_semicolon, emitter);
-    } else if is_use_or_extern_crate(text) {
+    } else if is_use_or_extern_crate(text) || starts_item(text, "type") {
         emitter.push(node, format!("{}{};", indent, lower_signature(text)));
     } else if is_let(text) || is_assignment(text) || is_jump_statement(text) {
         emitter.push(node, format!("{}{};", indent, lower_expr(text)));
@@ -1527,12 +1881,26 @@ fn emit_raw_braced_expr(node: &Node, head: &str, is_last: bool, emitter: &mut Em
     let head = strip_open_brace(head);
     emitter.push(node, format!("{}{} {{", indent, lower_expr(head)));
     emit_nodes(&node.children, Context::Block, emitter);
+    let (closing, has_explicit_semicolon) = node
+        .closing
+        .as_deref()
+        .map_or_else(|| (closing_delimiters(head), false), closing_suffix);
     emitter.push_generated(format!(
         "{}}}{}{}",
         indent,
-        closing_delimiters(head),
-        if is_last { "" } else { ";" }
+        closing,
+        if is_last && !has_explicit_semicolon {
+            ""
+        } else {
+            ";"
+        }
     ));
+}
+
+/// The lowered suffix of a `})?` closing line and whether it ends with an explicit `;`.
+fn closing_suffix(tail: &str) -> (String, bool) {
+    let (tail, has_explicit_semicolon) = strip_explicit_semicolon(tail);
+    (lower_expr(tail), has_explicit_semicolon)
 }
 
 fn emit_continuations(
@@ -1558,6 +1926,7 @@ fn offset_node_indent(node: &Node, offset: usize) -> Node {
         line: node.line,
         indent: node.indent + offset,
         text: node.text.clone(),
+        closing: node.closing.clone(),
         children: node
             .children
             .iter()
@@ -1622,6 +1991,15 @@ fn emit_match_arm(node: &Node, emitter: &mut Emitter) {
             emitter.push(node, format!("{}{} => {{", indent, pattern));
             emit_nodes(&node.children, Context::Block, emitter);
             emitter.push_generated(format!("{}}},", indent));
+        } else if !node.children.is_empty() {
+            emitter.push(
+                node,
+                format!("{}{} => {}", indent, pattern, lower_expr(expr)),
+            );
+            emit_continuations(&node.children, 0, true, emitter);
+            if let Some(last) = emitter.lines.last_mut() {
+                last.push(if has_explicit_semicolon { ';' } else { ',' });
+            }
         } else if has_explicit_semicolon {
             emitter.push(node, format!("{}{} => {{", indent, pattern));
             emitter.push_generated(format!("{}{};", spaces(node.indent + 4), lower_expr(expr)));
@@ -1823,19 +2201,21 @@ fn lower_basic_expr(text: &str) -> String {
     output
 }
 
-/// Type positions inside expressions: `let` annotations and closure parameter/return types.
+/// Type positions inside expressions: `let`/`static`/`const` annotations and closure
+/// parameter/return types.
 fn type_annotation_spans(chars: &[char]) -> Vec<(usize, usize)> {
     let mut spans = Vec::new();
     let mut index = 0usize;
-    if chars.starts_with(&['l', 'e', 't', ' ']) {
-        let pattern_end = top_level_position(chars, 4, |at| {
+    let text = chars.iter().collect::<String>();
+    if is_let(&text) || starts_item(&text, "static") || starts_item(&text, "const") {
+        let pattern_end = top_level_position(chars, 1, |at| {
             chars[at] == '='
                 && !matches!(chars.get(at + 1), Some('=' | '>'))
                 && !matches!(chars[at - 1], '=' | '!' | '<' | '>')
         })
         .unwrap_or(chars.len());
         if let Some(colon) =
-            top_level_position(&chars[..pattern_end], 4, |at| is_single_colon(chars, at))
+            top_level_position(&chars[..pattern_end], 0, |at| is_single_colon(chars, at))
         {
             spans.push((colon + 1, pattern_end));
             index = pattern_end;
@@ -2625,7 +3005,10 @@ fn opaque_span_end(chars: &[char], index: usize) -> Option<usize> {
         return None;
     }
     if chars[index] == '/' && chars.get(index + 1) == Some(&'/') {
-        return Some(chars.len().saturating_sub(1));
+        let newline = chars[index..]
+            .iter()
+            .position(|character| *character == '\n');
+        return Some(newline.map_or(chars.len(), |offset| index + offset) - 1);
     }
     if chars[index] == '/' && chars.get(index + 1) == Some(&'*') {
         let mut depth = 1usize;
@@ -2893,6 +3276,22 @@ fn is_match(text: &str) -> bool {
     text.starts_with("match ")
 }
 
+/// A `match` ending a larger expression, such as `let x = match y`, `return match y`, or
+/// `.filter(|x| match y`; it owns match arms and closes the delimiters its head left open.
+fn is_trailing_match(text: &str) -> bool {
+    !is_match(text)
+        && text.match_indices("match ").any(|(at, _)| {
+            let before = text[..at].trim_end();
+            !text[..at].ends_with(is_ident_continue)
+                && (before.ends_with(['=', '(', '|', ',', '>'])
+                    || before
+                        .strip_suffix("return")
+                        .is_some_and(|rest| !rest.ends_with(is_ident_continue)))
+                && !text[at..].contains(['{', '}'])
+                && open_delimiters(&text[at..]).is_some_and(|open| open.is_empty())
+        })
+}
+
 fn is_control(text: &str) -> bool {
     let text = strip_control_label(text);
     (text.starts_with("if ") && !is_inline_if_expression(text))
@@ -3038,16 +3437,19 @@ impl Emitter {
         }
     }
 
+    /// Pushes a possibly multi-line logical line, mapping each physical line to its source line.
     fn push(&mut self, node: &Node, line: String) {
-        self.source_map.push(SourceMapEntry {
-            source_line: node.line,
-            generated_line: self.lines.len() + 1,
-        });
-        self.lines.push(line);
+        for (offset, part) in line.split('\n').enumerate() {
+            self.source_map.push(SourceMapEntry {
+                source_line: node.line + offset,
+                generated_line: self.lines.len() + 1,
+            });
+            self.lines.push(part.to_string());
+        }
     }
 
     fn push_generated(&mut self, line: String) {
-        self.lines.push(line);
+        self.lines.extend(line.split('\n').map(str::to_string));
     }
 }
 

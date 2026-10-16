@@ -108,3 +108,21 @@ fn let_and_closure_annotations_are_type_positions() {
     assert!(output.contains("let first = xs[0];"));
     assert!(output.contains("let mask = xs[0] | xs[1];"));
 }
+
+#[test]
+fn uppercase_operand_before_block_opener_is_not_a_struct_literal() {
+    let output = rust_to_rusk(
+        "fn pick(n: i32) -> i32 {\n    let x = match MODE {\n        1 => 10,\n        _ => 0,\n    };\n    if n > MAX {\n        1\n    } else {\n        x\n    }\n}\n",
+    )
+    .unwrap();
+    assert!(output.contains("    let x = match MODE:\n"), "{output}");
+    assert!(output.contains("    if n > MAX:\n"), "{output}");
+}
+
+#[test]
+fn tab_errors_report_the_physical_line() {
+    let error = transpile("fn f() -> i32:\n    g(\n        1,\n\t2,\n    )\n").unwrap_err();
+    assert_eq!(error.line, 4);
+    let error = rust_to_rusk("fn f() -> i32 {\n    g(\n        1,\n\t2,\n    )\n}\n").unwrap_err();
+    assert_eq!(error.line, 4);
+}

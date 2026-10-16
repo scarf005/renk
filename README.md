@@ -71,6 +71,10 @@ just web # open web editor
 - generic parameter declarations with `[T]`, e.g. `struct Boxed[T]` -> `struct Boxed<T>`
 - explicit generic application with `.[...]`, e.g. `Result.[T, E]` -> `Result<T, E>` and `value.parse.[i32]()` -> `value.parse::<i32>()`
 - expression `[...]` is always indexing, e.g. `values[index]`; it is never inferred as generic application
+- type positions inside statements keep `[T]`: `let`/`static`/`const` annotations and closure parameter/return types, e.g. `let found: Option[i32] = None`
+- multi-line Rust groups: a line ending with `(` or `[`, a struct literal or `use` tree ending with `{`, an unterminated string, or a trailing `=` continues on the next lines until the group closes; group contents stay Rust syntax, and same-indent `.method()` / `?` lines after the group extend it
+- a `})?` / `}).method()` closing line keeps its suffix after a `{` block, a trailing `match` head, or the last `else` of a chain whose head ends with `{`
+- `match` at the end of a larger expression, e.g. `let x = match y:` or `.filter(|v| match v:`, and `else` branches after `let ... = if c {` or `let pattern = value` (`let ... else`)
 - dotted path lowering for obvious item paths, e.g. `std.io.Read` -> `std::io::Read`, `Foo.new()` -> `Foo::new()`
 - escape hatches: Rust `::` / `::<...>` force path/generic syntax, while parentheses force a value receiver, e.g. `(TEXT).len()`
 - macro definitions with indentation-based `macro_rules!` arms; macro patterns, bodies, and arbitrary macro invocation token trees use Rust syntax unchanged (`println!` / `format!` keep their existing inline-format-expression sugar)
