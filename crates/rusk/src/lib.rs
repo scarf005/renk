@@ -1282,8 +1282,9 @@ fn opens_struct_literal(text: &str) -> bool {
     };
     let head = head.trim_end();
     let path_start = head
-        .rfind(|character: char| !is_ident_continue(character) && character != ':')
-        .map_or(0, |at| at + 1);
+        .char_indices()
+        .rfind(|&(_, character)| !is_ident_continue(character) && character != ':')
+        .map_or(0, |(at, character)| at + character.len_utf8());
     let name = head[path_start..].rsplit("::").next().unwrap_or_default();
     let header = text.lines().next().unwrap_or_default().trim_start();
     let header = match header.strip_prefix("pub(") {

@@ -37,3 +37,9 @@ pub fn comments_end_with_openers() -> i32:
 pub fn inline_if_arguments(c: bool) -> i32:
     let y = add(1, if c then 1 else 2)
     add(if c then 1 else 2, y)
+
+pub fn non_ascii_condition(참: bool) -> i32:
+    if 참 {
+        return 1
+    }
+    2
