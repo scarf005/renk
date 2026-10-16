@@ -756,3 +756,223 @@ fn insert_static_header(headers: &mut HeaderMap, name: &'static str, value: &'st
     );
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{body::to_bytes, http::Request};
+    use tower::ServiceExt;
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let path = env::temp_dir().join(format!("rusk-web-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&path);
+        fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    fn state(dist: &Path, run_rate_limit_per_minute: usize) -> AppState {
+        AppState {
+            config: ServerConfig {
+                request_timeout: Duration::from_secs(5),
+                run_timeout: Duration::from_secs(1),
+                max_requests: 8,
+                max_concurrent_runs: 1,
+                run_rate_limit_per_minute,
+            },
+            dist: dist.to_path_buf(),
+            run_deps: dist.join("missing-deps"),
+        }
+    }
+
+    async fn send(app: &Router, request: Request<Body>) -> (StatusCode, HeaderMap, Vec<u8>) {
+        let response = app.clone().oneshot(request).await.unwrap();
+        let status = response.status();
+        let headers = response.headers().clone();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        (status, headers, body.to_vec())
+    }
+
+    fn get(method: Method, path: &str) -> Request<Body> {
+        Request::builder().method(method).uri(path).body(Body::empty()).unwrap()
+    }
+
+    fn run(body: impl Into<Body>) -> Request<Body> {
+        Request::builder()
+            .method(Method::POST)
+            .uri("/api/run")
+            .body(body.into())
+            .unwrap()
+    }
+
+    #[test]
+    fn safe_join_rejects_every_non_normal_component() {
+        let root = Path::new("/srv/dist");
+        assert_eq!(safe_join(root, "assets/app.js"), Some(root.join("assets/app.js")));
+        for relative in ["../etc/passwd", "assets/../../x", "/etc/passwd", "./index.html"] {
+            assert_eq!(safe_join(root, relative), None, "{relative}");
+        }
+        assert_eq!(safe_join(root, "%2e%2e/x"), Some(root.join("%2e%2e/x")));
+    }
+
+    #[test]
+    fn counters_release_permits_on_drop() {
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let first = try_acquire(&COUNTER, 2).unwrap();
+        let second = try_acquire(&COUNTER, 2).unwrap();
+        assert!(try_acquire(&COUNTER, 2).is_none());
+        drop(first);
+        let third = try_acquire(&COUNTER, 2).unwrap();
+        drop((second, third));
+        assert_eq!(COUNTER.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn limited_reads_flag_truncation_exactly_past_the_limit() {
+        let dir = temp_dir("limited");
+        let path = dir.join("out.txt");
+        fs::write(&path, "12345").unwrap();
+        assert_eq!(read_limited_utf8(&path, 5), ("12345".to_string(), false));
+        assert_eq!(read_limited_utf8(&path, 4), ("1234".to_string(), true));
+        fs::write(&path, "é").unwrap();
+        assert_eq!(read_limited_utf8(&path, 1), ("\u{fffd}".to_string(), true));
+        assert_eq!(read_limited_utf8(&dir.join("missing"), 4), (String::new(), false));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn commands_report_status_output_and_spawn_failures() {
+        let dir = temp_dir("command");
+        let result = run_command("sh", &["-c", "echo out; echo err >&2; exit 3"], &dir, Duration::from_secs(5));
+        assert_eq!(result.status, Some(3));
+        assert_eq!((result.stdout.as_str(), result.stderr.as_str()), ("out\n", "err\n"));
+        assert!(!result.timed_out);
+
+        let result = run_command("/nonexistent/rusk-binary", &[], &dir, Duration::from_secs(5));
+        assert_eq!(result.status, None);
+        assert!(!result.stderr.is_empty());
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 0, "output files must be removed");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn commands_are_killed_with_their_process_group_on_timeout() {
+        let dir = temp_dir("timeout");
+        let started = Instant::now();
+        let result = run_command(
+            "sh",
+            &["-c", "sleep 30 & echo $! > child.pid; wait"],
+            &dir,
+            Duration::from_millis(300),
+        );
+        assert!(result.timed_out);
+        assert!(started.elapsed() < Duration::from_secs(5), "{:?}", started.elapsed());
+        let pid = fs::read_to_string(dir.join("child.pid")).unwrap();
+        // SIGKILL is delivered asynchronously; a killed child may linger briefly or as a zombie.
+        let alive = || {
+            fs::read_to_string(format!("/proc/{}/stat", pid.trim()))
+                .is_ok_and(|stat| !stat.contains(") Z "))
+        };
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while alive() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(!alive(), "background child {pid} survived the timeout");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn command_output_is_capped() {
+        let dir = temp_dir("cap");
+        let result = run_command(
+            "sh",
+            &["-c", &format!("head -c {} /dev/zero | tr '\\\\0' x", MAX_OUTPUT_BYTES + 10)],
+            &dir,
+            Duration::from_secs(5),
+        );
+        assert_eq!(result.stdout.len(), MAX_OUTPUT_BYTES);
+        assert!(result.stdout_truncated && !result.stderr_truncated);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn static_files_are_served_inside_dist_only() {
+        let dist = temp_dir("static");
+        fs::write(dist.join("index.html"), "<p>app</p>").unwrap();
+        fs::create_dir_all(dist.join("assets")).unwrap();
+        fs::write(dist.join("assets/app.wasm"), [0, 97, 115, 109]).unwrap();
+        fs::write(dist.parent().unwrap().join("rusk-web-secret.txt"), "secret").unwrap();
+        let app = router(state(&dist, 100));
+
+        let (status, headers, body) = send(&app, get(Method::GET, "/assets/app.wasm")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(headers[CONTENT_TYPE], "application/wasm");
+        assert_eq!(body, [0, 97, 115, 109]);
+
+        let (status, _, body) = send(&app, get(Method::GET, "/examples/hello")).await;
+        assert_eq!((status, body.as_slice()), (StatusCode::OK, b"<p>app</p>".as_slice()));
+
+        let (status, headers, body) = send(&app, get(Method::HEAD, "/")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(headers[CONTENT_LENGTH], "10");
+        assert!(body.is_empty());
+
+        for path in ["/../rusk-web-secret.txt", "/assets/../../rusk-web-secret.txt", "/missing.js"] {
+            let (status, _, body) = send(&app, get(Method::GET, path)).await;
+            assert_eq!(status, StatusCode::NOT_FOUND, "{path}");
+            assert!(!String::from_utf8_lossy(&body).contains("secret"), "{path}");
+        }
+        let (status, _, _) = send(&app, get(Method::DELETE, "/index.html")).await;
+        assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
+        let _ = fs::remove_file(dist.parent().unwrap().join("rusk-web-secret.txt"));
+        let _ = fs::remove_dir_all(dist);
+    }
+
+    #[tokio::test]
+    async fn every_response_carries_the_security_headers() {
+        let dist = temp_dir("headers");
+        let app = router(state(&dist, 100));
+        for request in [get(Method::GET, "/missing"), get(Method::POST, "/index.html")] {
+            let (_, headers, _) = send(&app, request).await;
+            for name in [
+                "content-security-policy",
+                "cross-origin-opener-policy",
+                "strict-transport-security",
+                "x-content-type-options",
+                "x-frame-options",
+            ] {
+                assert!(headers.contains_key(name), "{name}");
+            }
+            assert_eq!(headers[CACHE_CONTROL], "no-store");
+        }
+        let _ = fs::remove_dir_all(dist);
+    }
+
+    /// One test owns the process-wide run rate counter, so no other test sends `/api/run`
+    /// requests that it would count.
+    #[tokio::test]
+    async fn run_requests_are_validated_and_rate_limited() {
+        let dist = temp_dir("run");
+        let app = router(state(&dist, 5));
+        let error = |body: &[u8]| serde_json::from_slice::<Value>(body).unwrap()["error"].clone();
+
+        let (status, _, body) = send(&app, run("not json")).await;
+        assert_eq!((status, error(&body)), (StatusCode::BAD_REQUEST, json!("invalid json")));
+        let (status, _, body) = send(&app, run(r#"{"rust": 1}"#)).await;
+        assert_eq!((status, error(&body)), (StatusCode::BAD_REQUEST, json!("rust must be a string")));
+        let source = "x".repeat(MAX_RUN_SOURCE_BYTES + 1);
+        let (status, _, _) = send(&app, run(json!({ "rust": source }).to_string())).await;
+        assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+        let (status, _, body) = send(&app, run(r#"{"rust": "fn main() {}"}"#)).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(error(&body).as_str().unwrap().contains("runner dependency `trpl` not found"));
+
+        // Bodies over the transport limit are rejected before they count against the rate limit.
+        let (status, _, _) = send(&app, run("x".repeat(MAX_BODY_BYTES + 1))).await;
+        assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+        let (status, _, _) = send(&app, run("{}")).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _, body) = send(&app, run("{}")).await;
+        assert_eq!((status, error(&body)), (StatusCode::TOO_MANY_REQUESTS, json!("run rate limit exceeded")));
+        let _ = fs::remove_dir_all(dist);
+    }
+}
