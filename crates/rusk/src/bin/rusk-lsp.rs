@@ -621,6 +621,10 @@ fn target_rusk_root_uri(source_root_uri: &Url) -> Option<Url> {
 }
 
 fn rust_initialize_params(mut params: InitializeParams, rust_root_uri: &Url) -> InitializeParams {
+    // Keep rust-analyzer on the default UTF-16 columns that rusk-lsp also uses.
+    if let Some(general) = params.capabilities.general.as_mut() {
+        general.position_encodings = None;
+    }
     params.root_uri = Some(rust_root_uri.clone());
     params.workspace_folders = Some(vec![WorkspaceFolder {
         uri: rust_root_uri.clone(),
@@ -750,9 +754,9 @@ fn source_position_to_rust_position(
         .rust
         .lines()
         .nth(generated_line as usize)
-        .map(str::len)
+        .map(utf16_len)
         .unwrap_or_default()
-        .min(position.character as usize) as u32;
+        .min(position.character);
     Some(Position {
         line: generated_line,
         character: generated_character,
@@ -788,9 +792,9 @@ fn rust_position_to_source_position(
     let source_character = text
         .lines()
         .nth(source_line as usize)
-        .map(str::len)
+        .map(utf16_len)
         .unwrap_or_default()
-        .min(position.character as usize) as u32;
+        .min(position.character);
     Position {
         line: source_line,
         character: source_character,
@@ -918,6 +922,7 @@ fn item_name(text: &str, keyword: &str) -> Option<String> {
 
 fn node_range(node: &SourceMapNode) -> Range {
     let line = node.source_line.saturating_sub(1) as u32;
+    let first_line = node.source_text.lines().next().unwrap_or_default();
     Range {
         start: Position {
             line,
@@ -925,7 +930,7 @@ fn node_range(node: &SourceMapNode) -> Range {
         },
         end: Position {
             line,
-            character: (node.source_indent + node.source_text.len()) as u32,
+            character: node.source_indent as u32 + utf16_len(first_line),
         },
     }
 }
@@ -935,8 +940,8 @@ fn line_range(text: &str, line: usize) -> Range {
     let length = text
         .lines()
         .nth(line_index)
-        .map(str::len)
-        .unwrap_or_default() as u32;
+        .map(utf16_len)
+        .unwrap_or_default();
     Range {
         start: Position {
             line: line_index as u32,
@@ -1046,7 +1051,14 @@ fn declaration_at_position(text: &str, word: &Word) -> Option<Declaration> {
 fn collect_declarations(text: &str) -> Vec<Declaration> {
     text.lines()
         .enumerate()
-        .flat_map(|(index, raw)| declarations_from_line(index as u32, raw))
+        .flat_map(|(index, raw)| {
+            declarations_from_line(index as u32, raw)
+                .into_iter()
+                .map(move |mut declaration| {
+                    declaration.range = utf16_range(raw, declaration.range);
+                    declaration
+                })
+        })
         .collect()
 }
 
@@ -1194,10 +1206,7 @@ fn field_declaration(line: u32, indent: usize, text: &str) -> Option<Declaration
 
 fn word_at_position(text: &str, position: Position) -> Option<Word> {
     let raw = text.lines().nth(position.line as usize)?;
-    let mut cursor = (position.character as usize).min(raw.len());
-    while !raw.is_char_boundary(cursor) {
-        cursor -= 1;
-    }
+    let cursor = byte_column(raw, position.character);
     let start = raw[..cursor]
         .char_indices()
         .rev()
@@ -1211,7 +1220,7 @@ fn word_at_position(text: &str, position: Position) -> Option<Word> {
 
     Some(Word {
         text: raw[start..end].to_string(),
-        range: range_for_span(position.line, start, end),
+        range: utf16_range(raw, range_for_span(position.line, start, end)),
     })
 }
 
@@ -1294,6 +1303,32 @@ fn split_top_level_spans(text: &str, delimiter: char) -> Vec<(usize, usize)> {
     spans
 }
 
+/// Byte offset in `line` of an LSP column, which counts UTF-16 code units.
+fn byte_column(line: &str, character: u32) -> usize {
+    let mut units = 0u32;
+    for (offset, character_at) in line.char_indices() {
+        if units >= character {
+            return offset;
+        }
+        units += character_at.len_utf16() as u32;
+    }
+    line.len()
+}
+
+fn utf16_len(line: &str) -> u32 {
+    line.encode_utf16().count() as u32
+}
+
+/// Converts a single-line range from byte columns in `line` to UTF-16 columns.
+fn utf16_range(line: &str, range: Range) -> Range {
+    let column = |byte: u32| utf16_len(&line[..(byte as usize).min(line.len())]);
+    range_for_span(
+        range.start.line,
+        column(range.start.character) as usize,
+        column(range.end.character) as usize,
+    )
+}
+
 fn range_for_span(line: u32, start: usize, end: usize) -> Range {
     Range {
         start: Position {
@@ -1363,6 +1398,31 @@ mod tests {
         .unwrap();
 
         assert_eq!(range, range_for_span(0, 7, 13));
+    }
+
+    #[test]
+    fn positions_use_utf16_columns() {
+        let text = "pub fn 답(값: i32) -> i32 = 값\n";
+        let hover = hover_at_position(
+            text,
+            Position {
+                line: 0,
+                character: 9,
+            },
+        )
+        .unwrap();
+        assert_eq!(hover.range, Some(range_for_span(0, 9, 10)));
+        assert_eq!(
+            definition_range_at_position(
+                text,
+                Position {
+                    line: 0,
+                    character: 26,
+                },
+            ),
+            Some(range_for_span(0, 9, 10))
+        );
+        assert_eq!(line_range(text, 1).end.character, 27);
     }
 
     #[test]
