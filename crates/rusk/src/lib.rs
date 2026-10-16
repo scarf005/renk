@@ -3377,9 +3377,10 @@ fn inline_format_arguments(arguments: &str, prefix: usize) -> Option<String> {
     let arguments = split_macro_arguments(arguments, true);
     let literal = arguments.get(prefix)?.trim();
     let (start, end) = format_literal_bounds(literal)?;
+    // Rusk reads `NAME.len()` inside a placeholder as a path, like any other expression.
     let values = arguments[prefix + 1..]
         .iter()
-        .map(|argument| argument.trim())
+        .map(|argument| parenthesize_index_calls(&parenthesize_value_receivers(argument.trim())))
         .collect::<Vec<_>>();
     if values.is_empty()
         || values.iter().any(|value| {
