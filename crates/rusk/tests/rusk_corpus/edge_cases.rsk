@@ -84,3 +84,11 @@ pub fn raw_quotes() -> usize:
     let s = r#"say "" 
 hi"#
     s.len()
+
+// `= match` owns its arms like a block body.
+pub fn describe(n: i32) -> &'static str = match n: // trailing comment
+    0 => "zero"
+    MAX =>:
+        let _ = n
+        "max"
+    _ => "other"

@@ -195,7 +195,7 @@ fn malformed_sources_fail_at_the_offending_line() {
         ("fn main():\n\tlet x = 1\n", 2),
         ("fn main():\n    let x = 1\n      let y = 2\n", 2),
         ("struct A:\n    x: i32\n        y: i32\n", 2),
-        ("fn f() = match x:\n    1 => a:\n        b\n", 1),
+        ("fn f() = g(x):\n    1\n", 1),
         ("fn main():\n    let x = (\n", 2),
         ("fn main():\n    let s = \"open\n", 2),
     ];

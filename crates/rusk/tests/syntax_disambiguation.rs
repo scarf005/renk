@@ -345,3 +345,14 @@ fn use_trees_lower_globs_and_groups() {
     assert!(output.contains("const R: std::ops::Range<usize> = 0..2;"), "{output}");
     assert!(output.contains("    x.len()\n"), "{output}");
 }
+
+#[test]
+fn inline_function_bodies_can_open_a_block() {
+    let inline = "impl A:\n    fn f(x: i32) -> i32 = match x:\n        1 => 2\n        _ =>:\n            let y = x\n            y * 3\n";
+    let block = "impl A:\n    fn f(x: i32) -> i32:\n        match x:\n            1 => 2\n            _ =>:\n                let y = x\n                y * 3\n";
+    assert_eq!(rust(inline), rust(block));
+    assert_eq!(
+        format_source(inline, FormatOptions::default()).unwrap(),
+        inline
+    );
+}
