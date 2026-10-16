@@ -230,65 +230,31 @@ pub fn ruk_to_rusk(source: &str) -> Result<String, TranspileError> {
     rust_to_rusk(&rust)
 }
 
+/// Drops every Rust semicolon that Ruk inference restores, keeping the rest.
 pub fn rust_to_ruk(source: &str) -> Result<String, TranspileError> {
-    let mut output = Vec::new();
-    let mut brace_depth = 0usize;
-    let mut closure_body_depths = Vec::<usize>::new();
-    let mut function_body_depths = Vec::<(usize, bool)>::new();
-    let lines = source.lines().collect::<Vec<_>>();
-    for (index, raw) in lines.iter().enumerate() {
-        let line = index + 1;
-        if raw.contains('\t') {
-            return Err(TranspileError {
-                line,
-                message: "tabs are not supported; use spaces".to_string(),
-            });
-        }
+    let mut rust = Vec::new();
+    for (index, raw) in source.lines().enumerate() {
+        reject_tabs(raw, index + 1)?;
         let raw = raw.trim_end();
-        let text = raw.trim_start();
-        if raw.trim() == GENERATED_HEADER.trim_end() {
-            continue;
+        if raw.trim() != GENERATED_HEADER.trim_end() {
+            rust.push(raw);
         }
-        let next_line_closes_block = next_non_empty_line(&lines, index)
-            .is_some_and(|line| line.trim_start().starts_with('}'));
-        let preserve_tail_closure_semicolon = !closure_body_depths.is_empty()
-            && raw.trim_end().ends_with(';')
-            && next_line_closes_block;
-        let preserve_returning_function_tail_semicolon = function_body_depths
-            .last()
-            .is_some_and(|(depth, returns_value)| *returns_value && *depth == brace_depth)
-            && raw.trim_end().ends_with(';')
-            && next_line_closes_block;
-        output.push(
-            if preserve_tail_closure_semicolon || preserve_returning_function_tail_semicolon {
-                raw.to_string()
-            } else {
-                strip_rust_semicolon(raw)
-            },
-        );
-        if text.ends_with('{') && is_function(strip_open_brace(text)) {
-            function_body_depths.push((
-                brace_depth + 1,
-                function_returns_value(strip_open_brace(text)),
-            ));
+    }
+    let mut output = rust
+        .iter()
+        .map(|raw| strip_rust_semicolon(raw))
+        .collect::<Vec<_>>();
+    loop {
+        let inferred = ruk_to_rust(&output.join("\n"))?;
+        let mut restored = false;
+        for ((line, raw), inferred) in output.iter_mut().zip(&rust).zip(inferred.lines()) {
+            if inferred != *raw && line != raw {
+                *line = raw.to_string();
+                restored = true;
+            }
         }
-        if opens_closure_block(text) {
-            closure_body_depths.push(brace_depth + 1);
-        }
-        brace_depth = brace_depth
-            .saturating_add(count_unquoted(text, '{'))
-            .saturating_sub(count_unquoted(text, '}'));
-        while closure_body_depths
-            .last()
-            .is_some_and(|depth| brace_depth < *depth)
-        {
-            closure_body_depths.pop();
-        }
-        while function_body_depths
-            .last()
-            .is_some_and(|(depth, _)| brace_depth < *depth)
-        {
-            function_body_depths.pop();
+        if !restored {
+            break;
         }
     }
     Ok(ensure_trailing_newline(
@@ -304,6 +270,11 @@ pub fn ruk_to_rust(source: &str) -> Result<String, TranspileError> {
 enum RukScopeKind {
     Function { returns_value: bool },
     Trait,
+    /// A block in expression position, such as a closure, `async`, or `let x = if c {` body,
+    /// whose tail expression is its value.
+    Value,
+    /// A `macro_rules!` body, which stays Rust tokens.
+    Macro,
     Item,
 }
 
@@ -311,6 +282,8 @@ enum RukScopeKind {
 struct RukScope {
     indent: usize,
     kind: RukScopeKind,
+    /// Opened by a `let` or assignment, so its closing `}` ends the statement.
+    ends_statement: bool,
 }
 
 #[derive(Debug)]
@@ -332,6 +305,8 @@ impl<'a> RukSemicolonInferer<'a> {
         let mut delimiter_depth = 0usize;
         let mut brace_depth = 0usize;
         let mut delimiter_base_brace_depth = None::<usize>;
+        // A function signature continued over several lines, until the line opening its body.
+        let mut signature = None::<String>;
         for index in 0..self.lines.len() {
             let line_number = index + 1;
             let raw = self.lines[index].trim_end();
@@ -347,10 +322,28 @@ impl<'a> RukSemicolonInferer<'a> {
             let leaves_delimiter_open = next_delimiter_depth > 0;
             let suppress_semicolon = leaves_delimiter_open
                 && delimiter_base_brace_depth.is_none_or(|base| brace_depth <= base);
-            self.close_scopes_for_line(text, indent);
-            let converted = self.infer_line(raw, text, index, suppress_semicolon);
+            let closed = self.close_scopes_for_line(text, indent);
+            let converted = if self.in_macro() {
+                raw.to_string()
+            } else if closed.is_some_and(|scope| scope.ends_statement)
+                && split_line_comment(text).map_or(text, |(code, _)| code).trim_end() == "}"
+                && !self.continues_on_next_line(index)
+            {
+                insert_semicolon(raw)
+            } else {
+                self.infer_line(raw, text, index, suppress_semicolon)
+            };
             output.push(converted);
-            self.open_scope_from_line(text, indent);
+            let code = split_line_comment(text).map_or(text, |(code, _)| code).trim_end();
+            let header = match signature.take() {
+                Some(start) => format!("{start} {code}"),
+                None => code.to_string(),
+            };
+            if is_function(&header) && !header.ends_with(['{', ';']) {
+                signature = Some(header);
+            } else {
+                self.open_scope_from_line(&header, indent, closed);
+            }
             let next_brace_depth = brace_depth_after_line(brace_depth, text);
             if delimiter_depth == 0 && next_delimiter_depth > 0 {
                 delimiter_base_brace_depth = Some(brace_depth);
@@ -363,33 +356,54 @@ impl<'a> RukSemicolonInferer<'a> {
         Ok(ensure_trailing_newline(&output.join("\n")))
     }
 
-    fn close_scopes_for_line(&mut self, text: &str, indent: usize) {
+    /// Pops the scopes a `}` line closes and returns the outermost one.
+    fn close_scopes_for_line(&mut self, text: &str, indent: usize) -> Option<RukScope> {
         if !text.starts_with('}') {
-            return;
+            return None;
         }
+        let mut closed = None;
         while self
             .scopes
             .last()
             .is_some_and(|scope| scope.indent >= indent)
         {
-            self.scopes.pop();
+            closed = self.scopes.pop();
         }
+        closed
+    }
+
+    fn in_macro(&self) -> bool {
+        self.scopes
+            .iter()
+            .any(|scope| scope.kind == RukScopeKind::Macro)
     }
 
     fn infer_line(&self, raw: &str, text: &str, index: usize, suppress_semicolon: bool) -> String {
         if suppress_semicolon {
             return raw.to_string();
         }
-        if !ruk_line_needs_semicolon(text) {
+        let code = split_line_comment(text).map_or(text, |(code, _)| code).trim_end();
+        if !ruk_line_needs_semicolon(code) {
             return raw.to_string();
         }
-        if !self.should_add_semicolon(text, index) {
+        if !self.should_add_semicolon(code, index) {
             return raw.to_string();
         }
-        format!("{raw};")
+        insert_semicolon(raw)
+    }
+
+    /// Whether the next code line continues this expression: `.method()`, `?`, or `let ... else`.
+    fn continues_on_next_line(&self, index: usize) -> bool {
+        self.next_code_line(index).is_some_and(|next| {
+            let next = next.trim_start();
+            next.starts_with(['.', '?']) || is_else_branch(strip_open_brace(next))
+        })
     }
 
     fn should_add_semicolon(&self, text: &str, index: usize) -> bool {
+        if self.continues_on_next_line(index) {
+            return false;
+        }
         if is_let(text)
             || is_assignment(text)
             || is_jump_statement(text)
@@ -403,16 +417,10 @@ impl<'a> RukSemicolonInferer<'a> {
         if looks_like_item_header_without_body(text) {
             return false;
         }
-        if self
-            .next_code_line(index)
-            .is_some_and(|next| next.trim_start().starts_with('.'))
-        {
-            return false;
-        }
         if !self.is_tail_of_current_scope(index) {
             return true;
         }
-        !self.current_function_returns_value()
+        !self.tail_is_value()
     }
 
     fn is_tail_of_current_scope(&self, index: usize) -> bool {
@@ -434,19 +442,22 @@ impl<'a> RukSemicolonInferer<'a> {
             .any(|scope| matches!(scope.kind, RukScopeKind::Trait))
     }
 
-    fn current_function_returns_value(&self) -> bool {
-        self.scopes.iter().rev().any(|scope| {
-            matches!(
-                scope.kind,
-                RukScopeKind::Function {
-                    returns_value: true
-                }
-            )
-        })
+    /// Whether a scope tail is a value: the nearest function or value block decides.
+    fn tail_is_value(&self) -> bool {
+        self.scopes.iter().rev().find_map(|scope| match scope.kind {
+            RukScopeKind::Function { returns_value } => Some(returns_value),
+            RukScopeKind::Value => Some(true),
+            _ => None,
+        }) == Some(true)
     }
 
-    fn open_scope_from_line(&mut self, text: &str, indent: usize) {
+    /// Opens the scope of a line ending with `{`; a `} else {` line continues the closed scope.
+    fn open_scope_from_line(&mut self, text: &str, indent: usize, closed: Option<RukScope>) {
         if !text.ends_with('{') {
+            return;
+        }
+        if let Some(scope) = closed {
+            self.scopes.push(RukScope { indent, ..scope });
             return;
         }
         let header = strip_open_brace(text);
@@ -456,11 +467,50 @@ impl<'a> RukSemicolonInferer<'a> {
             }
         } else if is_trait_item(header) {
             RukScopeKind::Trait
+        } else if is_macro_item(header) {
+            RukScopeKind::Macro
+        } else if opens_value_block(header) {
+            RukScopeKind::Value
         } else {
             RukScopeKind::Item
         };
-        self.scopes.push(RukScope { indent, kind });
+        let ends_statement = !is_function(header) && (is_let(header) || is_assignment(header))
+            && !starts_control_flow(header);
+        self.scopes.push(RukScope {
+            indent,
+            kind,
+            ends_statement,
+        });
     }
+}
+
+fn insert_semicolon(raw: &str) -> String {
+    match split_line_comment(raw) {
+        Some((code, comment)) => format!("{}; {comment}", code.trim_end()),
+        None => format!("{raw};"),
+    }
+}
+
+fn starts_control_flow(header: &str) -> bool {
+    ["if ", "while ", "for ", "match ", "else", "loop", "unsafe"]
+        .iter()
+        .any(|keyword| header.starts_with(keyword))
+}
+
+/// Whether a `{` after `header` opens a block in expression position, whose tail is its value.
+fn opens_value_block(header: &str) -> bool {
+    let closure = header.ends_with('|')
+        || header
+            .rsplit_once("| ->")
+            .is_some_and(|(params, _)| params.contains('|'));
+    let r#async = header == "async"
+        || header.ends_with(" async")
+        || header.ends_with("(async")
+        || header.ends_with("async move");
+    closure
+        || r#async
+        || header.ends_with(['=', '(', ','])
+        || (!starts_control_flow(header) && (is_let(header) || is_assignment(header)))
 }
 
 fn strip_rust_semicolon(raw: &str) -> String {
@@ -512,18 +562,6 @@ fn count_unquoted(text: &str, needle: char) -> usize {
     count
 }
 
-fn next_non_empty_line<'a>(lines: &[&'a str], index: usize) -> Option<&'a str> {
-    lines
-        .iter()
-        .skip(index + 1)
-        .copied()
-        .find(|line| !line.trim().is_empty())
-}
-
-fn opens_closure_block(text: &str) -> bool {
-    text.ends_with('{') && text.contains('|')
-}
-
 fn split_line_comment(raw: &str) -> Option<(&str, &str)> {
     let mut in_string = false;
     let mut escaped = false;
@@ -562,6 +600,7 @@ fn ruk_line_needs_semicolon(text: &str) -> bool {
         && !text.ends_with(';')
         && !text.ends_with(',')
         && !text.ends_with('{')
+        && !text.ends_with(['=', '+', '-', '/', '%', '&', '|', '^'])
         && !text
             .chars()
             .all(|character| matches!(character, '}' | ',' | ';'))
