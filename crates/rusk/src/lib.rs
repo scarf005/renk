@@ -1176,6 +1176,14 @@ fn source_lines(source: &str) -> Result<Vec<SourceLine>, TranspileError> {
         }
         reject_tabs(raw, line)?;
         let mut text = without_comment.trim_start().to_string();
+        // `} else {` continues a `{` chain whose closing braces the emitter writes itself.
+        if let Some(branch) = text
+            .strip_prefix('}')
+            .map(str::trim_start)
+            .filter(|branch| is_else_branch(branch))
+        {
+            text = branch.to_string();
+        }
         let mut group = None;
         while joins_next_line(
             &text,
