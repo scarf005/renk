@@ -1,3 +1,9 @@
+#[allow(unused_imports)]
+use std.collections.*
+#[allow(unused_imports)]
+pub use std.{fmt, io.{self, Read as _}}
+const RANGE: std.ops.Range[usize] = 0..2 // a range, not a path: 0..*
+
 const MAX: i32 = 3
 
 fn g(n: i32) -> i32 = n

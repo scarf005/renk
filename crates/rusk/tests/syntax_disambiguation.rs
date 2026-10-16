@@ -330,3 +330,18 @@ fn ruk_conversion_drops_semicolons_before_trailing_comments() {
         "fn f() {\n    g(); // c\n    h();\n}\n"
     );
 }
+
+#[test]
+fn use_trees_lower_globs_and_groups() {
+    let output = rust(
+        "use rayon.prelude.*\npub use std.{fmt, io.{self, Read as R}}\npub(crate) use crate.a.B\nconst R: std.ops.Range[usize] = 0..2\nfn f(x: &[u8]) -> usize = x.len()\n",
+    );
+    assert!(output.contains("use rayon::prelude::*;\n"), "{output}");
+    assert!(
+        output.contains("pub use std::{fmt, io::{self, Read as R}};\n"),
+        "{output}"
+    );
+    assert!(output.contains("pub(crate) use crate::a::B;\n"), "{output}");
+    assert!(output.contains("const R: std::ops::Range<usize> = 0..2;"), "{output}");
+    assert!(output.contains("    x.len()\n"), "{output}");
+}
