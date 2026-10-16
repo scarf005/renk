@@ -1303,7 +1303,9 @@ fn joins_next_line(
             }),
         };
     }
-    let code = without_trailing_line_comment(text);
+    // The line that decides is the last non-blank one, so a blank line after `= // note` waits too.
+    let last = text.lines().rev().find(|line| !line.trim().is_empty());
+    let code = without_trailing_line_comment(last.unwrap_or_default());
     if code.trim_end().ends_with(['(', '['])
         || opens_struct_literal(code)
         || (open.last() == Some(&'{') && is_use_or_extern_crate(code))

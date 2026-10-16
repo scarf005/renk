@@ -67,3 +67,9 @@ semicolon; // not a comment
     text.len() + raw.len()
 
 pub fn empty_body():
+
+pub fn commented_continuation() -> i32:
+    let x = // note
+
+        1
+    x
