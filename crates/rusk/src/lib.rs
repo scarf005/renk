@@ -1789,7 +1789,6 @@ fn ends_in_condition(head: &str) -> bool {
     conditions.last() == Some(&true)
 }
 
-/// Unclosed delimiters at the end of `text`, or `None` while a literal or block comment is open.
 /// For each line of `source`, whether it ends inside a string literal or block comment, whose
 /// trailing whitespace and delimiters are contents rather than code.
 fn lines_ending_in_literal(source: &str) -> Vec<bool> {
@@ -1813,6 +1812,7 @@ fn keep_literal_end(line: &str, in_literal: bool) -> &str {
     if in_literal { line } else { line.trim_end() }
 }
 
+/// Unclosed delimiters at the end of `text`, or `None` while a literal or block comment is open.
 fn open_delimiters(text: &str) -> Option<Vec<char>> {
     let chars = text.chars().collect::<Vec<_>>();
     let mut open = Vec::new();
