@@ -771,36 +771,50 @@ struct Rewrite {
 }
 
 /// Rewrites literal Rust-shaped Rusk into idiomatic forms. A rewrite is kept only when the Rusk
-/// still transpiles to the same Rust or, when `aggressive`, to the same Rust tokens.
+/// still transpiles to the same Rust or, when `aggressive` or inlining format arguments, to the
+/// same Rust tokens; format arguments are compared inlined.
 fn idiomatic_rusk(lines: Vec<String>, aggressive: bool) -> Vec<String> {
     let Ok(expected) = transpile(&lines.join("\n")) else {
         return lines;
     };
-    let expected_tokens = rust_tokens(&expected.rust);
+    let expected = canonical_format_macros(&expected.rust);
+    let expected_tokens = rust_tokens(&expected);
     type Pass = fn(&[String]) -> Vec<Rewrite>;
-    let passes: [Pass; 5] = [
+    let passes: [Pass; 6] = [
         |lines| line_rewrites(lines, drop_semicolon),
+        |lines| {
+            line_rewrites(lines, |line| {
+                let inlined = rewrite_format_macros(line, inline_format_arguments);
+                (inlined != line).then_some(inlined)
+            })
+        },
         |lines| line_rewrites(lines, dot_rust_paths),
         |lines| line_rewrites(lines, inline_if_rewrite),
         if_chain_rewrites,
         expression_body_rewrites,
     ];
-    passes.into_iter().fold(lines, |lines, pass| {
-        let rewrites = pass(&lines);
-        let (mut accepted, rejected) = equivalent_rewrites(&lines, rewrites, &expected.rust);
-        if aggressive && expected_tokens.is_some() {
-            for rewrite in rejected {
-                let mut trial = accepted.clone();
-                let at = trial.partition_point(|kept| kept.start < rewrite.start);
-                trial.insert(at, rewrite);
-                let rust = transpile(&apply_rewrites(&lines, &trial).0.join("\n"));
-                if rust.is_ok_and(|output| rust_tokens(&output.rust) == expected_tokens) {
-                    accepted = trial;
+    passes
+        .into_iter()
+        .enumerate()
+        .fold(lines, |lines, (index, pass)| {
+            let rewrites = pass(&lines);
+            let (mut accepted, rejected) = equivalent_rewrites(&lines, rewrites, &expected);
+            // Inlining rejoins wrapped format invocations, so that pass is also checked by tokens.
+            if (aggressive || index == 1) && expected_tokens.is_some() {
+                for rewrite in rejected {
+                    let mut trial = accepted.clone();
+                    let at = trial.partition_point(|kept| kept.start < rewrite.start);
+                    trial.insert(at, rewrite);
+                    let rust = transpile(&apply_rewrites(&lines, &trial).0.join("\n"));
+                    if rust.is_ok_and(|output| {
+                        rust_tokens(&canonical_format_macros(&output.rust)) == expected_tokens
+                    }) {
+                        accepted = trial;
+                    }
                 }
             }
-        }
-        apply_rewrites(&lines, &accepted).0
-    })
+            apply_rewrites(&lines, &accepted).0
+        })
 }
 
 /// Rust tokens without layout or comments; `None` when the text does not lex.
@@ -843,7 +857,8 @@ fn apply_rewrites(lines: &[String], rewrites: &[Rewrite]) -> (Vec<String>, Vec<O
     (candidate, origins)
 }
 
-/// Splits rewrites into those whose Rusk transpiles to exactly `expected` and the rest.
+/// Splits rewrites into those whose Rusk transpiles to exactly `expected`, up to inlined format
+/// arguments, and the rest.
 fn equivalent_rewrites(
     lines: &[String],
     mut rewrites: Vec<Rewrite>,
@@ -853,8 +868,13 @@ fn equivalent_rewrites(
     while !rewrites.is_empty() {
         let (candidate, origins) = apply_rewrites(lines, &rewrites);
         let rejected_lines = match transpile(&candidate.join("\n")) {
-            Ok(output) if output.rust == expected => break,
-            Ok(output) => differing_source_lines(&output, expected),
+            Ok(output) => {
+                let actual = canonical_format_macros(&output.rust);
+                if actual == expected {
+                    break;
+                }
+                differing_source_lines(&output, &actual, expected)
+            }
             Err(error) => vec![error.line],
         };
         let failed = rejected_lines
@@ -878,8 +898,8 @@ fn equivalent_rewrites(
 
 /// Source lines whose generated Rust differs from `expected`; after a line count change only the
 /// first difference is aligned.
-fn differing_source_lines(output: &TranspileOutput, expected: &str) -> Vec<usize> {
-    let actual = output.rust.lines().collect::<Vec<_>>();
+fn differing_source_lines(output: &TranspileOutput, actual: &str, expected: &str) -> Vec<usize> {
+    let actual = actual.lines().collect::<Vec<_>>();
     let expected = expected.lines().collect::<Vec<_>>();
     let differing = (0..actual.len().max(expected.len()))
         .filter(|&index| actual.get(index) != expected.get(index))
@@ -3157,6 +3177,22 @@ fn top_level_position(chars: &[char], start: usize, stop: impl Fn(usize) -> bool
 }
 
 fn lower_format_macros(text: &str) -> String {
+    rewrite_format_macros(text, lower_format_invocation)
+}
+
+/// Std format macros and how many arguments precede their format string.
+fn format_macro_prefix(name: &str) -> Option<usize> {
+    match name {
+        "format" | "format_args" | "print" | "println" | "eprint" | "eprintln" | "panic"
+        | "unreachable" | "todo" | "unimplemented" => Some(0),
+        "write" | "writeln" => Some(1),
+        _ => None,
+    }
+}
+
+/// Replaces the arguments of every std format macro invocation outside literals with
+/// `rewrite(arguments, prefix)`, leaving invocations it declines unchanged.
+fn rewrite_format_macros(text: &str, rewrite: fn(&str, usize) -> Option<String>) -> String {
     let mut output = String::with_capacity(text.len());
     let mut index = 0usize;
     while index < text.len() {
@@ -3175,12 +3211,14 @@ fn lower_format_macros(text: &str) -> String {
             let name = &text[index..name_end];
             let mut cursor = name_end;
             skip_whitespace(text, &mut cursor);
-            if matches!(name, "println" | "format") && text[cursor..].starts_with('!') {
+            if let Some(prefix) = format_macro_prefix(name)
+                && text[cursor..].starts_with('!')
+            {
                 cursor += 1;
                 skip_whitespace(text, &mut cursor);
                 if text[cursor..].starts_with('(')
                     && let Some(close) = matching_delimiter(text, cursor, '(', ')', true)
-                    && let Some(invocation) = lower_format_invocation(&text[cursor + 1..close])
+                    && let Some(invocation) = rewrite(&text[cursor + 1..close], prefix)
                 {
                     output.push_str(name);
                     output.push_str(&text[name_end..cursor + 1]);
@@ -3190,6 +3228,9 @@ fn lower_format_macros(text: &str) -> String {
                     continue;
                 }
             }
+            output.push_str(name);
+            index = name_end;
+            continue;
         }
         output.push(character);
         index += character.len_utf8();
@@ -3197,9 +3238,9 @@ fn lower_format_macros(text: &str) -> String {
     output
 }
 
-fn lower_format_invocation(arguments: &str) -> Option<String> {
+fn lower_format_invocation(arguments: &str, prefix: usize) -> Option<String> {
     let arguments = split_macro_arguments(arguments, true);
-    let format_literal = arguments.first()?.trim();
+    let format_literal = arguments.get(prefix)?.trim();
     let (content_start, content_end) = format_literal_bounds(format_literal)?;
     let content = &format_literal[content_start..content_end];
     let (content, expressions) = lower_format_string(content)?;
@@ -3207,7 +3248,10 @@ fn lower_format_invocation(arguments: &str) -> Option<String> {
         return None;
     }
 
-    let mut lowered_arguments = Vec::with_capacity(arguments.len() + expressions.len());
+    let mut lowered_arguments = arguments[..prefix]
+        .iter()
+        .map(|argument| argument.trim().to_string())
+        .collect::<Vec<_>>();
     lowered_arguments.push(format!(
         "{}{}{}",
         &format_literal[..content_start],
@@ -3217,10 +3261,10 @@ fn lower_format_invocation(arguments: &str) -> Option<String> {
     lowered_arguments.extend(
         arguments
             .iter()
-            .skip(1)
+            .skip(prefix + 1)
             .map(|argument| argument.trim().to_string()),
     );
-    let explicit_count = lowered_arguments.len() - 1;
+    let explicit_count = lowered_arguments.len() - prefix - 1;
     for (index, expression) in expressions.into_iter().enumerate() {
         let placeholder = if explicit_count == 0 {
             "".to_string()
@@ -3228,12 +3272,14 @@ fn lower_format_invocation(arguments: &str) -> Option<String> {
             format!("{}", explicit_count + index)
         };
         let marker = format!("__rusk_inline_{}__", index);
-        lowered_arguments[0] = lowered_arguments[0].replace(&marker, &placeholder);
+        lowered_arguments[prefix] = lowered_arguments[prefix].replace(&marker, &placeholder);
         lowered_arguments.push(lower_expr(&expression));
     }
     Some(lowered_arguments.join(", "))
 }
 
+/// Lowers `{expr}` placeholders to positional markers; plain identifiers other than `self` stay as
+/// Rust's captured or named arguments.
 fn lower_format_string(content: &str) -> Option<(String, Vec<String>)> {
     let mut lowered = String::with_capacity(content.len());
     let mut expressions = Vec::new();
@@ -3249,7 +3295,12 @@ fn lower_format_string(content: &str) -> Option<(String, Vec<String>)> {
             let close = find_format_placeholder_end(content, index + 1)?;
             let body = &content[index + 1..close];
             let body = body.trim();
-            if is_standard_format_placeholder(body) {
+            let expression = split_format_specifier(body).0;
+            if is_standard_format_placeholder(body)
+                || (expression != "self"
+                    && expression.starts_with(is_ident_start)
+                    && expression.chars().all(is_ident_continue))
+            {
                 lowered.push('{');
                 lowered.push_str(body);
                 lowered.push('}');
@@ -3275,6 +3326,102 @@ fn lower_format_string(content: &str) -> Option<(String, Vec<String>)> {
         }
     }
     Some((lowered, expressions))
+}
+
+/// The name of a `name = value` format argument.
+fn named_format_argument(argument: &str) -> Option<&str> {
+    let (name, value) = argument.split_once('=')?;
+    let name = name.trim();
+    (!value.starts_with('=')
+        && name.starts_with(is_ident_start)
+        && name.chars().all(is_ident_continue))
+    .then_some(name)
+}
+
+/// `"{} {:?}", a, b.c` as `"{a} {b.c:?}"` when each argument fills one placeholder, in order, so
+/// the inline form evaluates the same expressions in the same order. Arguments that would be hard
+/// to read or to split back out of a placeholder (literals, blocks, closures, `:`) stay positional.
+fn inline_format_arguments(arguments: &str, prefix: usize) -> Option<String> {
+    let arguments = split_macro_arguments(arguments, true);
+    let literal = arguments.get(prefix)?.trim();
+    let (start, end) = format_literal_bounds(literal)?;
+    let values = arguments[prefix + 1..]
+        .iter()
+        .map(|argument| argument.trim())
+        .collect::<Vec<_>>();
+    if values.is_empty()
+        || values.iter().any(|value| {
+            value.is_empty()
+                || value.contains(['"', '\'', '{', '}', '|', '$', '\n'])
+                || value.replace("::", "").contains(':')
+                || named_format_argument(value).is_some()
+        })
+    {
+        return None;
+    }
+    let content = &literal[start..end];
+    let (mut inlined, mut used, mut implicit, mut explicit) = (String::new(), 0, false, false);
+    let mut index = 0;
+    while index < content.len() {
+        let character = content[index..].chars().next()?;
+        if matches!(character, '{' | '}') && content[index + 1..].starts_with(character) {
+            inlined.push_str(&content[index..index + 2]);
+            index += 2;
+            continue;
+        }
+        if character != '{' {
+            inlined.push(character);
+            index += character.len_utf8();
+            continue;
+        }
+        let close = index + 1 + content[index + 1..].find('}')?;
+        let body = &content[index + 1..close];
+        let (position, specifier) = body
+            .split_once(':')
+            .map_or((body, None), |(p, s)| (p, Some(s)));
+        if specifier.is_some_and(|specifier| specifier.contains('$')) {
+            return None;
+        }
+        let position = position.trim();
+        if position.is_empty() {
+            implicit = true;
+        } else if position.chars().all(|c| c.is_ascii_digit()) && position.parse() == Ok(used) {
+            explicit = true;
+        } else if position.chars().all(|c| c.is_ascii_digit()) {
+            return None;
+        } else {
+            inlined.push_str(&content[index..=close]);
+            index = close + 1;
+            continue;
+        }
+        inlined.push('{');
+        inlined.push_str(values.get(used)?);
+        if let Some(specifier) = specifier {
+            inlined.push(':');
+            inlined.push_str(specifier);
+        }
+        inlined.push('}');
+        used += 1;
+        index = close + 1;
+    }
+    if used != values.len() || (implicit && explicit) {
+        return None;
+    }
+    let mut output = arguments[..prefix]
+        .iter()
+        .map(|argument| argument.trim().to_string())
+        .collect::<Vec<_>>();
+    output.push(format!("{}{inlined}{}", &literal[..start], &literal[end..]));
+    Some(output.join(", "))
+}
+
+/// Generated Rust with format arguments inlined, so `"{}", a.b` and `"{a.b}"` compare equal; line
+/// breaks inside an inlined invocation are kept so lines still align with the source map.
+fn canonical_format_macros(rust: &str) -> String {
+    rewrite_format_macros(rust, |arguments, prefix| {
+        let inlined = inline_format_arguments(arguments, prefix)?;
+        Some(inlined + &"\n".repeat(arguments.matches('\n').count()))
+    })
 }
 
 fn is_standard_format_placeholder(body: &str) -> bool {
@@ -4918,7 +5065,7 @@ impl User:
 
 pub fn main():
     let user = User.new(1, "Ada".to_string())
-    println!("{}", user.display_name())
+    println!("{user.display_name()}")
 "#
         );
     }

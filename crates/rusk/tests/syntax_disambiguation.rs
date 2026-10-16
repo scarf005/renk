@@ -267,7 +267,7 @@ fn rust_brace_else_lines_continue_the_brace_chain() {
 fn multiline_string_contents_survive_every_conversion() {
     let literal = "\"a  \nb // c;\n  d\"";
     let rusk = format!("fn main():\n    let s = {literal}\n    println!(\"{{s}}\")\n");
-    let expected = format!("fn main() {{\n    let s = {literal};\n    println!(\"{{}}\", s);\n}}\n");
+    let expected = format!("fn main() {{\n    let s = {literal};\n    println!(\"{{s}}\");\n}}\n");
     let ruk = format!("fn main() {{\n    let s = {literal}\n    println!(\"{{s}}\")\n}}\n");
 
     assert_eq!(rust(&rusk), expected);

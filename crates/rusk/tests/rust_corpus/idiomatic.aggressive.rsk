@@ -21,10 +21,10 @@ impl Counter:
         *self.seen.entry(word.to_string()).or_default() += 1
 
     pub fn log(&self):
-        println!("{:?}", Self::new()) // keep Self::new(); in comments
+        println!("{Self::new():?}") // keep Self::new(); in comments
 
 impl fmt.Display for Counter:
-    fn fmt(&self, f: &mut fmt.Formatter['_]) -> fmt.Result = write!(f, "{}", self.total())
+    fn fmt(&self, f: &mut fmt.Formatter['_]) -> fmt.Result = write!(f, "{self.total()}")
 
 fn kind_name(kind: &Kind) -> &'static str = match kind:
     Kind.Unit => "unit"
@@ -62,7 +62,7 @@ fn main():
         counter.add(word);
     last_call(&mut counter)
     counter.log()
-    println!("{counter} {}", kind_name(&Kind::Pair(1, 2)))
-    println!("{:?} {:?} {}", units(&[1]), checked(1), pick(true))
+    println!("{counter} {kind_name(&Kind::Pair(1, 2))}")
+    println!("{units(&[1]):?} {checked(1):?} {pick(true)}")
     let _ = read("/nonexistent")
     let _ = long_body(&[1])
