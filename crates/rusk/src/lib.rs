@@ -931,11 +931,14 @@ fn dot_rust_paths(line: &str) -> Option<String> {
             index = end + 1;
             continue;
         }
-        // `Vec[T]::new` as `Vec[T].new`.
+        // `Vec[T]::new` as `Vec[T].new`, and `use a::{b, c}` / `use a::*` as `a.{b, c}` / `a.*`.
         if chars[index..].starts_with(&[':', ':'])
             && index > 0
-            && chars[index - 1] == ']'
-            && chars.get(index + 2).copied().is_some_and(is_ident_start)
+            && ((chars[index - 1] == ']'
+                && chars.get(index + 2).copied().is_some_and(is_ident_start))
+                || (is_use_or_extern_crate(code)
+                    && is_ident_continue(chars[index - 1])
+                    && matches!(chars.get(index + 2), Some('{' | '*'))))
         {
             output.push('.');
             index += 2;
