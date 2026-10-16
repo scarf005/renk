@@ -356,3 +356,56 @@ fn inline_function_bodies_can_open_a_block() {
         inline
     );
 }
+
+#[test]
+fn every_std_format_macro_lowers_inline_expressions() {
+    let output = rust(
+        "fn show(out: &mut String, user: &User):\n    eprintln!(\"{user.name} {}\", 1)\n    write!(out, \"{user.name:>8}\").unwrap()\n    writeln!(\n        out,\n        \"{user.name}\"\n    ).unwrap()\n    my_eprintln!(\"{user.name}\")\n    let s = \"eprintln!(\\\"{user.name}\\\")\"\n    panic!(\"{user.name}\") // eprintln!(\"{user.name}\")\n",
+    );
+    assert!(
+        output.contains("eprintln!(\"{1} {}\", 1, user.name);"),
+        "{output}"
+    );
+    assert!(
+        output.contains("write!(out, \"{:>8}\", user.name).unwrap();"),
+        "{output}"
+    );
+    assert!(
+        output.contains("writeln!(out, \"{}\", user.name).unwrap();"),
+        "{output}"
+    );
+    assert!(
+        output.contains("my_eprintln!(\"{user.name}\");"),
+        "{output}"
+    );
+    assert!(
+        output.contains("let s = \"eprintln!(\\\"{user.name}\\\")\";"),
+        "{output}"
+    );
+    assert!(output.contains("panic!(\"{}\", user.name);"), "{output}");
+}
+
+#[test]
+fn rust_conversion_inlines_format_arguments_used_once_in_order() {
+    let output = rust_to_rusk(
+        "fn f(cli: &Cli, index: usize, name: &str, out: &mut String) {\n    println!(\"Invalid {}\", cli.url);\n    let file = format!(\"{:03}.{name}\", index + 1);\n    eprintln!(\"{} {:?}\", name, cli.url);\n    write!(out, \"{}\", cli.url).unwrap();\n    println!(\n        \"{} on {}\",\n        name,\n        cli.url\n    );\n    println!(\"{0} {0}\", name);\n    println!(\"{1} {0}\", name, cli.url);\n    println!(\"{} {x}\", name, x = 1);\n    println!(\"{:>1$}\", name, 8);\n    println!(\"{}\", \"literal\");\n    println!(\"{}\", |x: u8| x);\n    println!(\"{{}} {}\", name);\n    my_println!(\"{}\", name);\n}\n",
+    )
+    .unwrap();
+    for expected in [
+        "println!(\"Invalid {cli.url}\")",
+        "let file = format!(\"{index + 1:03}.{name}\")",
+        "eprintln!(\"{name} {cli.url:?}\")",
+        "write!(out, \"{cli.url}\").unwrap()",
+        "println!(\"{name} on {cli.url}\")",
+        "println!(\"{0} {0}\", name)",
+        "println!(\"{1} {0}\", name, cli.url)",
+        "println!(\"{} {x}\", name, x = 1)",
+        "println!(\"{:>1$}\", name, 8)",
+        "println!(\"{}\", \"literal\")",
+        "println!(\"{}\", |x: u8| x)",
+        "println!(\"{{}} {name}\")",
+        "my_println!(\"{}\", name)",
+    ] {
+        assert!(output.contains(expected), "missing {expected}\n{output}");
+    }
+}

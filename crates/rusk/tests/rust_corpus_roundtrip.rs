@@ -30,6 +30,7 @@ const CORPUS: &[(&str, &str)] = &[
     ("macro_rules", include_str!("rust_corpus/macro_rules.rs")),
     ("value_blocks", include_str!("rust_corpus/value_blocks.rs")),
     ("idiomatic", include_str!("rust_corpus/idiomatic.rs")),
+    ("format_args", include_str!("rust_corpus/format_args.rs")),
 ];
 
 const RUSK_CORPUS: &[(&str, &str)] = &[

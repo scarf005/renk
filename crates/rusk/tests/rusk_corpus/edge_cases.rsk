@@ -92,3 +92,16 @@ pub fn describe(n: i32) -> &'static str = match n: // trailing comment
         let _ = n
         "max"
     _ => "other"
+
+pub fn format_macros(out: &mut String, names: &[&str]) -> std::fmt::Result:
+    use std::fmt::Write
+    eprintln!("{names.len()} {}", 1)
+    write!(out, "{names.len():>4}")?
+    writeln!(
+        out,
+        "{names.first().copied().unwrap_or_default()}"
+    )?
+    let note = "eprintln!(\"{names.len()}\")"
+    if names.is_empty():
+        panic!("{note.len()}") // eprintln!("{names.len()}")
+    Ok(())
