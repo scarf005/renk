@@ -1,4 +1,4 @@
-use rusk::{rust_to_rusk, transpile};
+use rusk::{ruk_to_rust, rust_to_ruk, rust_to_rusk, transpile};
 
 fn rust(source: &str) -> String {
     transpile(source).unwrap().rust
@@ -202,4 +202,52 @@ fn rust_conversion_keeps_arrows_inside_generic_arguments() {
         output.contains("pub named: HashMap[String, Box[dyn Fn(&str) -> Option[usize]]]\n"),
         "{output}"
     );
+}
+
+#[test]
+fn non_ascii_text_before_a_brace_does_not_panic() {
+    let output = rust("fn f(참: bool) -> i32:\n    if 참 {\n        1\n    } else {\n        2\n    }\n");
+    assert!(output.contains("    if 참 {\n"), "{output}");
+    let _ = transpile("⳥{");
+    assert!(rust_to_rusk("fn f() {\n    let 값 = é {\n    };\n}\n").is_ok());
+}
+
+#[test]
+fn ruk_semicolons_go_before_trailing_comments() {
+    let output = ruk_to_rust("fn main() {\n    let x = 1 // one\n    println!(\"{x}\") // two\n}\n").unwrap();
+    assert!(output.contains("    let x = 1; // one\n"), "{output}");
+    assert!(output.contains("    println!(\"{x}\"); // two\n"), "{output}");
+}
+
+#[test]
+fn ruk_value_blocks_keep_their_tail_expression() {
+    let output = ruk_to_rust(
+        "fn main() {\n    let future = spawn(async {\n        one().await\n    })\n    let doubled = values.iter().map(|value| {\n        value * 2\n    })\n    let chosen = if flag || ready {\n        1\n    } else {\n        2\n    }\n    if flag || ready {\n        values.push(1)\n    }\n}\n",
+    )
+    .unwrap();
+    assert!(output.contains("        one().await\n    });\n"), "{output}");
+    assert!(output.contains("        value * 2\n    });\n"), "{output}");
+    assert!(output.contains("        1\n    } else {\n        2\n    };\n"), "{output}");
+    assert!(output.contains("        values.push(1);\n"), "{output}");
+}
+
+#[test]
+fn rust_to_ruk_keeps_semicolons_inference_cannot_restore() {
+    let source = "fn main() {\n    let chosen = if flag {\n        1\n    } else {\n        2\n    };\n    let block = {\n        3\n    };\n    run();\n}\n";
+    let ruk = rust_to_ruk(source).unwrap();
+    assert!(ruk.contains("    run()\n"), "{ruk}");
+    assert_eq!(ruk_to_rust(&ruk).unwrap(), source);
+}
+
+#[test]
+fn ruk_macro_rules_bodies_are_rust_tokens() {
+    let source = "macro_rules! twice {\n    ($t:expr) => {{\n        $t + $t\n    }};\n}\n";
+    assert_eq!(ruk_to_rust(source).unwrap(), source);
+    assert_eq!(ruk_to_rust(&rust_to_ruk(source).unwrap()).unwrap(), source);
+}
+
+#[test]
+fn ruk_lines_ending_in_an_operator_continue_the_statement() {
+    let output = ruk_to_rust("static TOTAL: i32 =\n    1 +\n    2\n").unwrap();
+    assert_eq!(output, "static TOTAL: i32 =\n    1 +\n    2;\n");
 }

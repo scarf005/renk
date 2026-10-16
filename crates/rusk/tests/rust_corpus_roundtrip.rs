@@ -5,7 +5,7 @@ use std::{
     process::{Command, Stdio},
 };
 
-use rusk::{SourceSyntax, rust_to_rusk, to_rust};
+use rusk::{SourceSyntax, ruk_to_rust, rust_to_ruk, rust_to_rusk, to_rust};
 
 const CORPUS: &[(&str, &str)] = &[
     ("basic_items", include_str!("rust_corpus/basic_items.rs")),
@@ -25,6 +25,7 @@ const CORPUS: &[(&str, &str)] = &[
     ("wrapped_lines", include_str!("rust_corpus/wrapped_lines.rs")),
     ("edge_cases", include_str!("rust_corpus/edge_cases.rs")),
     ("macro_rules", include_str!("rust_corpus/macro_rules.rs")),
+    ("value_blocks", include_str!("rust_corpus/value_blocks.rs")),
 ];
 
 const RUSK_CORPUS: &[(&str, &str)] = &[
@@ -58,6 +59,14 @@ fn rust_corpus_roundtrips_to_compilable_rust() {
             panic!("failed second Rust conversion for corpus case {name}: {error}")
         });
         compile_rust(&out_dir, name, "second-roundtrip", &second_roundtrip);
+
+        let ruk = rust_to_ruk(rust).unwrap_or_else(|error| {
+            panic!("failed to convert corpus case {name} from Rust to Ruk: {error}")
+        });
+        let ruk_rust = ruk_to_rust(&ruk).unwrap_or_else(|error| {
+            panic!("failed to convert corpus case {name} back from Ruk: {error}\nRuk:\n{ruk}")
+        });
+        compile_rust(&out_dir, name, "ruk-roundtrip", &ruk_rust);
     }
 
     let _ = fs::remove_dir_all(out_dir);
