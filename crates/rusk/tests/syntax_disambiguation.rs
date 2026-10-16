@@ -1,4 +1,4 @@
-use rusk::{ruk_to_rust, rust_to_ruk, rust_to_rusk, transpile};
+use rusk::{FormatOptions, format_source, ruk_to_rust, rust_to_ruk, rust_to_rusk, transpile};
 
 fn rust(source: &str) -> String {
     transpile(source).unwrap().rust
@@ -261,4 +261,18 @@ fn rust_brace_else_lines_continue_the_brace_chain() {
     );
     let output = rust("fn pick(a: bool) -> usize:\n    let v = if a {\n        vec![1]\n    } else {\n        vec![]\n    }\n    v.len()\n");
     assert!(output.contains("    }\n    else {\n        vec![]\n    };\n"), "{output}");
+}
+
+#[test]
+fn multiline_string_contents_survive_every_conversion() {
+    let literal = "\"a  \nb // c;\n  d\"";
+    let rusk = format!("fn main():\n    let s = {literal}\n    println!(\"{{s}}\")\n");
+    let expected = format!("fn main() {{\n    let s = {literal};\n    println!(\"{{}}\", s);\n}}\n");
+    let ruk = format!("fn main() {{\n    let s = {literal}\n    println!(\"{{s}}\")\n}}\n");
+
+    assert_eq!(rust(&rusk), expected);
+    assert_eq!(format_source(&rusk, FormatOptions::default()).unwrap(), rusk);
+    assert!(rust_to_rusk(&expected).unwrap().contains(literal));
+    assert!(ruk_to_rust(&ruk).unwrap().contains(&format!("let s = {literal};\n")));
+    assert!(rust_to_ruk(&expected).unwrap().contains(&format!("let s = {literal}\n")));
 }
