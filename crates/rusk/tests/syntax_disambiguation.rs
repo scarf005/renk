@@ -283,3 +283,25 @@ fn ruk_continuation_lines_extend_the_statement() {
     let output = ruk_to_rust(source).unwrap();
     assert!(output.contains("    let v = parse()\n        ?\n        .len();\n"), "{output}");
 }
+
+#[test]
+fn unclosed_groups_and_literals_at_end_of_file_are_errors() {
+    for (source, line) in [
+        ("fn main():\n    let x = (\n", 2),
+        ("fn main():\n    let x = [\n        1,\n", 2),
+        ("fn main():\n    let s = \"open\n", 2),
+        ("fn main():\n    let s = r#\"open\"\n", 2),
+        ("fn main():\n    /* open\n", 2),
+        ("fn main():\n    let x =\n", 2),
+    ] {
+        let error = transpile(source).expect_err(source);
+        assert_eq!(error.line, line, "{source:?}: {error}");
+    }
+    assert!(transpile("fn main():\n    let x = (\n        1\n    )\n").is_ok());
+}
+
+#[test]
+fn block_headers_without_a_body_emit_an_empty_block() {
+    assert_eq!(rust("fn main():\n"), "fn main() {\n}\n");
+    assert_eq!(rust("impl A:\n    fn f(&self):\n"), "impl A {\n    fn f(&self) {\n    }\n}\n");
+}
