@@ -293,6 +293,7 @@ fn unclosed_groups_and_literals_at_end_of_file_are_errors() {
         ("fn main():\n    let s = r#\"open\"\n", 2),
         ("fn main():\n    /* open\n", 2),
         ("fn main():\n    let x =\n", 2),
+        ("fn main():\n    let x = // value\n\n", 2),
     ] {
         let error = transpile(source).expect_err(source);
         assert_eq!(error.line, line, "{source:?}: {error}");
