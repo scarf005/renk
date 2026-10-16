@@ -2142,7 +2142,97 @@ fn lower_field_or_variant(text: &str) -> String {
 }
 
 fn lower_expr(text: &str) -> String {
-    lower_if_then_else(text).unwrap_or_else(|| lower_basic_expr(text))
+    let (text, inline_ifs) = extract_argument_inline_ifs(text);
+    inline_ifs
+        .iter()
+        .enumerate()
+        .fold(lower_expr_head(&text), |lowered, (index, inline_if)| {
+            lowered.replacen(&inline_if_placeholder(index), &lower_expr(inline_if), 1)
+        })
+}
+
+fn inline_if_placeholder(index: usize) -> String {
+    format!("__rusk_inline_if_{index}")
+}
+
+/// Replaces each `if c then a else b` argument or element, which runs from a `(`/`[`/`,` to the
+/// next top-level `,` or closing delimiter, with a placeholder; macro bodies stay Rust syntax.
+fn extract_argument_inline_ifs(text: &str) -> (String, Vec<String>) {
+    let chars = text.chars().collect::<Vec<_>>();
+    let mut output = String::new();
+    let mut inline_ifs = Vec::new();
+    let mut index = 0usize;
+    while index < chars.len() {
+        if let Some(end) =
+            opaque_span_end(&chars, index).or_else(|| macro_invocation_end(&chars, index))
+        {
+            output.extend(chars[index..=end].iter());
+            index = end + 1;
+            continue;
+        }
+        let is_argument = keyword_at(&chars, index, "if")
+            && chars[..index]
+                .iter()
+                .rfind(|character| !character.is_whitespace())
+                .is_some_and(|character| matches!(character, '(' | '[' | ','));
+        if is_argument {
+            let end = argument_end(&chars, index);
+            let inline_if = chars[index..end].iter().collect::<String>();
+            if lower_if_then_else(inline_if.trim_end()).is_some() {
+                output.push_str(&inline_if_placeholder(inline_ifs.len()));
+                output.push_str(&inline_if[inline_if.trim_end().len()..]);
+                inline_ifs.push(inline_if.trim_end().to_string());
+                index = end;
+                continue;
+            }
+        }
+        output.push(chars[index]);
+        index += 1;
+    }
+    (output, inline_ifs)
+}
+
+/// End of the argument starting at `start`: the next `,` or `;` at its depth, or the closing
+/// delimiter of its group.
+fn argument_end(chars: &[char], start: usize) -> usize {
+    let mut depth = 0usize;
+    let mut index = start;
+    while index < chars.len() {
+        if let Some(end) =
+            opaque_span_end(chars, index).or_else(|| macro_invocation_end(chars, index))
+        {
+            index = end + 1;
+            continue;
+        }
+        match chars[index] {
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' | ',' | ';' if depth == 0 => return index,
+            ')' | ']' | '}' => depth -= 1,
+            _ => {}
+        }
+        index += 1;
+    }
+    chars.len()
+}
+
+fn lower_expr_head(text: &str) -> String {
+    if let Some(lowered) = lower_if_then_else(text) {
+        return lowered;
+    }
+    // `let x = if c then a else b`, `return if ...`, `x => if ...`; arguments are extracted
+    // by `extract_argument_inline_ifs`.
+    if let Some(at) = find_top_level_keyword(text, "if") {
+        let before = text[..at].trim_end();
+        if (before.ends_with(['=', '>'])
+            || before
+                .strip_suffix("return")
+                .is_some_and(|rest| !rest.ends_with(is_ident_continue)))
+            && let Some(lowered) = lower_if_then_else(&text[at..])
+        {
+            return format!("{}{}", lower_basic_expr(&text[..at]), lowered);
+        }
+    }
+    lower_basic_expr(text)
 }
 
 fn is_multiline_closure_head(text: &str) -> bool {

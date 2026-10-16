@@ -110,6 +110,16 @@ fn let_and_closure_annotations_are_type_positions() {
 }
 
 #[test]
+fn inline_if_lowers_after_bindings_and_returns() {
+    let output = rust(
+        "fn pick(c: bool) -> i32:\n    let x = if c then 1 else 2\n    let y =\n        if c then 3 else 4\n    return if x > y then x else y\n",
+    );
+    assert!(output.contains("let x = if c { 1 } else { 2 };"));
+    assert!(output.contains("let y =\n        if c { 3 } else { 4 };"));
+    assert!(output.contains("return if x > y { x } else { y };"));
+}
+
+#[test]
 fn uppercase_operand_before_block_opener_is_not_a_struct_literal() {
     let output = rust_to_rusk(
         "fn pick(n: i32) -> i32 {\n    let x = match MODE {\n        1 => 10,\n        _ => 0,\n    };\n    if n > MAX {\n        1\n    } else {\n        x\n    }\n}\n",
