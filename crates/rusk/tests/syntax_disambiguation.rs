@@ -276,3 +276,10 @@ fn multiline_string_contents_survive_every_conversion() {
     assert!(ruk_to_rust(&ruk).unwrap().contains(&format!("let s = {literal};\n")));
     assert!(rust_to_ruk(&expected).unwrap().contains(&format!("let s = {literal}\n")));
 }
+
+#[test]
+fn ruk_continuation_lines_extend_the_statement() {
+    let source = "fn f() -> Result<usize, E> {\n    let v = parse()\n        ?\n        .len()\n    Ok(v)\n}\n";
+    let output = ruk_to_rust(source).unwrap();
+    assert!(output.contains("    let v = parse()\n        ?\n        .len();\n"), "{output}");
+}
