@@ -79,6 +79,10 @@ fn pick(참: bool) -> i32 {
     if 참 { 1 } else { 2 }
 }
 
+fn long_body(values: &[i32]) -> std::io::Result<Vec<String>> {
+    Ok(values.iter().map(|value| value.to_string()).collect::<Vec<_>>())
+}
+
 fn last_call(counter: &mut Counter) {
     counter.add("x");
 }
@@ -93,4 +97,5 @@ fn main() {
     println!("{counter} {}", kind_name(&Kind::Pair(1, 2)));
     println!("{:?} {:?} {}", units(&[1]), checked(1), pick(true));
     let _ = read("/nonexistent");
+    let _ = long_body(&[1]);
 }
