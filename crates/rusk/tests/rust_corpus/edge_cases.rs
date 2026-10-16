@@ -52,3 +52,31 @@ pub fn let_else(v: Option<i32>) -> i32 {
         x
     }
 }
+
+pub fn trailing_if(n: i32) -> i32 {
+    let size = if n > 10 {
+        1
+    } else if n < 0 {
+        // let a = if b {
+        2
+    } else {
+        3
+    };
+    let t = if n > 0 { 1 } else { 2 };
+    let mut total = if i32::MAX > n {
+        let inner = if n % 2 == 0 {
+            n
+        } else {
+            -n
+        };
+        inner
+    } else {
+        0
+    };
+    total += if size == t { 1 } else { 0 };
+    return if total == 0 {
+        size + t
+    } else {
+        total
+    };
+}

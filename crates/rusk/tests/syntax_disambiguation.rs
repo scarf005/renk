@@ -452,3 +452,51 @@ fn rust_conversion_writes_let_else_blocks_with_a_colon() {
         "{output}"
     );
 }
+
+#[test]
+fn trailing_if_owns_a_colon_block_chain() {
+    let output = rust(
+        "struct S;\nimpl S:\n    const BIG: i32 = 5\n    fn f(n: i32) -> i32:\n        let size = if n > 10:\n            1\n        else if n < 0: // negative\n            2\n        else:\n            3\n        let s = \"let a = if b:\" // let c = if d:\n        let t = if n > 0 then 1 else 2\n        let mut total = 0\n        total += if Self::BIG < n:\n            let inner = if n % 2 == 0:\n                n\n            else:\n                -n\n            inner\n        else:\n            0\n        let notif = size\n        return if total == 0:\n            notif + t\n        else:\n            s.len() as i32\n",
+    );
+    assert!(
+        output.contains(
+            "        let size = if n > 10 {\n            1\n        } else if n < 0 { // negative\n            2\n        } else {\n            3\n        };\n"
+        ),
+        "{output}"
+    );
+    assert!(
+        output.contains("let s = \"let a = if b:\"; // let c = if d:"),
+        "{output}"
+    );
+    assert!(
+        output.contains(
+            "        total += if Self::BIG < n {\n            let inner = if n % 2 == 0 {\n                n\n            } else {\n                -n\n            };\n            inner\n        } else {\n            0\n        };\n"
+        ),
+        "{output}"
+    );
+    assert!(
+        output.contains(
+            "        return if total == 0 {\n            notif + t\n        } else {\n            s.len() as i32\n        };\n"
+        ),
+        "{output}"
+    );
+}
+
+#[test]
+fn rust_conversion_writes_trailing_if_blocks_with_a_colon() {
+    let output = rust_to_rusk(
+        "fn f(n: i32) -> i32 {\n    let size = if n > 10 {\n        1\n    } else if n < 0 {\n        2\n    } else {\n        3\n    };\n    let t = if n > 0 { 1 } else { 2 };\n    return if size == t {\n        let inner = if n % 2 == 0 {\n            n\n        } else {\n            -n\n        };\n        inner\n    } else {\n        t\n    };\n}\n",
+    )
+    .unwrap();
+    assert!(
+        output.contains("    let size = if n > 10:\n        1\n    else if n < 0:\n        2\n    else:\n        3\n"),
+        "{output}"
+    );
+    assert!(output.contains("let t = if n > 0 then 1 else 2"), "{output}");
+    assert!(
+        output.contains(
+            "    return if size == t:\n        let inner = if n % 2 == 0:\n            n\n        else:\n            -n\n        inner\n    else:\n        t\n"
+        ),
+        "{output}"
+    );
+}
