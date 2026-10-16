@@ -409,3 +409,46 @@ fn rust_conversion_inlines_format_arguments_used_once_in_order() {
         assert!(output.contains(expected), "missing {expected}\n{output}");
     }
 }
+
+#[test]
+fn let_else_owns_a_colon_block() {
+    let output = rust(
+        "fn f(v: Option<i32>) -> i32:\n    let Some(x) = v else:\n        return 0\n    let s = \"let a = b else:\" // let c = d else:\n    let Some(y) = v.map(|n| n + 1) else: // none\n        eprintln!(\"none\")\n        return 1\n    if x > y:\n        let Some(z) = v else:\n            return 2\n        z\n    else:\n        x\n",
+    );
+    assert!(
+        output.contains("    let Some(x) = v else {\n        return 0;\n    };\n"),
+        "{output}"
+    );
+    assert!(
+        output.contains("let s = \"let a = b else:\"; // let c = d else:"),
+        "{output}"
+    );
+    assert!(
+        output.contains(
+            "    let Some(y) = v.map(|n| n + 1) else { // none\n        eprintln!(\"none\");\n        return 1;\n    };\n"
+        ),
+        "{output}"
+    );
+    assert!(
+        output.contains(
+            "        let Some(z) = v else {\n            return 2;\n        };\n        z\n"
+        ),
+        "{output}"
+    );
+}
+
+#[test]
+fn rust_conversion_writes_let_else_blocks_with_a_colon() {
+    let output = rust_to_rusk(
+        "fn f(v: Option<i32>) -> i32 {\n    let Some(x) = v else {\n        return 0;\n    };\n    let Some(y) = v else { return 1 };\n    x + y\n}\n",
+    )
+    .unwrap();
+    assert!(
+        output.contains("    let Some(x) = v else:\n        return 0\n"),
+        "{output}"
+    );
+    assert!(
+        output.contains("let Some(y) = v else { return 1 }"),
+        "{output}"
+    );
+}

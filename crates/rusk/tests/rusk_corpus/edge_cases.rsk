@@ -105,3 +105,16 @@ pub fn format_macros(out: &mut String, names: &[&str]) -> std::fmt::Result:
     if names.is_empty():
         panic!("{note.len()}") // eprintln!("{names.len()}")
     Ok(())
+
+pub fn let_else(v: Option<i32>) -> i32:
+    let Some(x) = v else:
+        return 0
+    let s = "let a = b else:" // let c = d else:
+    let Some(y) = v.map(|n| n + s.len() as i32) else: // none
+        return 1
+    if x > y:
+        let Some(z) = v else:
+            return 2
+        z
+    else:
+        x

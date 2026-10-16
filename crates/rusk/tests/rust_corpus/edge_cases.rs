@@ -36,3 +36,19 @@ semicolon; // not a comment
 "#;
     text.len() + raw.len()
 }
+
+pub fn let_else(v: Option<i32>) -> i32 {
+    let Some(x) = v else {
+        return 0;
+    };
+    let Some(y) = v.map(|n| n + 1) else { return 1 };
+    if x > y {
+        let Some(z) = v else {
+            eprintln!("none"); // let a = b else {
+            return 2;
+        };
+        z
+    } else {
+        x
+    }
+}
