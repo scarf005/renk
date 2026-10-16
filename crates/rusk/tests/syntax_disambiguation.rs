@@ -411,6 +411,22 @@ fn rust_conversion_inlines_format_arguments_used_once_in_order() {
 }
 
 #[test]
+fn rust_conversion_inlines_uppercase_format_receivers_in_parentheses() {
+    let output = rust_to_rusk(
+        "static NAME: &str = \"a\";\nstatic NAMES: [&str; 1] = [\"a\"];\nfn f(name: &str) -> String {\n    println!(\"{} {}\", NAME.len(), name);\n    println!(\"{:?} {}\", NAMES[0].len(), NAMES.len());\n    println!(\"{} {}\", NAME, a::NAME.len());\n    format!(\n        \"Expected {} but \\\"{}\\\"\",\n        NAME.len(),\n        name\n    )\n}\n",
+    )
+    .unwrap();
+    for expected in [
+        "println!(\"{(NAME).len()} {name}\")",
+        "println!(\"{(NAMES)[0].len():?} {(NAMES).len()}\")",
+        "println!(\"{NAME} {a::NAME.len()}\")",
+        "format!(\"Expected {(NAME).len()} but \\\"{name}\\\"\")",
+    ] {
+        assert!(output.contains(expected), "missing {expected}\n{output}");
+    }
+}
+
+#[test]
 fn let_else_owns_a_colon_block() {
     let output = rust(
         "fn f(v: Option<i32>) -> i32:\n    let Some(x) = v else:\n        return 0\n    let s = \"let a = b else:\" // let c = d else:\n    let Some(y) = v.map(|n| n + 1) else: // none\n        eprintln!(\"none\")\n        return 1\n    if x > y:\n        let Some(z) = v else:\n            return 2\n        z\n    else:\n        x\n",

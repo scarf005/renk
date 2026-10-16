@@ -1,5 +1,8 @@
 use std::fmt::Write;
 
+static NAME: &str = "a";
+static NAMES: [&str; 1] = ["a"];
+
 pub struct Cli {
     pub url: String,
 }
@@ -21,7 +24,13 @@ pub fn format_args(cli: &Cli, index: usize, name: &str, out: &mut String) -> std
     println!("{:>1$}", name, 8);
     println!("{}", "literal");
     println!("{{}} {}", name);
+    println!("{} {:?} {}", NAME.len(), NAMES[0].len(), NAMES.len());
+    let error = format!(
+        "Expected {} but \"{}\"",
+        NAME.len(),
+        name
+    );
     let shown = format!("{}", (|x: u8| x)(1));
-    println!("{shown}");
+    println!("{shown} {error}");
     Ok(())
 }
