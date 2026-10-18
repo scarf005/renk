@@ -77,6 +77,23 @@ fn rust_conversion_parenthesizes_camel_case_path_value_receivers() {
 }
 
 #[test]
+fn ruk_delimiter_depth_ignores_comments_and_literals() {
+    let output = ruk_to_rust(
+        "fn f() -> usize {\n    let a = 1 // see (\n    let b = '('\n    let c = r#\"\"(\"#\n    let d = std::cmp::max(\n        a,\n        2,\n    )\n    a + d\n}\n",
+    )
+    .unwrap();
+    for expected in [
+        "    let a = 1; // see (\n",
+        "    let b = '(';\n",
+        "    let c = r#\"\"(\"#;\n",
+        "    let d = std::cmp::max(\n",
+        "    );\n",
+    ] {
+        assert!(output.contains(expected), "missing {expected:?}\n{output}");
+    }
+}
+
+#[test]
 fn macro_attribute_and_literal_tokens_are_opaque() {
     let output = rust(
         r##"#[query(table.column, Vec<T>)]
