@@ -161,43 +161,45 @@ fn run_cargo_wrapper(raw_args: Vec<String>) -> Result<i32, Box<dyn std::error::E
 fn run_script(raw_args: Vec<String>) -> Result<i32, Box<dyn std::error::Error>> {
     let mut raw_args = raw_args.into_iter().skip(1).peekable();
     let no_cargo = raw_args.next_if(|arg| arg == "--no-cargo").is_some();
-    let Some(source_path) = raw_args.next().map(PathBuf::from) else {
+    let Some(script_path) = raw_args.next().map(PathBuf::from) else {
         return Err("script requires an input path".into());
     };
-    let source = fs::read_to_string(&source_path)?;
-    let rust = script_rust(&source, source_syntax(Some(&source_path)))
-        .map_err(|error| format!("{}: {error}", source_path.display()))?;
+    let source = fs::read_to_string(&script_path)?;
+    let script = script_rust(&source, source_syntax(Some(&script_path)))
+        .map_err(|error| format!("{}: {error}", script_path.display()))?;
     let cache_root = env::var_os("XDG_CACHE_HOME")
         .map(PathBuf::from)
         .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache")))
         .ok_or("script requires XDG_CACHE_HOME or HOME")?
         .join("rusk/scripts");
-    let source_path = fs::canonicalize(&source_path)?;
+    let source_path = fs::canonicalize(&script_path)?;
     let rust_path = script_cache_path(&cache_root, &source_path);
-    write_script_cache(&rust_path, &rust)?;
-    if no_cargo {
+    write_script_cache(&rust_path, &script.rust)?;
+    let build = || build_script(&rust_path, &script_path, &script.source_lines);
+    let binary = if no_cargo {
         let binary = rust_path.with_extension("");
         if !is_newer(&binary, &rust_path) {
-            let code = build_script_binary(&rust_path, &binary)?;
-            if code != 0 {
-                return Ok(code);
-            }
+            let executable = match build()? {
+                Ok(executable) => executable,
+                Err(code) => return Ok(code),
+            };
+            let staged = rust_path.with_extension(format!("{}.tmp", process::id()));
+            fs::copy(executable, &staged)?;
+            fs::rename(staged, &binary)?;
         }
-        let mut command = Command::new(&binary);
-        command.env("RUSK_SCRIPT", &source_path).args(raw_args);
-        #[cfg(unix)]
-        return Err(std::os::unix::process::CommandExt::exec(&mut command).into());
-        #[cfg(not(unix))]
-        return Ok(command.status()?.code().unwrap_or(1));
-    }
-    let status = Command::new("cargo")
-        .args(["+nightly", "-Zscript", "--quiet"])
-        .arg(&rust_path)
-        .env("RUSK_SCRIPT", &source_path)
-        .args(raw_args)
-        .status()?;
-
-    Ok(status.code().unwrap_or(1))
+        binary
+    } else {
+        match build()? {
+            Ok(executable) => executable,
+            Err(code) => return Ok(code),
+        }
+    };
+    let mut command = Command::new(&binary);
+    command.env("RUSK_SCRIPT", &source_path).args(raw_args);
+    #[cfg(unix)]
+    return Err(std::os::unix::process::CommandExt::exec(&mut command).into());
+    #[cfg(not(unix))]
+    return Ok(command.status()?.code().unwrap_or(1));
 }
 
 fn is_newer(path: &Path, than: &Path) -> bool {
@@ -205,34 +207,190 @@ fn is_newer(path: &Path, than: &Path) -> bool {
     matches!((modified(path), modified(than)), (Ok(path), Ok(than)) if path > than)
 }
 
-/// Builds the cached script with cargo-script and copies its executable next to the cached Rust,
-/// so `--no-cargo` runs can exec it without cargo until the Rust changes. scriptr does the same
-/// but ships only as a binary, which would make rusk scripts need a second launcher installed.
-fn build_script_binary(rust_path: &Path, binary: &Path) -> Result<i32, Box<dyn std::error::Error>> {
-    let output = Command::new("cargo")
+/// Builds the cached script with cargo-script and returns its executable, or cargo's exit code.
+/// `--no-cargo` runs copy the executable next to the cached Rust and exec it without cargo until
+/// the Rust changes; scriptr does the same but ships only as a binary, which would make rusk
+/// scripts need a second launcher installed. Compiler diagnostics are printed at script lines.
+fn build_script(
+    rust_path: &Path,
+    script_path: &Path,
+    source_lines: &[(usize, bool)],
+) -> Result<Result<PathBuf, i32>, Box<dyn std::error::Error>> {
+    let mut cargo = Command::new("cargo")
         .args(["+nightly", "-Zscript", "build", "--quiet"])
-        .arg("--message-format=json-render-diagnostics")
+        .arg(if io::stderr().is_terminal() {
+            "--message-format=json-diagnostic-rendered-ansi"
+        } else {
+            "--message-format=json"
+        })
         .arg("--manifest-path")
         .arg(rust_path)
-        .stderr(process::Stdio::inherit())
-        .output()?;
-    if !output.status.success() {
-        return Ok(output.status.code().unwrap_or(1));
+        .stdout(process::Stdio::piped())
+        .spawn()?;
+    let rust_file = rust_path.file_name().unwrap_or_default().to_string_lossy();
+    let mut executable = None;
+    // Messages are read as cargo writes them so diagnostics precede cargo's own stderr summary.
+    let messages = io::BufReader::new(cargo.stdout.take().ok_or("cargo has no stdout")?);
+    for message in io::BufRead::lines(messages)
+        .map_while(Result::ok)
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(&line).ok())
+    {
+        if let Some(rendered) = message["message"]["rendered"].as_str() {
+            let diagnostic = ScriptDiagnostic {
+                rust_file: &rust_file,
+                script: &script_path.display().to_string(),
+                source_lines,
+            };
+            eprint!("{}", diagnostic.remap(rendered));
+        }
+        if let Some(path) = message["executable"].as_str() {
+            executable = Some(PathBuf::from(path));
+        }
     }
-    let executable = String::from_utf8(output.stdout)?
-        .lines()
-        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
-        .find_map(|message| message["executable"].as_str().map(PathBuf::from))
-        .ok_or("cargo built no script executable")?;
-    let staged = rust_path.with_extension(format!("{}.tmp", process::id()));
-    fs::copy(executable, &staged)?;
-    fs::rename(staged, binary)?;
-    Ok(0)
+    let status = cargo.wait()?;
+    if !status.success() {
+        return Ok(Err(status.code().unwrap_or(1)));
+    }
+    Ok(Ok(executable.ok_or("cargo built no script executable")?))
+}
+
+/// Rewrites a rendered rustc diagnostic about the generated Rust file to name the script and its
+/// lines: `--> file.rs:L:C` locations and the snippet's line-number gutter.
+struct ScriptDiagnostic<'a> {
+    rust_file: &'a str,
+    script: &'a str,
+    source_lines: &'a [(usize, bool)],
+}
+
+impl ScriptDiagnostic<'_> {
+    fn remap(&self, rendered: &str) -> String {
+        let lines = rendered.split_inclusive('\n').collect::<Vec<_>>();
+        // Each line's rewritten location or gutter line number; numbers map only in script sections.
+        let mut in_script = false;
+        let remapped = lines
+            .iter()
+            .map(|line| {
+                if let Some(location) = self.location(line) {
+                    in_script = true;
+                    return Remapped::Location(location);
+                }
+                if line.contains("--> ") || line.contains("::: ") {
+                    in_script = false;
+                }
+                let Some((start, end)) = gutter_number(line) else {
+                    return Remapped::Line;
+                };
+                let number = &line[start..end];
+                let number = match number.parse::<usize>() {
+                    Ok(number) if in_script => match self.source_lines.get(number - 1) {
+                        Some((_, true)) => String::new(),
+                        _ => self.source_line(number).to_string(),
+                    },
+                    _ => number.to_string(),
+                };
+                Remapped::Gutter(end, number)
+            })
+            .collect::<Vec<_>>();
+        let width = lines
+            .iter()
+            .zip(&remapped)
+            .filter_map(|(line, remapped)| match remapped {
+                Remapped::Gutter(end, _) => Some(end - ansi_prefix_len(line)),
+                _ => None,
+            })
+            .max()
+            .unwrap_or(0);
+        let new_width = remapped
+            .iter()
+            .filter_map(|remapped| match remapped {
+                Remapped::Gutter(_, number) => Some(number.len()),
+                _ => None,
+            })
+            .fold(width, usize::max);
+        let indent = " ".repeat(new_width - width);
+        let mut output = String::new();
+        for (line, remapped) in lines.into_iter().zip(remapped) {
+            match remapped {
+                Remapped::Location(location) => output.push_str(&(indent.clone() + &location)),
+                Remapped::Gutter(end, number) => {
+                    output.push_str(&line[..ansi_prefix_len(line)]);
+                    output.push_str(&format!("{number:>new_width$}"));
+                    output.push_str(&line[end..]);
+                }
+                Remapped::Line if line[ansi_prefix_len(line)..].starts_with(' ') => {
+                    output.push_str(&(indent.clone() + line));
+                }
+                Remapped::Line => output.push_str(line),
+            }
+        }
+        output
+    }
+
+    fn source_line(&self, line: usize) -> usize {
+        self.source_lines
+            .get(line - 1)
+            .map_or(line, |&(source_line, _)| source_line)
+    }
+
+    /// A `--> file.rs:L:C` or `::: file.rs:L:C` line naming the generated file, at the script line.
+    fn location(&self, line: &str) -> Option<String> {
+        let (head, rest) = ["--> ", "::: "].iter().find_map(|arrow| {
+            line.split_once(arrow)
+                .map(|(head, rest)| (&line[..head.len() + arrow.len()], rest))
+        })?;
+        let (style, path) = rest.split_at(ansi_prefix_len(rest));
+        let (number, column) = path
+            .strip_prefix(self.rust_file)?
+            .strip_prefix(':')?
+            .split_once(':')?;
+        let number = self.source_line(number.parse().ok()?);
+        Some(format!("{head}{style}{}:{number}:{column}", self.script))
+    }
+}
+
+enum Remapped {
+    Location(String),
+    /// The end of the gutter line number and the number to show instead.
+    Gutter(usize, String),
+    Line,
+}
+
+/// The byte range of a snippet gutter's line number: `{line:>width} |` (or `+`, `-`, `~` in
+/// suggestions), possibly after ANSI styling.
+fn gutter_number(line: &str) -> Option<(usize, usize)> {
+    let styled = ansi_prefix_len(line);
+    let start = line.len() - line[styled..].trim_start_matches(' ').len();
+    let digits = line[start..].find(|character: char| !character.is_ascii_digit())?;
+    (digits > 0 && line[start + digits..].starts_with([' ', '\x1b']))
+        .then_some((start, start + digits))
+}
+
+/// The length of the ANSI SGR escapes at the start of `text`.
+fn ansi_prefix_len(text: &str) -> usize {
+    let mut index = 0;
+    while let Some(end) = text[index..]
+        .strip_prefix("\x1b[")
+        .and_then(|rest| rest.find('m'))
+    {
+        index += end + 3;
+    }
+    index
+}
+
+/// A script's generated Rust and, for each 1-based Rust line, the script line it came from and
+/// whether rusk synthesized it, like a closing brace.
+#[derive(Debug)]
+struct ScriptRust {
+    rust: String,
+    source_lines: Vec<(usize, bool)>,
 }
 
 /// Transpiles a single-file script, keeping the cargo-script frontmatter in front of the generated
 /// Rust. Header lines become blank lines so transpile errors keep the script's line numbers.
-fn script_rust(source: &str, syntax: SourceSyntax) -> Result<String, Box<dyn std::error::Error>> {
+fn script_rust(
+    source: &str,
+    syntax: SourceSyntax,
+) -> Result<ScriptRust, Box<dyn std::error::Error>> {
     let lines = source.split_inclusive('\n').collect::<Vec<_>>();
     let mut body_start = usize::from(
         lines
@@ -240,6 +398,7 @@ fn script_rust(source: &str, syntax: SourceSyntax) -> Result<String, Box<dyn std
             .is_some_and(|line| line.starts_with("#!") && !line.starts_with("#![")),
     );
     let mut frontmatter = format!("---\n{}---\n", with_edition(""));
+    let mut frontmatter_line = 1;
     let fence_start = (body_start..lines.len()).find(|&index| !lines[index].trim().is_empty());
     if let Some(start) = fence_start.filter(|&index| lines[index].starts_with("---")) {
         let fence = &lines[start][..lines[start].len() - lines[start].trim_start_matches('-').len()];
@@ -250,11 +409,38 @@ fn script_rust(source: &str, syntax: SourceSyntax) -> Result<String, Box<dyn std
         frontmatter = lines[start].to_string() + &with_edition(&lines[start + 1..end].concat());
         frontmatter += lines[end].trim_end();
         frontmatter.push('\n');
+        frontmatter_line = start + 1;
         body_start = end + 1;
     }
 
     let body = "\n".repeat(body_start) + &lines[body_start..].concat();
-    Ok(frontmatter + &to_rust(&body, syntax)?)
+    let (rust, body_lines) = if syntax == SourceSyntax::Rusk {
+        let output = transpile(&body)?;
+        let lines = (1..=output.rust.lines().count())
+            .map(|line| {
+                let written = output
+                    .source_map
+                    .iter()
+                    .any(|entry| entry.generated_line == line);
+                (output.source_line(line).unwrap_or(line), !written)
+            })
+            .collect::<Vec<_>>();
+        (output.rust, lines)
+    } else {
+        let rust = to_rust(&body, syntax)?;
+        let lines = (1..=rust.lines().count())
+            .map(|line| (line, false))
+            .collect();
+        (rust, lines)
+    };
+    let source_lines = (0..frontmatter.lines().count())
+        .map(|offset| ((frontmatter_line + offset).min(body_start.max(1)), false))
+        .chain(body_lines)
+        .collect();
+    Ok(ScriptRust {
+        rust: frontmatter + &rust,
+        source_lines,
+    })
 }
 
 /// The edition rusk's generated Rust is written for, pinned in scripts that do not name one so
@@ -488,7 +674,7 @@ fn ensure_cli_trailing_newline(source: &str) -> String {
 
 fn print_help() {
     println!(
-        "rusk - indentation-based Rust syntax transpiler\n\nUSAGE:\n    rusk [transpile] [INPUT.rsk|INPUT.rk] [-o OUTPUT.rs] [--source-map SOURCE_MAP]\n    rusk from-rust [INPUT.rs] [-o OUTPUT.rsk] [--aggressive]\n    rusk to-ruk [INPUT.rs|INPUT.rsk] [-o OUTPUT.rk]\n    rusk fmt [INPUT.rsk|INPUT.rk] [-o INPUT] [--line-width N]\n    rusk [cargo] <CARGO_COMMAND> [CARGO_ARGS...]\n    rusk script [--no-cargo] <SCRIPT.rsk|SCRIPT.rk> [ARGS...]\n\nScripts keep their cargo-script frontmatter (defaulting package.edition to 2024), are transpiled to $XDG_CACHE_HOME/rusk/scripts, and run with cargo +nightly -Zscript and RUSK_SCRIPT set to the script path; use #!/usr/bin/env -S rusk script as the shebang. --no-cargo execs the binary cached next to the generated Rust, building it with cargo only when the Rust changed; dependency and toolchain updates then need an edit to the script.\n\nCargo wrapper commands transpile Cargo source roots (*.rsk and *.rk under src, examples, tests, benches, plus build.rsk/build.rk) to cached generated .rs files, then run cargo.\n\nExamples:\n    rusk from-rust src/main.rs -o src/main.rsk\n    rusk to-ruk src/main.rs -o src/main.rk\n    rusk fmt src/main.rsk -o src/main.rsk\n    rusk run\n    rusk cargo fmt\n    rusk cargo test\n\nIf INPUT is omitted, rusk reads source from stdin when stdin is piped; otherwise it prints this help."
+        "rusk - indentation-based Rust syntax transpiler\n\nUSAGE:\n    rusk [transpile] [INPUT.rsk|INPUT.rk] [-o OUTPUT.rs] [--source-map SOURCE_MAP]\n    rusk from-rust [INPUT.rs] [-o OUTPUT.rsk] [--aggressive]\n    rusk to-ruk [INPUT.rs|INPUT.rsk] [-o OUTPUT.rk]\n    rusk fmt [INPUT.rsk|INPUT.rk] [-o INPUT] [--line-width N]\n    rusk [cargo] <CARGO_COMMAND> [CARGO_ARGS...]\n    rusk script [--no-cargo] <SCRIPT.rsk|SCRIPT.rk> [ARGS...]\n\nScripts keep their cargo-script frontmatter (defaulting package.edition to 2024), are transpiled to $XDG_CACHE_HOME/rusk/scripts, built with cargo +nightly -Zscript, and run with RUSK_SCRIPT set to the script path; compiler diagnostics point at script lines; use #!/usr/bin/env -S rusk script as the shebang. --no-cargo execs the binary cached next to the generated Rust, building it with cargo only when the Rust changed; dependency and toolchain updates then need an edit to the script.\n\nCargo wrapper commands transpile Cargo source roots (*.rsk and *.rk under src, examples, tests, benches, plus build.rsk/build.rk) to cached generated .rs files, then run cargo.\n\nExamples:\n    rusk from-rust src/main.rs -o src/main.rsk\n    rusk to-ruk src/main.rs -o src/main.rk\n    rusk fmt src/main.rsk -o src/main.rsk\n    rusk run\n    rusk cargo fmt\n    rusk cargo test\n\nIf INPUT is omitted, rusk reads source from stdin when stdin is piped; otherwise it prints this help."
     );
 }
 
@@ -563,7 +749,7 @@ mod tests {
     fn script_rust_keeps_frontmatter_first_and_drops_the_shebang() {
         let source = "#!/usr/bin/env -S rusk script\n---\n[dependencies]\nregex = \"1\"\n---\n\nfn main():\n    println!(\"hi\")\n";
 
-        let rust = script_rust(source, SourceSyntax::Rusk).unwrap();
+        let rust = script_rust(source, SourceSyntax::Rusk).unwrap().rust;
         assert!(rust.starts_with(
             "---\n[dependencies]\nregex = \"1\"\n\n[package]\nedition = \"2024\"\n---\n"
         ));
@@ -575,7 +761,7 @@ mod tests {
     fn script_rust_treats_inner_attributes_and_later_dashes_as_body() {
         let source = "#![allow(unused)]\nfn main():\n    let s = \"\n---\n\"\n    print!(\"{s}\")\n";
 
-        let rust = script_rust(source, SourceSyntax::Rusk).unwrap();
+        let rust = script_rust(source, SourceSyntax::Rusk).unwrap().rust;
         assert!(rust.starts_with("---\n[package]\nedition = \"2024\"\n---\n#![allow(unused)]"));
         assert!(rust.contains("\n---\n"));
     }
@@ -584,7 +770,7 @@ mod tests {
     fn script_rust_accepts_infostrings_and_longer_fences() {
         let source = "#!/usr/bin/env -S rusk script\n----cargo\n[package]\nedition = \"2024\"\n---\n----\nfn main() = ()\n";
 
-        let rust = script_rust(source, SourceSyntax::Rusk).unwrap();
+        let rust = script_rust(source, SourceSyntax::Rusk).unwrap().rust;
         assert!(rust.starts_with("----cargo\n[package]\nedition = \"2024\"\n---\n----\n"));
         assert!(rust.contains("fn main()"));
     }
@@ -603,6 +789,26 @@ mod tests {
 
         let error = script_rust(source, SourceSyntax::Rusk).unwrap_err().to_string();
         assert!(error.contains("line 6"), "{error}");
+    }
+
+    #[test]
+    fn script_diagnostics_renumber_script_gutters_and_keep_other_files() {
+        let diagnostic = ScriptDiagnostic {
+            rust_file: "tool.rs",
+            script: "bin/tool.rsk",
+            source_lines: &[(3, false), (9, false), (10, false), (10, true)],
+        };
+        let rendered = "error: oops\n --> tool.rs:2:5\n  |\n2 |     a();\n3 |     b()\n4 | }\n  |\n ::: lib.rs:4:1\n4 | fn a() {}\n  = note: x\n";
+
+        assert_eq!(
+            diagnostic.remap(rendered),
+            "error: oops\n  --> bin/tool.rsk:9:5\n   |\n 9 |     a();\n10 |     b()\n   | }\n   |\n  ::: lib.rs:4:1\n 4 | fn a() {}\n   = note: x\n"
+        );
+        let styled = "\x1b[1m\x1b[94m--> \x1b[0mtool.rs:1:2\n\x1b[1m\x1b[94m1\x1b[0m \x1b[1m\x1b[94m|\x1b[0m x\n";
+        assert_eq!(
+            diagnostic.remap(styled),
+            "\x1b[1m\x1b[94m--> \x1b[0mbin/tool.rsk:3:2\n\x1b[1m\x1b[94m3\x1b[0m \x1b[1m\x1b[94m|\x1b[0m x\n"
+        );
     }
 
     #[test]

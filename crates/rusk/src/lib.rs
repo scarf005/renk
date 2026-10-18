@@ -26,6 +26,17 @@ pub struct TranspileOutput {
     pub source_tree: Vec<SourceMapNode>,
 }
 
+impl TranspileOutput {
+    /// The source line that produced a 1-based generated line, including inserted closing lines.
+    pub fn source_line(&self, generated_line: usize) -> Option<usize> {
+        self.source_map
+            .iter()
+            .find(|entry| entry.generated_line == generated_line)
+            .map(|entry| entry.source_line)
+            .or_else(|| deepest_source_line(&self.source_tree, generated_line))
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FormatOptions {
     pub line_width: usize,
