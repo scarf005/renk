@@ -115,3 +115,85 @@ fn script_no_cargo_execs_the_cached_binary_and_rebuilds_after_edits() {
     );
     let _ = fs::remove_dir_all(dir);
 }
+
+#[test]
+fn script_without_an_edition_runs_without_the_cargo_edition_warning() {
+    let dir = temp_dir("script-edition");
+    for (name, header) in [("bare", ""), ("deps", "---\n[dependencies]\n---\n")] {
+        let script = dir.join(format!("{name}.rsk"));
+        fs::write(
+            &script,
+            format!("{header}fn main():\n    println!(\"{name}\")\n"),
+        )
+        .unwrap();
+        for mode in [None, Some("--no-cargo")] {
+            let output = Command::new(env!("CARGO_BIN_EXE_rusk"))
+                .arg("script")
+                .args(mode)
+                .arg(&script)
+                .env("XDG_CACHE_HOME", dir.join("cache"))
+                .output()
+                .unwrap();
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert_eq!(
+                String::from_utf8_lossy(&output.stdout),
+                format!("{name}\n"),
+                "{stderr}"
+            );
+            assert!(!stderr.contains("edition"), "{stderr}");
+        }
+    }
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn script_compiler_diagnostics_point_at_script_lines() {
+    let dir = temp_dir("script-diagnostics");
+    let broken = dir.join("broken.rsk");
+    fs::write(
+        &broken,
+        "#!/usr/bin/env -S rusk script\n---\n[package]\nedition = \"2024\"\n---\n\nstruct Point:\n    x: i32\n\nfn main():\n    let p = Point{ x: 1 }\n    let y: i32 = \"nope\"\n    println!(\"{p.x} {y}\")\n",
+    )
+    .unwrap();
+    let warned = dir.join("warned.rsk");
+    fs::write(
+        &warned,
+        "fn main():\n\n    let unused = 1\n    eprintln!(\"broken.rs:1:1\")\n",
+    )
+    .unwrap();
+    for mode in [None, Some("--no-cargo")] {
+        let run = |script: &PathBuf| {
+            Command::new(env!("CARGO_BIN_EXE_rusk"))
+                .arg("script")
+                .args(mode)
+                .arg(script)
+                .env("XDG_CACHE_HOME", dir.join("cache"))
+                .output()
+                .unwrap()
+        };
+        let output = run(&broken);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_ne!(output.status.code(), Some(0), "{stderr}");
+        assert!(
+            stderr.contains(&format!("--> {}:12:", broken.display())),
+            "{stderr}"
+        );
+        assert!(
+            stderr.contains("\n12 |     let y: i32 = \"nope\";"),
+            "{stderr}"
+        );
+        assert!(!stderr.contains("broken.rs:"), "{stderr}");
+
+        let output = run(&warned);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(0), "{stderr}");
+        if mode.is_none() {
+            assert!(
+                stderr.contains(&format!("--> {}:3:", warned.display())),
+                "{stderr}"
+            );
+        }
+        assert!(stderr.ends_with("broken.rs:1:1\n"), "{stderr}");
+    }
+    let _ = fs::remove_dir_all(dir);
+}
