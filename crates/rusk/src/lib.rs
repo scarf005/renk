@@ -1272,8 +1272,8 @@ fn lower_rust_syntax(text: &str) -> String {
     replace_angle_generics_with_square(&text)
 }
 
-/// Rust `NAME.field` and `NAME[i].field` are value accesses, while Rusk reads an uppercase head
-/// as a path; parenthesize such receivers so the conversion does not depend on that heuristic.
+/// Rust `NAME.field`, `NAME[i].field`, and `Enum::Variant.method()` are value accesses, while Rusk
+/// reads an uppercase head or a CamelCase path segment as a path; parenthesize such receivers so the conversion does not depend on that heuristic.
 fn parenthesize_value_receivers(text: &str) -> String {
     let chars = text.chars().collect::<Vec<_>>();
     let mut output = String::new();
@@ -1310,9 +1310,12 @@ fn parenthesize_value_receivers(text: &str) -> String {
             && matching_bracket(&chars, end, '[', ']').is_some_and(|close| member(close + 1));
         if !continues_path
             && (indexed_member
-                || last == index
-                    && member(end)
-                    && should_convert_path(std::slice::from_ref(&head), PathMode::Expr, None))
+                || member(end)
+                    && if last == index {
+                        should_convert_path(std::slice::from_ref(&head), PathMode::Expr, None)
+                    } else {
+                        is_camel_case(&chars[last..end].iter().collect::<String>())
+                    })
         {
             output.push_str(&format!("({head})"));
         } else {
@@ -3941,11 +3944,23 @@ fn replace_dotted_paths(text: &str, mode: PathMode) -> String {
             let explicit_path_before = start >= 2 && chars[start - 2..start] == [':', ':'];
             let mut segments = Vec::new();
             let mut dot_positions = Vec::new();
+            let mut explicit_path = explicit_path_before;
+            let mut before_first_dot = None;
             let first_end = read_ident(&chars, index);
             segments.push(chars[start..first_end].iter().collect::<String>());
             index = first_end;
 
             loop {
+                if dot_positions.is_empty()
+                    && chars[index..].starts_with(&[':', ':'])
+                    && chars.get(index + 2).copied().is_some_and(is_ident_start)
+                {
+                    explicit_path = true;
+                    let segment_end = read_ident(&chars, index + 2);
+                    segments.push(chars[index + 2..segment_end].iter().collect::<String>());
+                    index = segment_end;
+                    continue;
+                }
                 if index + 2 < chars.len()
                     && chars[index] == ':'
                     && chars[index + 1] == ':'
@@ -3965,6 +3980,8 @@ fn replace_dotted_paths(text: &str, mode: PathMode) -> String {
                     && chars[index] == '.'
                     && is_ident_start(chars[index + 1])
                 {
+                    before_first_dot
+                        .get_or_insert_with(|| segments.last().cloned().unwrap_or_default());
                     dot_positions.push(index);
                     let segment_start = index + 1;
                     let segment_end = read_ident(&chars, segment_start);
@@ -3977,10 +3994,15 @@ fn replace_dotted_paths(text: &str, mode: PathMode) -> String {
 
             let in_type_const_expr = mode == PathMode::Type
                 && (curly_depth > 0 || square_const.last().copied().unwrap_or(false));
-            let should_convert = segments.len() > 1
-                && !explicit_path_before
+            // After an explicit `::` path only a CamelCase segment is a type whose `.name` is a
+            // path; `Config::DEFAULT.len()` and `(Ordering::Less).reverse()` keep value receivers.
+            let should_convert = !dot_positions.is_empty()
                 && !in_type_const_expr
-                && should_convert_path(&segments, mode, chars.get(index).copied());
+                && if explicit_path {
+                    mode == PathMode::Type || before_first_dot.as_deref().is_some_and(is_camel_case)
+                } else {
+                    should_convert_path(&segments, mode, chars.get(index).copied())
+                };
             if should_convert {
                 let mut part_start = start;
                 for dot in dot_positions {
@@ -4254,6 +4276,10 @@ fn should_convert_path(segments: &[String], mode: PathMode, next: Option<char>) 
                 || next == Some('!')
         }
     }
+}
+
+fn is_camel_case(ident: &str) -> bool {
+    ident.chars().next().is_some_and(char::is_uppercase) && ident.chars().any(char::is_lowercase)
 }
 
 fn is_ident_start(character: char) -> bool {
