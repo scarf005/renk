@@ -559,21 +559,18 @@ fn macro_depth_after_line(depth: usize, text: &str) -> usize {
     brace_depth_after_line(delimiter_depth_after_line(depth, text), text)
 }
 
+/// Counts `needle` outside comments, string literals, and char literals.
 fn count_unquoted(text: &str, needle: char) -> usize {
+    let chars = text.chars().collect::<Vec<_>>();
     let mut count = 0usize;
-    let mut in_string = false;
-    let mut escaped = false;
-    for character in text.chars() {
-        if escaped {
-            escaped = false;
+    let mut index = 0usize;
+    while index < chars.len() {
+        if let Some(end) = opaque_span_end(&chars, index) {
+            index = end + 1;
             continue;
         }
-        match character {
-            '\\' if in_string => escaped = true,
-            '"' => in_string = !in_string,
-            character if !in_string && character == needle => count += 1,
-            _ => {}
-        }
+        count += usize::from(chars[index] == needle);
+        index += 1;
     }
     count
 }
