@@ -80,3 +80,12 @@ pub fn trailing_if(n: i32) -> i32 {
         total
     };
 }
+
+pub fn explicit_path_receivers() -> usize {
+    let order = std::cmp::Ordering::Less.reverse();
+    let less = std::cmp::Ordering::Less.is_lt();
+    let bits = i32::MAX.count_ones() as usize;
+    let text = std::string::String::from("std::cmp::Ordering::Less.reverse()");
+    let size = std::f64::consts::PI.to_bits() as usize;
+    if order.is_gt() && less { text.len() + bits + size } else { 0 }
+}

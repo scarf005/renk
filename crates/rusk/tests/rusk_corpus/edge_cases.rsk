@@ -142,3 +142,16 @@ pub fn trailing_if(n: i32) -> i32:
         notif + t
     else:
         s.len() as i32
+
+pub fn explicit_path_receivers() -> usize:
+    let command = std::process::Command.new("true") // std::process::Command.new(
+    let text = "std::string::String.new(" // ends in (
+    let built = std::string::String.from(text)
+    let order = (std::cmp::Ordering::Less).reverse()
+    let bits = i32::MAX.count_ones() as usize
+    let size = std::cmp::max(
+        std::string::String.new().len(),
+        std::f64::consts::PI.to_bits() as usize,
+    )
+    let nested = std::cmp::max(std::vec::Vec[u8].new().len(), built.len())
+    if order.is_gt() then command.get_args().len() + bits + size + nested else 0

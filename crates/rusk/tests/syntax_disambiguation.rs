@@ -40,6 +40,43 @@ fn explicit_paths_and_parentheses_bound_dot_inference() {
 }
 
 #[test]
+fn camel_case_segments_of_explicit_paths_lower_dot_calls() {
+    let output = rust(
+        "fn demo():\n    let command = std::process::Command.new(\"true\")\n    let re = regex::Regex.new(\"a\").unwrap()\n    let made = crate::config::Type.default().len()\n    let local = Self::Builder.new()\n    let generic = Foo[u8]::Inner.new()\n    let default_len = Config::DEFAULT.len()\n    let bits = i32::MAX.count_ones()\n    let order = (std::cmp::Ordering::Less).reverse()\n    let path = std::cmp::Ordering::Less::reverse(order)\n    let lower = module::value.len()\n    let text = \"regex::Regex.new(\" // regex::Regex.new(\n",
+    );
+    for expected in [
+        "std::process::Command::new(\"true\");",
+        "regex::Regex::new(\"a\").unwrap();",
+        "crate::config::Type::default().len();",
+        "Self::Builder::new();",
+        "Foo::<u8>::Inner::new();",
+        "Config::DEFAULT.len();",
+        "i32::MAX.count_ones();",
+        "(std::cmp::Ordering::Less).reverse();",
+        "std::cmp::Ordering::Less::reverse(order);",
+        "module::value.len();",
+        "\"regex::Regex.new(\"",
+        "// regex::Regex.new(",
+    ] {
+        assert!(output.contains(expected), "missing {expected}\n{output}");
+    }
+}
+
+#[test]
+fn rust_conversion_parenthesizes_camel_case_path_value_receivers() {
+    let output = rust_to_rusk(
+        "fn f() -> u32 {\n    let order = std::cmp::Ordering::Less.reverse();\n    let less = Ordering::Less.is_lt();\n    let made = String::new().len();\n    i32::MAX.count_ones()\n}\n",
+    )
+    .unwrap();
+    let roundtrip = rust(&output);
+    assert!(roundtrip.contains("Ordering::Less).reverse()"), "{output}");
+    assert!(roundtrip.contains("(Ordering::Less).is_lt()"), "{output}");
+    assert!(roundtrip.contains("String::new().len()"), "{output}");
+    assert!(roundtrip.contains("i32::MAX.count_ones()"), "{output}");
+    assert!(!output.contains("(i32::MAX)"), "{output}");
+}
+
+#[test]
 fn macro_attribute_and_literal_tokens_are_opaque() {
     let output = rust(
         r##"#[query(table.column, Vec<T>)]
