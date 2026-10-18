@@ -119,7 +119,7 @@ fn script_no_cargo_execs_the_cached_binary_and_rebuilds_after_edits() {
 #[test]
 fn script_without_an_edition_runs_without_the_cargo_edition_warning() {
     let dir = temp_dir("script-edition");
-    for (name, header) in [("bare", ""), ("deps", "---\n[dependencies]\n---\n")] {
+    for (name, header) in [("bare", ""), ("listed", "---\n[dependencies]\n---\n")] {
         let script = dir.join(format!("{name}.rsk"));
         fs::write(
             &script,
