@@ -390,7 +390,8 @@ impl RukSemicolonInferer {
         let mut delimiter_depth = 0usize;
         let mut brace_depth = 0usize;
         let mut delimiter_base_brace_depth = None::<usize>;
-        // A function signature continued over several lines, until the line opening its body.
+        // An item header continued over several lines, such as a function signature or a `where`
+        // clause, until the line opening its body or ending it.
         let mut signature = None::<String>;
         // The scope the previous line closed, which an `else {` line on its own continues.
         let mut previous_closed = None::<RukScope>;
@@ -404,7 +405,17 @@ impl RukSemicolonInferer {
             let suppress_semicolon = leaves_delimiter_open
                 && delimiter_base_brace_depth.is_none_or(|base| brace_depth <= base);
             let closed = self.close_scopes_for_line(text, indent);
-            let converted = if self.in_macro() {
+            let code = split_line_comment(text).map_or(text, |(code, _)| code).trim_end();
+            let in_header = signature.is_some() || looks_like_item_header_without_body(code);
+            // A header line before its `where` clause or before the `{` line after it.
+            let header_continues = in_header
+                && (code == "where"
+                    || code.ends_with(" where")
+                    || self.next_code_line(index).is_some_and(|next| {
+                        let next = next.trim();
+                        next == "{" || next == "where" || next.starts_with("where ")
+                    }));
+            let converted = if self.in_macro() || header_continues {
                 raw.to_string()
             } else if closed.is_some_and(|scope| scope.ends_statement)
                 && split_line_comment(text).map_or(text, |(code, _)| code).trim_end() == "}"
@@ -414,13 +425,19 @@ impl RukSemicolonInferer {
             } else {
                 self.infer_line(raw, text, index, suppress_semicolon)
             };
+            let terminated = split_line_comment(&converted)
+                .map_or(converted.as_str(), |(code, _)| code)
+                .trim_end()
+                .ends_with(';');
             output.push(converted);
-            let code = split_line_comment(text).map_or(text, |(code, _)| code).trim_end();
             let header = match signature.take() {
                 Some(start) => format!("{start} {code}"),
                 None => code.to_string(),
             };
-            if is_function(&header) && !header.ends_with(['{', ';']) {
+            if looks_like_item_header_without_body(&header)
+                && !header.ends_with(['{', ';'])
+                && !terminated
+            {
                 signature = Some(header);
             } else {
                 let continued =
@@ -735,7 +752,7 @@ fn looks_like_item_header_without_body(text: &str) -> bool {
     is_struct_item(text)
         || is_enum_item(text)
         || is_trait_item(text)
-        || is_impl_or_mod_item(text)
+        || is_rust_impl_or_mod_item(text)
         || is_function(text)
 }
 
@@ -1298,12 +1315,15 @@ fn convert_rust_statement(text: &str, parent: Option<RustBlockKind>) -> Converte
         };
     }
     if let Some(header) = text.strip_suffix('{') {
+        // A `{` on its own line, after a multi-line `where` clause, becomes a `:` line.
+        let separator = &header[header.trim_end().len()..];
+        let separator = if separator.contains('\n') { separator } else { "" };
         let header = header.trim_end();
         let kind = classify_rust_block_header(header, parent);
         let text = if is_raw_rust_block_header(header, kind) {
             format!("{} {{", lower_rust_syntax(header))
         } else {
-            format!("{}:", lower_rust_syntax(header))
+            format!("{}{separator}:", lower_rust_syntax(header))
         };
         return ConvertedRustStatement {
             text,
@@ -1812,9 +1832,10 @@ fn joins_next_line(
             Some(first) => *first == outer,
             None => next.is_some_and(|next| {
                 let chained = next.trim_start();
-                raw_indent(next) == indent
+                (raw_indent(next) == indent
                     && (chained.starts_with('?')
-                        || (chained.starts_with('.') && !chained.starts_with("..")))
+                        || (chained.starts_with('.') && !chained.starts_with(".."))))
+                    || continues_where_clause(text, next, indent)
             }),
         };
     }
@@ -1830,10 +1851,35 @@ fn joins_next_line(
     }
     let trimmed = code.trim_end();
     open.is_empty()
-        && trimmed.ends_with('=')
-        && !["==", "!=", "<=", ">="]
-            .iter()
-            .any(|operator| trimmed.ends_with(operator))
+        && ((trimmed.ends_with('=')
+            && !["==", "!=", "<=", ">="]
+                .iter()
+                .any(|operator| trimmed.ends_with(operator)))
+            || next.is_some_and(|next| continues_where_clause(text, next, indent)))
+}
+
+/// Whether `next` continues the multi-line `where` clause of the item header `text`: a `where`
+/// line at the header's `indent`, the more indented bounds after it, and the `:` (or Rust `{`)
+/// line at the header's indent that opens the body.
+fn continues_where_clause(text: &str, next: &str, indent: usize) -> bool {
+    let code = |line: &str| without_trailing_line_comment(line).trim().to_string();
+    let starts_where = |line: &str| line == "where" || line.starts_with("where ");
+    let last = code(text.lines().last().unwrap_or_default());
+    let next_code = code(next);
+    let header = text.lines().next().unwrap_or_default().trim_start();
+    if last.ends_with([':', '{', ';'])
+        || next_code.is_empty()
+        || !looks_like_item_header_without_body(header)
+    {
+        return false;
+    }
+    let in_where = text.lines().map(code).any(|line| {
+        starts_where(&line) || line.ends_with(" where") || line.contains(" where ")
+    });
+    if !in_where {
+        return raw_indent(next) == indent && starts_where(&next_code);
+    }
+    raw_indent(next) > indent || (raw_indent(next) == indent && matches!(&*next_code, ":" | "{"))
 }
 
 /// `text` split before a `//` comment that ends it, keeping the spaces before the comment with
@@ -5110,7 +5156,18 @@ impl Emitter {
     }
 
     /// Pushes a possibly multi-line logical line, mapping each physical line to its source line.
-    fn push(&mut self, node: &Node, line: String) {
+    /// A header whose `:` stands on its own line, after a multi-line `where` clause, opens its
+    /// `{` on its own line too.
+    fn push(&mut self, node: &Node, mut line: String) {
+        let own_line_marker = node.text.lines().count() > 1
+            && node.text.lines().last().is_some_and(|last| last.trim() == ":");
+        if own_line_marker
+            && line.split('\n').count() + 1 == node.text.lines().count()
+            && line.ends_with(" {")
+        {
+            line.truncate(line.len() - 2);
+            line.push_str(&format!("\n{}{{", spaces(node.indent)));
+        }
         for (offset, part) in line.split('\n').enumerate() {
             self.source_map.push(SourceMapEntry {
                 source_line: node.line + offset,
