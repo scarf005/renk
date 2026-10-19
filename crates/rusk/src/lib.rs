@@ -2231,10 +2231,20 @@ fn lone_opener_heads(lines: &[&str], in_literal: &[bool], opener: &str) -> Vec<O
             && !in_literal[start - 1]
             && (lines[start - 1].trim().is_empty()
                 || raw_indent(lines[start - 1]) > indent
-                // An or-pattern continued at the head's indent, as in `if let A` / `| B = c`.
-                || lines[start - 1].trim_start().starts_with("| "))
+                // An or-pattern continued at the head's indent, as in `if let A` / `| B = c`, or
+                // a group closed there, as in `if (matches!(` / `) && b)`.
+                || lines[start - 1].trim_start().starts_with("| ")
+                || lines[start - 1].trim_start().starts_with([')', ']']))
         {
             start -= 1;
+        }
+        // A statement such as `f(` / `);` ends before a bare block.
+        if lines[start..end]
+            .iter()
+            .rfind(|line| !line.trim().is_empty())
+            .is_some_and(|last| code(last).ends_with([';', ',', '{', '}']))
+        {
+            continue;
         }
         let Some(head) = start.checked_sub(1) else {
             continue;
