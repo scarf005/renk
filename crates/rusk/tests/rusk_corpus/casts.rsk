@@ -1,0 +1,6 @@
+pub fn ranges(x: u32, m: std.collections.HashMap[u32, u32]) -> usize:
+    let r = x as usize..m.len()
+    let s = x as usize..std.cmp.max(1, 2)
+    let t = x as std.primitive.usize..=m.len() // as usize..
+    let u = (x as usize..m.len()).count()
+    r.count() + s.count() + t.count() + u
