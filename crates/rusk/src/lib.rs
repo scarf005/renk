@@ -572,10 +572,26 @@ impl RukSemicolonInferer {
         !self.tail_is_value()
     }
 
-    /// Whether lines `start..=end` are one of several tails, each under its own `#[cfg(...)]`.
+    /// Whether lines `start..=end` are one of several tails, each under its own `#[cfg(...)]`,
+    /// which only other alternatives follow.
     fn is_cfg_alternative(&self, start: usize, end: usize) -> bool {
         let is_cfg = |line: Option<&str>| line.is_some_and(|line| line.trim().starts_with("#[cfg"));
-        is_cfg(self.previous_code_line(start)) && is_cfg(self.next_code_line(end))
+        let indent = raw_indent(&self.lines[start]);
+        is_cfg(self.previous_code_line(start))
+            && is_cfg(self.next_code_line(end))
+            && (end + 1..self.lines.len())
+                .filter(|&later| {
+                    let text = self.lines[later].trim();
+                    !text.is_empty() && !is_comment(text)
+                })
+                .take_while(|&later| raw_indent(&self.lines[later]) >= indent)
+                .filter(|&later| {
+                    raw_indent(&self.lines[later]) == indent
+                        && !self.lines[later]
+                            .trim_start()
+                            .starts_with(['#', '}', ')', ']'])
+                })
+                .all(|later| is_cfg(self.previous_code_line(later)))
     }
 
     fn is_tail_of_current_scope(&self, index: usize) -> bool {
@@ -2948,11 +2964,20 @@ fn emit_scoped_sequence(
             .iter()
             .all(|next| is_comment(next.text.trim()))
     };
+    // Nodes `start..=end` are one of several tails, each under its own `#[cfg(...)]`, when only
+    // other alternatives follow them.
+    let is_cfg_tail = |start: usize, end: usize| {
+        start > 0
+            && is_cfg(start - 1)
+            && end + 1 < nodes.len()
+            && is_cfg(end + 1)
+            && (end + 1..nodes.len()).all(|later| {
+                let text = nodes[later].text.trim();
+                is_cfg(later) || is_cfg(later - 1) || is_comment(text) || is_else_branch(text)
+            })
+    };
     for (index, node) in nodes.iter().enumerate() {
-        // One of several tails, each under its own `#[cfg(...)]`, is a tail too.
-        let is_last = tail_is_value
-            && (ends_at(index)
-                || (is_cfg(index + 1) && chain_head(index) > 0 && is_cfg(chain_head(index) - 1)));
+        let is_last = tail_is_value && (ends_at(index) || is_cfg_tail(chain_head(index), index));
         let head = node.text.trim();
         if chain.is_some() && is_comment(head) {
             // A comment between `}` and `else` stays inside the chain.
@@ -2971,8 +2996,7 @@ fn emit_scoped_sequence(
                     })
                     .count();
             branch_is_value = !is_control(strip_block_marker(head).0)
-                || (tail_is_value
-                    && (ends_at(end) || (is_cfg(end + 1) && index > 0 && is_cfg(index - 1))));
+                || (tail_is_value && (ends_at(end) || is_cfg_tail(index, end)));
         }
         let continues = !is_comment(head)
             && nodes[index + 1..]
