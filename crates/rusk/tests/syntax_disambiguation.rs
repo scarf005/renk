@@ -139,10 +139,13 @@ fn rust_conversion_dots_paths_and_marks_generic_application() {
     assert!(output.contains("value.parse[i32]()"), "{output}");
     assert!(output.contains("std.mem.size_of[Vec[u8]]()"), "{output}");
     assert!(output.contains("Vec[String].new()"), "{output}");
-    assert!(output.contains("serde_json::from_str[Config](value)"), "{output}");
-    assert!(output.contains("str::parse::<Vec<i32>>"), "{output}");
-    assert!(output.contains("(TABLE)[0].len()"), "{output}");
-    assert!(output.contains("(crate.config.TABLE)[0].len()"), "{output}");
+    assert!(
+        output.contains("serde_json.from_str[Config](value)"),
+        "{output}"
+    );
+    assert!(output.contains("str.parse::<Vec<i32>>"), "{output}");
+    assert!(output.contains("let _ = TABLE[0].len()"), "{output}");
+    assert!(output.contains("crate.config.TABLE[0].len()"), "{output}");
 }
 
 #[test]
@@ -465,16 +468,16 @@ fn rust_conversion_inlines_format_arguments_used_once_in_order() {
 }
 
 #[test]
-fn rust_conversion_inlines_uppercase_format_receivers_in_parentheses() {
+fn rust_conversion_inlines_constant_format_receivers() {
     let output = rust_to_rusk(
         "static NAME: &str = \"a\";\nstatic NAMES: [&str; 1] = [\"a\"];\nfn f(name: &str) -> String {\n    println!(\"{} {}\", NAME.len(), name);\n    println!(\"{:?} {}\", NAMES[0].len(), NAMES.len());\n    println!(\"{} {}\", NAME, a::NAME.len());\n    format!(\n        \"Expected {} but \\\"{}\\\"\",\n        NAME.len(),\n        name\n    )\n}\n",
     )
     .unwrap();
     for expected in [
-        "println!(\"{(NAME).len()} {name}\")",
-        "println!(\"{(NAMES)[0].len():?} {(NAMES).len()}\")",
+        "println!(\"{NAME.len()} {name}\")",
+        "println!(\"{NAMES[0].len():?} {NAMES.len()}\")",
         "println!(\"{NAME} {a::NAME.len()}\")",
-        "format!(\"Expected {(NAME).len()} but \\\"{name}\\\"\")",
+        "format!(\"Expected {NAME.len()} but \\\"{name}\\\"\")",
     ] {
         assert!(output.contains(expected), "missing {expected}\n{output}");
     }
@@ -577,7 +580,7 @@ fn rust_conversion_writes_trailing_if_blocks_with_a_colon() {
 #[test]
 fn unused_block_values_end_with_statements() {
     let output = rust(
-        "fn f(c: bool) -> i32:\n    for i in 0..3:\n        m.insert(i, i)\n    'outer: while c:\n        m.insert(0, 0)\n    if c:\n        m.insert(1, 1)\n    match c:\n        true => m.insert(2, 2)\n        false => None\n    if c:\n        1\n    else:\n        2\nfn g():\n    if c:\n        m.insert(3, 3)\n    else:\n        m.insert(4, 4)\n",
+        "fn f(c: bool, m: M) -> i32:\n    for i in 0..3:\n        m.insert(i, i)\n    'outer: while c:\n        m.insert(0, 0)\n    if c:\n        m.insert(1, 1)\n    match c:\n        true => m.insert(2, 2)\n        false => None\n    if c:\n        1\n    else:\n        2\nfn g(c: bool, m: M):\n    if c:\n        m.insert(3, 3)\n    else:\n        m.insert(4, 4)\n",
     );
     for expected in [
         "        m.insert(i, i);\n",
@@ -609,7 +612,7 @@ fn unused_block_values_end_with_statements() {
 #[test]
 fn std_macro_arguments_lower_like_expressions() {
     let output = rust(
-        "fn demo(a: bool):\n    println!(\"{}, {}\", \"a, Foo.new()\", Foo.new())\n    writeln!(std.io.stdout(), \"{}\", std.i32.MAX)\n    let v = vec![Vec[i32].new(), std.vec.Vec.new()]\n    let r = vec![Foo.new(); 3]\n    assert!(xs.iter().any(|x| *x == std.i32.MAX), \"missing {xs.len()}\")\n    assert_eq!(Foo.new(), if a then 1 else 2)\n    dbg!(Foo.new())\n    let m = matches!(op, Op.Add(_) | Op.Mul(_))\n    let u = my_macro!(Foo.new())\n    let w = vec![\n        Foo.new(), // a, Foo.new()\n        HashMap::<u8, u8>::new(),\n    ]\n",
+        "fn demo(a: bool, xs: X, op: Op):\n    println!(\"{}, {}\", \"a, Foo.new()\", Foo.new())\n    writeln!(std.io.stdout(), \"{}\", std.i32.MAX)\n    let v = vec![Vec[i32].new(), std.vec.Vec.new()]\n    let r = vec![Foo.new(); 3]\n    assert!(xs.iter().any(|x| *x == std.i32.MAX), \"missing {xs.len()}\")\n    assert_eq!(Foo.new(), if a then 1 else 2)\n    dbg!(Foo.new())\n    let m = matches!(op, Op.Add(_) | Op.Mul(_))\n    let u = my_macro!(Foo.new())\n    let w = vec![\n        Foo.new(), // a, Foo.new()\n        HashMap::<u8, u8>::new(),\n    ]\n",
     );
     for expected in [
         "println!(\"{}, {}\", \"a, Foo.new()\", Foo::new());",
@@ -635,8 +638,8 @@ fn rust_conversion_keeps_std_macro_argument_receivers() {
     .unwrap();
     let output = rust(&rusk);
     for expected in [
-        "assert!((TEXT).len() > 0);",
-        "vec![(TEXT).len(); 2];",
+        "assert!(TEXT.len() > 0);",
+        "vec![TEXT.len(); 2];",
         "vec![(xs[0])()];",
         "dbg!((std::cmp::Ordering::Less).reverse());",
     ] {
@@ -645,9 +648,9 @@ fn rust_conversion_keeps_std_macro_argument_receivers() {
 }
 
 #[test]
-fn imported_lowercase_names_and_crate_type_paths_lower_dot_calls() {
+fn names_not_bound_as_values_are_paths() {
     let output = rust(
-        "use std.{env, fs, io.{self, Read as _}}\nuse std.collections as coll\nmod util:\n    pub fn one() -> i32 = 1\nfn main():\n    let args = env.args()\n    fs.write(\"a\", \"b\")\n    let input = io.stdin()\n    let map = coll.HashMap[u8, u8].new()\n    let one = util.one()\n    let env_len = (env).len()\n    let text = \"env.args()\" // env.args(\n    let re = regex.Regex.new(\"a\")\n    let null = serde_json.Value.Null\n    let field = guid.data1\n    let size = name.len()\n    let shown = format!(\"{env.var(\"A\").is_ok()}\")\n",
+        "use std.{env, fs, io.{self, Read as _}}\nuse std.collections as coll\nmod util:\n    pub fn one() -> i32 = 1\nconst TABLE: [&str; 1] = [\"a\"]\nfn main():\n    let args = env.args()\n    fs.write(\"a\", \"b\")\n    let input = io.stdin()\n    let map = coll.HashMap[u8, u8].new()\n    let one = util.one()\n    let env_len = (env).len()\n    let text = \"env.args()\" // env.args(\n    let re = regex.Regex.new(\"a\")\n    let null = serde_json.Value.Null\n    let shown = format!(\"{env.var(\"A\").is_ok()}\")\n    let first = TABLE[0].len() + TABLE.len()\n    let size = make().inner.len() + args.len()\n    let range = 0..one.max(1)\n",
     );
     for expected in [
         "let args = env::args();",
@@ -659,35 +662,35 @@ fn imported_lowercase_names_and_crate_type_paths_lower_dot_calls() {
         "let text = \"env.args()\"; // env.args(",
         "let re = regex::Regex::new(\"a\");",
         "let null = serde_json::Value::Null;",
-        "let field = guid.data1;",
-        "let size = name.len();",
         "format!(\"{}\", env::var(\"A\").is_ok())",
+        "let first = TABLE[0].len() + TABLE.len();",
+        "let size = make().inner.len() + args.len();",
+        "let range = 0..one.max(1);",
     ] {
         assert!(output.contains(expected), "missing {expected}\n{output}");
     }
     assert!(rust("fn f(env: &str) -> usize = env.len()\n").contains("env.len()"));
-
-    let output = rust(
-        "use std.{\n    env, // fs,\n    process,\n}\nfn main():\n    let text = \"\nuse fake.{thing}\n\"\n    let code = process.id()\n    let size = thing.len() + fs.len()\n",
-    );
-    assert!(output.contains("let code = process::id();"), "{output}");
-    assert!(output.contains("let size = thing.len() + fs.len();"), "{output}");
 }
 
 #[test]
-fn rust_conversion_parenthesizes_imported_name_and_crate_field_receivers() {
-    let source = "use std::env;\nfn f(path: &str, guid: Guid) -> usize {\n    let env = path;\n    let count = env::args().count();\n    let re = regex::Regex::new(\"a\");\n    env.len() + count + guid.Data1 as usize\n}\n";
+fn rust_conversion_keeps_bound_receivers_and_dots_paths() {
+    let source = "use std::env;\nfn f(path: &str, guid: Guid) -> usize {\n    let env = path;\n    let count = env::args().count();\n    let re = regex::Regex::new(\"a\");\n    env.len() + count + guid.Data1 as usize + TABLE[0].len()\n}\n";
     let rusk = rust_to_rusk(source).unwrap();
     let output = rust(&rusk);
     for expected in [
         "let count = env::args().count();",
         "let re = regex::Regex::new(\"a\");",
-        "(env).len() + count + (guid).Data1 as usize",
+        "env.len() + count + guid.Data1 as usize + TABLE[0].len()",
     ] {
         assert!(output.contains(expected), "missing {expected}\nRusk:\n{rusk}\n{output}");
     }
-    assert!(rusk.contains("env.args().count()"), "{rusk}");
-    assert!(rusk.contains("regex.Regex.new("), "{rusk}");
+    for expected in [
+        "env::args().count()",
+        "regex.Regex.new(",
+        "env.len() + count + guid.Data1",
+    ] {
+        assert!(rusk.contains(expected), "missing {expected}\n{rusk}");
+    }
 }
 
 #[test]
@@ -704,4 +707,130 @@ fn closure_heads_own_colon_blocks() {
     ] {
         assert!(output.contains(expected), "missing {expected:?}\n{output}");
     }
+}
+
+fn assert_lines(output: &str, expected: &[&str]) {
+    for expected in expected {
+        assert!(output.contains(expected), "missing {expected:?}\n{output}");
+    }
+}
+
+#[test]
+fn let_bindings_shadow_imported_module_names_after_the_statement() {
+    let output = rust(
+        "use std.{env, fs}\nfn main():\n    let args = env.args()\n    let env = env.var(\"HOME\").unwrap()\n    let n = env.len()\n    let text = \"let fs = 1\" // let fs = 2\n    fs.write(\"a\", \"b\")\n",
+    );
+    assert_lines(
+        &output,
+        &[
+            "let args = env::args();",
+            "let env = env::var(\"HOME\").unwrap();",
+            "let n = env.len();",
+            "fs::write(\"a\", \"b\");",
+        ],
+    );
+}
+
+#[test]
+fn parameters_and_closure_parameters_shadow_module_names() {
+    let output = rust(
+        "use std.{env, fs}\nfn f(env: &str) -> usize = env.len()\nfn g(mut fs: Vec[u8], (a, env): (u8, String)):\n    let n = fs.len() + env.len()\nfn h(xs: Vec[String]) -> usize = xs.iter().map(|env: &String| env.len()).sum()\nfn k():\n    let run = move |fs|:\n        fs.len()\n    let paths = env.args()\n    fs.write(\"a\", \"b\")\n",
+    );
+    assert_lines(
+        &output,
+        &[
+            "    env.len()\n",
+            "let n = fs.len() + env.len();",
+            "|env: &String| env.len()",
+            "        fs.len()\n",
+            "let paths = env::args();",
+            "fs::write(\"a\", \"b\");",
+        ],
+    );
+}
+
+#[test]
+fn pattern_bindings_scope_to_their_arm_or_block() {
+    let output = rust(
+        "use std.env\nfn main():\n    if let Some(env) = env.args().next():\n        println!(\"{}\", env.len())\n    else:\n        env.args().count()\n    let args = env.args()\n    match env.var(\"A\"):\n        Ok(env) => env.len()\n        Err(_) => env.args().count()\n    match pair:\n        whole @ (ref mut env, _) if env.len() > 0 =>:\n            env.clear()\n        _ => env.args().count()\n    for (i, env) in env.args().enumerate():\n        env.len()\n    while let Some(Point { x: env, y }) = next():\n        env.len()\n    env.vars()\n",
+    );
+    assert_lines(
+        &output,
+        &[
+            "if let Some(env) = env::args().next() {",
+            "println!(\"{}\", env.len());",
+            "        env::args().count();\n",
+            "let args = env::args();",
+            "match env::var(\"A\") {",
+            "Ok(env) => env.len(),",
+            "Err(_) => env::args().count(),",
+            "whole @ (ref mut env, _) if env.len() > 0 => {",
+            "            env.clear()\n",
+            "_ => env::args().count(),",
+            "for (i, env) in env::args().enumerate() {",
+            "while let Some(Point { x: env, y }) = next() {",
+            "        env.len();\n",
+            "    env::vars();\n",
+        ],
+    );
+    assert!(!output.contains("env::len"), "{output}");
+}
+
+#[test]
+fn block_bindings_go_out_of_scope_after_the_block() {
+    let output = rust(
+        "use std.env\nfn main():\n    if ready:\n        let env = 1\n        env.count_ones()\n    env.args()\n",
+    );
+    assert_lines(
+        &output,
+        &["        env.count_ones();\n", "    env::args();\n"],
+    );
+
+    let output = rust(
+        "use std.env\nfn main():\n    let (\n        env,\n        other,\n    ) = pair\n    env.len()\n",
+    );
+    assert_lines(&output, &["    env.len();\n"]);
+}
+
+#[test]
+fn rust_conversion_drops_receiver_parentheses_for_bound_values() {
+    let source = "use std::env;\nfn f(path: &str) -> usize {\n    let env = path;\n    env.len() + env::args().count()\n}\n";
+    let rusk = rust_to_rusk(source).unwrap();
+    assert!(rusk.contains("env.len() + env::args().count()"), "{rusk}");
+    assert!(
+        rust(&rusk).contains("env.len() + env::args().count()"),
+        "{rusk}"
+    );
+}
+
+#[test]
+fn trait_parameters_bind_and_nested_items_do_not_see_enclosing_locals() {
+    let output = rust(
+        "use std.env\ntrait T:\n    fn f(&self, env: &str) -> usize = env.len()\nfn main():\n    let env = 1\n    fn inner() -> usize = env.args().count()\n    env.count_ones()\n",
+    );
+    assert_lines(
+        &output,
+        &[
+            "        env.len()\n",
+            "        env::args().count()\n",
+            "    env.count_ones();\n",
+        ],
+    );
+}
+
+#[test]
+fn bindings_inside_one_line_are_values_on_that_line() {
+    let output = rust(
+        "use std.env\nfn main():\n    let n = if let Some(env) = x then env.len() else 0\n    let ok = matches!(v, Some(env) if env.len() > 0)\n    let m = { let env = 1; env.count_ones() }\n    if let Some(env) = x then env.len() else 0\n    env.args()\n",
+    );
+    assert_lines(
+        &output,
+        &[
+            "let n = if let Some(env) = x { env.len() } else { 0 };",
+            "matches!(v, Some(env) if env.len() > 0)",
+            "let env = 1; env.count_ones()",
+            "if let Some(env) = x { env.len() } else { 0 }",
+            "    env::args();\n",
+        ],
+    );
 }

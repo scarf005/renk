@@ -58,7 +58,7 @@ fn last_call(counter: &mut Counter):
 
 fn main():
     let mut counter = Counter.new()
-    for word in (WORDS).iter():
+    for word in WORDS.iter():
         counter.add(word)
     last_call(&mut counter)
     counter.log()

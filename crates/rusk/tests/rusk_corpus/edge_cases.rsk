@@ -229,3 +229,24 @@ pub fn closure_blocks(mut xs: Vec[i32], a: bool, b: bool) -> usize:
     if a || b:
         xs.clear()
     describe(2).len() + shout("a").len() + total.join().unwrap_or(0) as usize
+
+static NAMES: [&str; 2] = ["a", "b"]
+
+pub fn value_bound_names(path: &str, 목록: Vec[u8], pair: (Option[String], u8)) -> usize:
+    use std.env
+    let first = NAMES[0].len() + NAMES.len() // NAMES.len(
+    let args = env.args().count()
+    let env = path.trim() // a local named like the module
+    let size = env.len() + 목록.len() + make_pair().1.count_ones() as usize
+    fn nested() -> usize = env.args().count()
+    let inner = if let (Some(env), _) = &pair then env.len() else 0
+    let some = matches!(pair.0, Some(ref env) if env.len() > 1)
+    let lens = NAMES.iter().map(|env| env.len()).sum[usize]()
+    let block = { let env = 2usize; env.pow(2) }
+    for (index, env) in NAMES.iter().enumerate():
+        assert!(env.len() >= index.min(1), "{env.len()}")
+    match pair.0.as_deref():
+        Some(env) if env.len() > 3 => helpers.twice(env.len())
+        _ => std.cmp.max(first, args) + size + nested() + inner + usize.from(some) + lens + block + (0..NAMES.len()).len()
+
+fn make_pair() -> (u8, u8) = (1, 2)
