@@ -2143,7 +2143,9 @@ fn opens_operand_block(code: &str, in_parentheses: bool) -> bool {
     let chars = head.chars().collect::<Vec<_>>();
     let after_operator = (head.ends_with("||") && !is_closure_start(&chars, chars.len() - 2))
         || head.ends_with("&&");
-    starts_with_binary_operator(line) || (in_parentheses && after_operator)
+    // `&& items.iter().any(|item| match item {` opens a closure body inside its call instead.
+    let opens_directly = open_delimiters(line).is_some_and(|open| open == ['{']);
+    (starts_with_binary_operator(line) && opens_directly) || (in_parentheses && after_operator)
 }
 
 /// Whether `line` continues an expression with a binary operator, as in `+ if a {` or `&& b`.
@@ -2250,8 +2252,8 @@ fn lone_opener_heads(lines: &[&str], in_literal: &[bool], opener: &str) -> Vec<O
             heads[head] = Some(end);
         }
     }
-    // A condition or scrutinee holding a block, as in `if match x {` ... `} {` or
-    // `match f(|w| match w {` ... `}) {`, ends at its `}` line that opens the body.
+    // A condition or scrutinee holding a block, as in `if match x {` ... `} {`, `if a || {` ...
+    // `} {`, or `match f(|w| match w {` ... `}) {`, ends at its `}` line that opens the body.
     for (head, line) in lines.iter().enumerate() {
         let head_code = code(line);
         let condition = ["if ", "while ", "else if ", "match "]
@@ -2259,6 +2261,7 @@ fn lone_opener_heads(lines: &[&str], in_literal: &[bool], opener: &str) -> Vec<O
             .find_map(|keyword| head_code.strip_prefix(keyword));
         let holds_block = condition.is_some_and(|condition| {
             (condition.starts_with("match ") && !head_code.starts_with("match "))
+                || (head_code.ends_with('{') && opens_operand_block(&head_code, true))
                 || open_delimiters(condition)
                     .is_some_and(|open| open.contains(&'(') || open.contains(&'['))
         });
