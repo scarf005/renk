@@ -173,7 +173,13 @@ fn transpile_lines(source: &str) -> Result<TranspileOutput, TranspileError> {
     let nodes = parse_source_tree(&lines)?;
 
     let mut emitter = Emitter::default();
-    MODULE_VALUES.set(module_value_names(&nodes));
+    let modules = module_names(&nodes);
+    MODULE_VALUES.set(
+        module_value_names(&nodes)
+            .into_iter()
+            .filter(|name| !modules.contains(name))
+            .collect(),
+    );
     emit_nodes(&nodes, Context::Root, &mut emitter);
     for (line, comment) in &emitter.comments {
         emitter.lines[*line].push_str(comment);
@@ -5498,6 +5504,33 @@ fn module_value_names(nodes: &[Node]) -> Vec<String> {
                 module_value_names(&node.children)
             };
             name.into_iter().chain(nested)
+        })
+        .collect()
+}
+
+/// The names `nodes` declare or import as modules, as in `mod config` or `use std.env`, which
+/// keep paths beside a function of the same name.
+fn module_names(nodes: &[Node]) -> Vec<String> {
+    nodes
+        .iter()
+        .flat_map(|node| {
+            let header = strip_block_marker(node.text.trim()).0;
+            let names = if starts_item(header, "use") {
+                header
+                    .split(|c: char| !is_ident_continue(c))
+                    .map(str::to_string)
+                    .collect()
+            } else if starts_item(header, "mod") {
+                header
+                    .split_whitespace()
+                    .last()
+                    .map(|name| name.trim_end_matches([';', ':', '{']).to_string())
+                    .into_iter()
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            names.into_iter().chain(module_names(&node.children))
         })
         .collect()
 }
