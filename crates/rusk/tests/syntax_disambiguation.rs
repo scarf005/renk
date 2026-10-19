@@ -477,6 +477,26 @@ fn rust_conversion_inlines_format_arguments_used_once_in_order() {
 }
 
 #[test]
+fn rust_round_trip_keeps_format_argument_order() {
+    let rusk = rust_to_rusk(
+        "fn f(pos: usize, name: &str) {\n    println!(\"{} {}\", pos, g(pos));\n    println!(\"{:03}.{name}\", g(pos));\n    println!(\"{name} {}\", g(pos));\n    println!(\"{0} {0}\", name);\n}\n",
+    )
+    .unwrap();
+    let output = rust(&rusk);
+    for expected in [
+        "println!(\"{} {}\", pos, g(pos));",
+        "println!(\"{:03}.{}\", g(pos), name);",
+        "println!(\"{name} {}\", g(pos));",
+        "println!(\"{0} {0}\", name);",
+    ] {
+        assert!(
+            output.contains(expected),
+            "missing {expected}\n{rusk}\n{output}"
+        );
+    }
+}
+
+#[test]
 fn rust_conversion_inlines_constant_format_receivers() {
     let output = rust_to_rusk(
         "static NAME: &str = \"a\";\nstatic NAMES: [&str; 1] = [\"a\"];\nfn f(name: &str) -> String {\n    println!(\"{} {}\", NAME.len(), name);\n    println!(\"{:?} {}\", NAMES[0].len(), NAMES.len());\n    println!(\"{} {}\", NAME, a::NAME.len());\n    format!(\n        \"Expected {} but \\\"{}\\\"\",\n        NAME.len(),\n        name\n    )\n}\n",

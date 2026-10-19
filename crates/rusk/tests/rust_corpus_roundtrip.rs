@@ -41,6 +41,7 @@ const CORPUS: &[(&str, &str)] = &[
     ("one_line_items", include_str!("rust_corpus/one_line_items.rs")),
     ("split_continuations", include_str!("rust_corpus/split_continuations.rs")),
     ("real_crate_forms", include_str!("rust_corpus/real_crate_forms.rs")),
+    ("nested_blocks", include_str!("rust_corpus/nested_blocks.rs")),
 ];
 
 const RUSK_CORPUS: &[(&str, &str)] = &[

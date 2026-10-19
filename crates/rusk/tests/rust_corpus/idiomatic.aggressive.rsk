@@ -62,7 +62,7 @@ fn main():
         counter.add(word)
     last_call(&mut counter)
     counter.log()
-    println!("{counter} {kind_name(&Kind::Pair(1, 2))}")
+    println!("{counter} {}", kind_name(&Kind::Pair(1, 2)))
     println!("{units(&[1]):?} {checked(1):?} {pick(true)}")
     let _ = read("/nonexistent")
     let _ = long_body(&[1])
