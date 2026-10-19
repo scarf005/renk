@@ -1891,7 +1891,6 @@ fn reject_indent_tabs(source: &str) -> Result<(), TranspileError> {
     }
 }
 
-/// Rust `source` with tabs in indentation expanded to 4-column tab stops.
 /// Moves an arm starting on its `macro_rules! m {(...) => ({` line, and the `})}` closing both,
 /// onto their own lines, so the arm sits below the item like any other.
 fn split_inline_macro_arms(source: &str) -> String {
@@ -1915,7 +1914,12 @@ fn split_inline_macro_arms(source: &str) -> String {
                 delimiters.update(&text).is_some_and(<[char]>::is_empty)
             })
         });
-        let (Some(open), Some(end)) = (open, end.filter(|&end| end > index)) else {
+        let closes = |end: usize| {
+            without_trailing_line_comment(lines[end])
+                .trim_end()
+                .ends_with('}')
+        };
+        let (Some(open), Some(end)) = (open, end.filter(|&end| end > index && closes(end))) else {
             output.push(line.to_string());
             index += 1;
             continue;
@@ -1946,6 +1950,7 @@ fn split_inline_macro_arms(source: &str) -> String {
     converted
 }
 
+/// Rust `source` with tabs in indentation expanded to 4-column tab stops.
 fn expand_indent_tabs(source: &str) -> String {
     let tabbed = indent_tab_lines(source).collect::<Vec<_>>();
     if tabbed.is_empty() {
