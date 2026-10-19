@@ -2963,6 +2963,7 @@ fn parse_nodes(
         }
         // Comments indented under a statement, as in `f(x); // a` / `       // b`, follow it.
         let comments = if !has_explicit_block_opener(&line.text)
+            && !line.text.trim_end().ends_with("=>")
             && children
                 .iter()
                 .all(|child| child.children.is_empty() && is_comment(child.text.trim()))
@@ -3322,8 +3323,9 @@ fn emit_scoped_sequence(
     };
     let is_cfg_tail = |start: usize, end: usize| {
         has_cfg(start)
-            && end + 1 < nodes.len()
-            && is_cfg(end + 1)
+            && (end + 1..nodes.len())
+                .find(|&next| !is_comment(nodes[next].text.trim()))
+                .is_some_and(is_cfg)
             && (end + 1..nodes.len()).all(|later| {
                 let text = nodes[later].text.trim();
                 is_attribute(later) || has_cfg(later) || is_comment(text) || is_else_branch(text)
