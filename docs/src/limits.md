@@ -12,7 +12,9 @@ Rusk is a syntax front end, not a Rust replacement. It reads text, not types, so
 
 ## Conversion gaps
 
-- An attribute on the same line as a function with a body, as in `#[inline] pub fn f() {`,
-  converts to Rusk that `rusk` rejects with "attributes and comments cannot own indented blocks".
-  Move the attribute to its own line first.
-- Ruk keeps the `;` of items: `pub struct U;` and `mod a;` need it.
+`rusk from-rust` keeps the compiled meaning but not always the exact text:
+
+- A unit or diverging expression that ends a block can gain a `;`, as after `panic!()` or a
+  `match` statement whose arms are expressions such as `None => v.clear()`.
+- A `macro_rules!` arm that starts on the item's line, as in `macro_rules! m {() => {`, moves
+  to its own lines with a `;` after it.

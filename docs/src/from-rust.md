@@ -23,7 +23,8 @@ indentation form for, such as a `{` block holding a `match` scrutinee, stays Rus
 The repository tests the round trip `Rust -> Rusk -> Rust` against a corpus of Rust files and
 against pinned real crates. For each real crate, the round-tripped crate must compile, keep
 every comment, and produce the same MIR as the original after normalizing source locations,
-local and basic block numbering, and unit temporaries.
+local and basic block numbering, and unit temporaries. MIR is compared with default features,
+with every feature, and for the unit tests, wherever the original builds that way.
 
 ```sh
 cargo test -p rusk --test real_crates -- --ignored --nocapture

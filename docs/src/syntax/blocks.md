@@ -32,6 +32,19 @@ A statement ends at the end of its line. Rusk infers the `;` from the signature:
 returning a value keeps its last expression as the value, and a unit function ends it with
 `;`. Write `;` yourself only to discard a value inference keeps.
 
+Tails selected by `#[cfg(...)]` are each a value. One that is not already a block becomes one,
+since Rust takes attributes only on statements and blocks:
+
+```rsk
+pub fn separator() -> char:
+    #[cfg(unix)]
+    '/'
+    #[cfg(not(unix))]
+    '\\'
+```
+
+becomes `#[cfg(unix)]` / `{ '/' }` / `#[cfg(not(unix))]` / `{ '\\' }`.
+
 ## Function shorthand
 
 `fn name(...) -> T = expr` is a function whose body is one expression. The expression can open a

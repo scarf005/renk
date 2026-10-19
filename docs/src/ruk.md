@@ -17,7 +17,11 @@ pub fn sum_until(values: &[i32], limit: usize) -> i32 {
 ```
 
 A line continues on the next one when that line starts with `.method()`, `?`, `| pattern`, a
-binary operator such as `+ ` or `&& `, or `else`. A `;` you write is kept.
+binary operator such as `+ ` or `&& `, or `else`. A `;` you write is kept. Unit and tuple
+structs, as in `pub struct Meters(f64)`, and `mod name` declarations get their `;` too.
+
+A one-line tail selected by `#[cfg(...)]`, as in `#[cfg(unix)]` / `'/'`, becomes a
+block. Write the braces of a tail that spans several lines yourself.
 
 ```sh
 rusk input.rk -o output.rs   # Ruk to Rust
