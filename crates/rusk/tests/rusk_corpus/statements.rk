@@ -248,3 +248,40 @@ pub fn indented_blocks(c: bool) -> u8 {
     } else { 2 } // { else
     q + w
 }
+
+pub fn wrapped_else(v: Vec<u32>, o: Option<u8>, c: bool) -> u32 {
+    let Some(y) = v
+        .first() // }
+    else {
+        return 0
+    }
+    let Some(z) = v.last()
+    else {
+        return 1
+    }
+    let w = if c { 1 }
+    else {
+        2
+    }
+    o.map(|v| {
+        v > 1
+    })
+    {
+        bare()
+    }
+    let h: for<'a> fn(&'a u32) -> u32 = |n| *n /* in a */
+    {
+        bare()
+    }
+    let n = if o.map(|v| {
+        v > 1
+    }) == Some(true)
+    {
+        h(y)
+    }
+    else
+    {
+        h(z)
+    }
+    n + w /* } */
+}
