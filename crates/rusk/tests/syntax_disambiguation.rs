@@ -902,3 +902,19 @@ fn trailing_heads_with_struct_literal_scrutinees_own_blocks() {
     .unwrap();
     assert_lines(&rusk, &["    let v = if get(K { k }):\n"]);
 }
+
+#[test]
+fn comments_keep_format_arguments() {
+    let rusk = rust_to_rusk(
+        "/// eprintln!(\"{}\", err);\npub fn f(x: u8) {\n    // println!(\"{}\", x);\n    println!(\"{}\", x); // print!(\"{}\", x);\n}\n",
+    )
+    .unwrap();
+    assert_lines(
+        &rusk,
+        &[
+            "/// eprintln!(\"{}\", err);\n",
+            "    // println!(\"{}\", x);\n",
+            "    println!(\"{x}\") // print!(\"{}\", x);\n",
+        ],
+    );
+}
