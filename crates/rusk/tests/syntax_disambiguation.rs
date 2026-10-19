@@ -834,3 +834,25 @@ fn bindings_inside_one_line_are_values_on_that_line() {
         ],
     );
 }
+
+#[test]
+fn lifetimes_const_generics_and_later_lets_on_a_line_bind_values() {
+    let output = rust(
+        "use std.env\nfn s(a: &'static str, b: &str) -> usize = a.len() + b.len()\nfn lt['a](x: &'a str, env: &'a str) -> usize = env.len()\nfn konst[const N: usize, T: Default]() -> T = T.default().max(N.pow(2))\nfn other() -> usize = N.pow(2)\nimpl[const N: usize] Grid[N]:\n    fn size(&self) -> usize = N.pow(2)\nfn main():\n    let v = 1; let env = vec![1]\n    env.len()\n",
+    );
+    assert_lines(
+        &output,
+        &[
+            "    a.len() + b.len()\n",
+            "    env.len()\n",
+            "    T::default().max(N.pow(2))\n",
+            "fn other() -> usize {\n    N::pow(2)\n",
+            "        N.pow(2)\n",
+            "    env.len();\n",
+        ],
+    );
+
+    let source = "fn s<'a>(a: &'a str, b: &str) -> usize {\n    a.len() + b.len()\n}\n";
+    let rusk = rust_to_rusk(source).unwrap();
+    assert!(rust(&rusk).contains("a.len() + b.len()"), "{rusk}");
+}
