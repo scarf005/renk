@@ -431,7 +431,13 @@ impl RukSemicolonInferer {
             if delimiter_depth == 0 {
                 in_attribute = text.starts_with('#') && next_delimiter_depth > 0;
             }
-            let converted = if self.in_macro() || header_continues || in_long_header || in_attribute
+            // A `})}` line closing a macro's last arm and the macro itself stays tokens too.
+            let closes_macro = closed.is_some_and(|scope| scope.kind == RukScopeKind::Macro);
+            let converted = if self.in_macro()
+                || closes_macro
+                || header_continues
+                || in_long_header
+                || in_attribute
             {
                 raw.to_string()
             } else if closed.is_some_and(|scope| scope.ends_statement)
@@ -862,7 +868,7 @@ fn convert_rust_lines(source: &str, aggressive: bool) -> Result<String, Transpil
     // Delimiter depth inside a multi-line `macro_rules!` arm body, whose lines stay Rust tokens.
     let mut arm_depth = None;
 
-    let source = &expand_indent_tabs(source);
+    let source = &split_inline_macro_arms(&expand_indent_tabs(source));
     let in_literal = lines_ending_in_literal(source);
     let heads = with_pipe_patterns(
         lone_opener_heads(&source.lines().collect::<Vec<_>>(), &in_literal, "{"),
@@ -1881,6 +1887,60 @@ fn reject_indent_tabs(source: &str) -> Result<(), TranspileError> {
 }
 
 /// Rust `source` with tabs in indentation expanded to 4-column tab stops.
+/// Moves an arm starting on its `macro_rules! m {(...) => ({` line, and the `})}` closing both,
+/// onto their own lines, so the arm sits below the item like any other.
+fn split_inline_macro_arms(source: &str) -> String {
+    let lines = source.lines().collect::<Vec<_>>();
+    let in_literal = lines_ending_in_literal(source);
+    let mut output = Vec::new();
+    let mut index = 0;
+    while index < lines.len() {
+        let line = lines[index];
+        let code = without_trailing_line_comment(line).trim_end();
+        let open = (!(index > 0 && in_literal[index - 1]) && is_macro_item(code.trim_start()))
+            .then(|| code.find('{'))
+            .flatten()
+            .filter(|&open| !code[open + 1..].trim().is_empty());
+        let mut delimiters = OpenDelimiters::default();
+        let mut text = String::new();
+        let end = open.and_then(|_| {
+            (index..lines.len()).find(|&at| {
+                text.push_str(lines[at]);
+                text.push('\n');
+                delimiters.update(&text).is_some_and(<[char]>::is_empty)
+            })
+        });
+        let (Some(open), Some(end)) = (open, end.filter(|&end| end > index)) else {
+            output.push(line.to_string());
+            index += 1;
+            continue;
+        };
+        let indent = spaces(raw_indent(line));
+        output.push(line[..=open].to_string());
+        output.push(format!("{indent}    {}", line[open + 1..].trim_start()));
+        for at in index + 1..end {
+            let keep = in_literal[at - 1] || lines[at].trim().is_empty();
+            output.push(if keep {
+                lines[at].to_string()
+            } else {
+                format!("    {}", lines[at])
+            });
+        }
+        let close = without_trailing_line_comment(lines[end]).trim_end();
+        let head = &close[..close.len() - 1];
+        if !head.trim().is_empty() {
+            output.push(format!("    {head}"));
+        }
+        output.push(format!("{indent}}}{}", &lines[end][close.len()..]));
+        index = end + 1;
+    }
+    let mut converted = output.join("\n");
+    if source.ends_with('\n') {
+        converted.push('\n');
+    }
+    converted
+}
+
 fn expand_indent_tabs(source: &str) -> String {
     let tabbed = indent_tab_lines(source).collect::<Vec<_>>();
     if tabbed.is_empty() {
@@ -1962,6 +2022,11 @@ fn source_lines(source: &str) -> Result<Vec<SourceLine>, TranspileError> {
         let mut group = chained.then_some('}');
         let mut open = OpenDelimiters::default();
         let mut header_end = heads[index];
+        // A macro arm's matcher continued over several lines, up to its `=>`.
+        let in_matcher = |text: &str| {
+            macro_indent.is_some_and(|item| indent > item)
+                && open_delimiters(text).is_some_and(|open| !open.is_empty())
+        };
         while joins_next_line(
             &text,
             raw_lines.peek().map(|(_, next)| *next),
@@ -1969,6 +2034,7 @@ fn source_lines(source: &str) -> Result<Vec<SourceLine>, TranspileError> {
             &mut group,
             &mut open,
         ) || header_end.is_some()
+            || in_matcher(&text)
         {
             let Some((index, next)) = raw_lines.next() else {
                 return Err(TranspileError {
