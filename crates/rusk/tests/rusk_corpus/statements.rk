@@ -285,3 +285,18 @@ pub fn wrapped_else(v: Vec<u32>, o: Option<u8>, c: bool) -> u32 {
     }
     n + w /* } */
 }
+
+pub fn cfg_tails(c: bool) -> usize {
+    #[cfg(unix)]
+    if c { 1 } else { 2 } // a
+    #[cfg(not(unix))]
+    #[allow(unused)]
+    Tuple(1).0 as usize // b
+}
+
+pub fn cfg_macro_tail() -> u8 {
+    #[cfg(unix)]
+    vec![1u8][0]
+    #[cfg(not(unix))]
+    2
+}

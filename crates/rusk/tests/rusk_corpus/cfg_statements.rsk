@@ -9,3 +9,39 @@ pub fn cfg_statements(v: &mut Vec[u32]) -> usize:
     let x = 2
     v.push(x)
     v.len()
+
+pub fn cfg_values(v: Vec[u32], c: bool) -> usize:
+    #[cfg(unix)]
+    v.iter()
+        .count() // }
+    #[cfg(not(unix))]
+    #[allow(unused)]
+    v.len() + 1
+
+pub fn cfg_blocks(c: bool) -> usize:
+    #[cfg(unix)]
+    if c:
+        1
+    else:
+        2
+    #[cfg(not(unix))]
+    match c:
+        true => 3
+        false => 4
+
+pub fn cfg_lets() -> usize:
+    #[cfg(unix)]
+    let n = 1
+    #[cfg(not(unix))]
+    let n = 2
+    #[allow(unused)]
+    n
+
+#[cfg(unix)]
+pub mod platform:
+    pub fn one() -> u8 = 1
+
+#[cfg(not(unix))]
+#[allow(unused)]
+pub mod platform:
+    pub fn one() -> u8 = 2
