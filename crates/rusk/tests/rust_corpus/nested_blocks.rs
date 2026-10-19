@@ -171,3 +171,25 @@ pub fn wrapped_conditions(a: u8, c: char) -> u8 {
         return wide;
     }
 }
+
+pub fn value_scrutinees(a: Option<u8>, b: Option<u8>) -> u8 {
+    if let Some(found) = if let Some(x) = a {
+        Some(x)
+    } else if let Some(y) = b {
+        Some(y)
+    } else {
+        None
+    } {
+        return found;
+    }
+    while let Some(next) = match a {
+        Some(0) => None,
+        other => other,
+    } {
+        return next;
+    }
+    let Some(last) = (if let Some(x) = b { Some(x) } else { a }) else {
+        return 0;
+    };
+    last
+}
