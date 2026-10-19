@@ -2954,6 +2954,16 @@ fn parse_nodes(
             closing = Some(tail.to_string());
             index += 1;
         }
+        // Comments indented under a statement, as in `f(x); // a` / `       // b`, follow it.
+        let comments = if !has_explicit_block_opener(&line.text)
+            && children
+                .iter()
+                .all(|child| child.children.is_empty() && is_comment(child.text.trim()))
+        {
+            std::mem::take(&mut children)
+        } else {
+            Vec::new()
+        };
         nodes.push(Node {
             line: line.line,
             indent: line.indent,
@@ -2963,6 +2973,7 @@ fn parse_nodes(
             comment: line.comment.clone(),
             closing_comment: line.closing_comment.clone(),
         });
+        nodes.extend(comments);
     }
     Ok((nodes, index))
 }
