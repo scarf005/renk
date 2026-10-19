@@ -92,3 +92,22 @@ pub fn unions(items: Vec<u8>) -> usize {
     union = union.into_iter().rev().collect();
     union.len()
 }
+
+pub fn operand_conditions(a: bool, mut has: bool) -> bool {
+    if a || {
+        has = !has;
+        has
+    } {
+        return true;
+    }
+    while !a && {
+        has = !has;
+        has
+    } {}
+    if [a].iter().any(|&b| {
+        b || has
+    }) {
+        return false;
+    }
+    has
+}
