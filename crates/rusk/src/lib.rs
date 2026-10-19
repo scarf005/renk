@@ -462,7 +462,11 @@ impl RukSemicolonInferer {
             {
                 raw.to_string()
             } else if closed.is_some_and(|scope| scope.ends_statement)
-                && split_line_comment(text).map_or(text, |(code, _)| code).trim_end() == "}"
+                // A chain closed on the same line, as in `} else { 2 }`, also ends it.
+                && (code == "}"
+                    || (code.starts_with("} else")
+                        && code.ends_with('}')
+                        && open_delimiters(&code[1..]).is_some_and(|open| open.is_empty())))
                 && !self.continues_on_next_line(index)
             {
                 insert_semicolon(raw)
@@ -586,6 +590,11 @@ impl RukSemicolonInferer {
             return true;
         }
         if self.in_trait_scope() && looks_like_trait_item_without_body(text) {
+            return true;
+        }
+        // A unit or tuple struct, as in `pub struct T(pub u32)`, or a `mod p` declaration has no
+        // body.
+        if (is_struct_item(text) || starts_item(text, "mod")) && !text.ends_with(['{', '}']) {
             return true;
         }
         // An item or a `name! { ... }` invocation, which may also be an item, needs no `;`.
@@ -2396,12 +2405,20 @@ fn lone_opener_heads(lines: &[&str], in_literal: &[bool], opener: &str) -> Vec<O
                 '=', '+', '-', '*', '/', '%', '&', '|', '^', '<', '>', '!', ':',
             ])
             && !has_control_operand(&header);
-        if raw_indent(lines[head]) == indent
+        // A block value indented under its header, as in `let fut = async move` / `    {`.
+        let opens_value = header.ends_with([
+            '=', '+', '-', '*', '/', '%', '&', '|', '^', '<', '>', '!', ':',
+        ]) || has_control_operand(&header);
+        if (raw_indent(lines[head]) == indent
+            || (start == end && raw_indent(lines[head]) < indent && opens_value))
             && !is_statement
             // A control or `let` header right before its `{` line, or a header continued on
             // indented lines; `))]` ending an attribute stays apart from a bare block.
             && ((start..end).any(|between| !lines[between].trim().is_empty())
-                || (start == end && (starts_control_flow(&head_code) || is_let(&head_code))))
+                || (start == end
+                    && (starts_control_flow(&head_code)
+                        || is_let(&head_code)
+                        || is_assignment(&head_code))))
             && !head_code.is_empty()
             && !head_code.starts_with(['#', '/'])
             && !head_code.ends_with([';', ',', '{', '}'])
@@ -2549,7 +2566,7 @@ fn has_control_operand(text: &str) -> bool {
                 // `r#else` is a name.
                 let opens = !closed
                     && match &*word {
-                        "unsafe" | "async" => after.is_empty(),
+                        "unsafe" | "async" | "const" => after.is_empty(),
                         "for" => has_in,
                         _ => true,
                     };
@@ -2560,6 +2577,7 @@ fn has_control_operand(text: &str) -> bool {
                         || matches!(
                             &*word,
                             "if" | "match" | "while" | "for" | "loop" | "unsafe" | "async"
+                                | "const"
                         ) && operand)
                 {
                     return true;
@@ -6482,6 +6500,8 @@ fn is_jump_statement(text: &str) -> bool {
 }
 
 fn is_assignment(text: &str) -> bool {
+    // An operator may end the line, as in `q +=` / `{`.
+    let text = &format!("{} ", text.trim_end());
     let chars = text.chars().collect::<Vec<_>>();
     // At the top level, unlike the `=` of `}, |x| { let y = x; y })`.
     top_level_position(&chars, 0, |at| {
