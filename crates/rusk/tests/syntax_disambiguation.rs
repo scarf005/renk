@@ -689,3 +689,19 @@ fn rust_conversion_parenthesizes_imported_name_and_crate_field_receivers() {
     assert!(rusk.contains("env.args().count()"), "{rusk}");
     assert!(rusk.contains("regex.Regex.new("), "{rusk}");
 }
+
+#[test]
+fn closure_heads_own_colon_blocks() {
+    let output = rust(
+        "fn demo(xs: &mut Vec[i32], a: bool, b: bool) -> usize:\n    let describe = |n: usize| -> String:\n        if n > 1:\n            format!(\"long {n}\")\n        else:\n            \"short\".to_string()\n    let shout = move |s: &str|:\n        let upper = s.to_uppercase()\n        upper + \"!\"\n    xs.sort_by(|a, b|:\n        b.cmp(a)\n    let handle = std.thread.spawn(move ||:\n        1 + 1\n    if a || b:\n        xs.clear()\n    describe(2).len() + shout(\"a\").len()\n",
+    );
+    for expected in [
+        "    let describe = |n: usize| -> String {\n        if n > 1 {\n",
+        "    let shout = move |s: &str| {\n        let upper = s.to_uppercase();\n        upper + \"!\"\n    };\n",
+        "    xs.sort_by(|a, b| {\n        b.cmp(a)\n    });\n",
+        "    let handle = std::thread::spawn(move || {\n        1 + 1\n    });\n",
+        "    if a || b {\n        xs.clear();\n    }\n",
+    ] {
+        assert!(output.contains(expected), "missing {expected:?}\n{output}");
+    }
+}

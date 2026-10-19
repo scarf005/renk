@@ -215,3 +215,17 @@ pub fn imported_module_paths() -> usize:
     let _ = write!(shown, "{}", env.args().count()) // env.args(
     let env_name = "env.var(" // ends in (
     helpers.twice(shown.len() + env_name.len())
+
+pub fn closure_blocks(mut xs: Vec[i32], a: bool, b: bool) -> usize:
+    let describe = |n: usize| -> String: // returns String:
+        if n > 1 then format!("long {n}") else "short".to_string()
+    let shout = move |s: &str|:
+        let upper = s.to_uppercase() // ends in |:
+        upper + "|:"
+    xs.sort_by(|a, b|:
+        b.cmp(a)
+    let total = std::thread::spawn(move ||:
+        1 + 1
+    if a || b:
+        xs.clear()
+    describe(2).len() + shout("a").len() + total.join().unwrap_or(0) as usize
