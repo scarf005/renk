@@ -1407,7 +1407,9 @@ fn dot_rust_paths(line: &str) -> Option<String> {
         } else {
             String::new()
         };
-        let dotted = any_head || should_convert_path(&[head.clone(), next], PathMode::Expr, None);
+        let dotted = any_head
+            || (should_convert_path(&[head.clone(), next], PathMode::Expr, None)
+                && !closure_binds_at(&chars, index, &head));
         output.push_str(&head);
         while dotted
             && chars[end..].starts_with(&[':', ':'])
@@ -4498,22 +4500,48 @@ fn closing_delimiters(text: &str) -> String {
 fn lower_basic_expr(text: &str) -> String {
     let text = map_std_macro_arguments(text, lower_expr);
     let chars = lower_format_macros(&text).chars().collect::<Vec<_>>();
-    let lower_value = |range: &[char]| {
-        replace_dotted_paths(
-            &replace_square_generics(&range.iter().collect::<String>(), GenericMode::Expr),
-            PathMode::Expr,
-        )
+    let closures = closures(&chars);
+    // Each closure's parameters are values inside its body, as `env` in `.map(|env| *env)`, but
+    // not after it.
+    let lower_value = |start: usize, end: usize| {
+        let mut bounds = closures
+            .iter()
+            .flat_map(|closure| [closure.body.start, closure.body.end])
+            .filter(|&bound| start < bound && bound < end)
+            .collect::<Vec<_>>();
+        bounds.sort_unstable();
+        bounds.dedup();
+        std::iter::once(start)
+            .chain(bounds.iter().copied())
+            .zip(bounds.iter().copied().chain(std::iter::once(end)))
+            .map(|(start, end)| {
+                let names = closures
+                    .iter()
+                    .filter(|closure| closure.body.contains(&start))
+                    .flat_map(|closure| closure.parameters.clone())
+                    .collect();
+                with_value_scope(names, || {
+                    replace_dotted_paths(
+                        &replace_square_generics(
+                            &chars[start..end].iter().collect::<String>(),
+                            GenericMode::Expr,
+                        ),
+                        PathMode::Expr,
+                    )
+                })
+            })
+            .collect::<String>()
     };
     let mut output = String::new();
     let mut start = 0usize;
     for (type_start, type_end) in type_annotation_spans(&chars) {
-        output.push_str(&lower_value(&chars[start..type_start]));
+        output.push_str(&lower_value(start, type_start));
         output.push_str(&lower_signature(
             &chars[type_start..type_end].iter().collect::<String>(),
         ));
         start = type_end;
     }
-    output.push_str(&lower_value(&chars[start..]));
+    output.push_str(&lower_value(start, chars.len()));
     output
 }
 
@@ -6090,7 +6118,13 @@ fn node_bindings(text: &str, context: Context, has_block: bool) -> NodeBindings 
     let (text, _) = strip_explicit_semicolon(text.trim());
     let (text, _) = strip_block_marker(text);
     let chars = text.chars().collect::<Vec<_>>();
-    bindings.own = closure_parameter_bindings(&chars);
+    // A closure body continued on later lines binds its parameters there too; one closed on
+    // this line binds them only inside it.
+    bindings.own = closures(&chars)
+        .into_iter()
+        .filter(|closure| closure.body.end == chars.len())
+        .flat_map(|closure| closure.parameters)
+        .collect();
     bindings.own.extend(format_placeholder_bindings(&chars));
     bindings.own.extend(matches_pattern_bindings(text));
     bindings.own.extend(inline_arm_bindings(text));
@@ -6286,7 +6320,20 @@ fn format_placeholder_bindings(chars: &[char]) -> Vec<String> {
 /// Parameters of each closure in `chars`, macro arguments included, such as `a` and `b` in
 /// `|a, (b, _): (u8, u8)|`.
 fn closure_parameter_bindings(chars: &[char]) -> Vec<String> {
-    let mut names = Vec::new();
+    closures(chars)
+        .into_iter()
+        .flat_map(|closure| closure.parameters)
+        .collect()
+}
+
+struct Closure {
+    parameters: Vec<String>,
+    /// The body's character range, up to the `,`, `;`, or closing delimiter that ends it.
+    body: std::ops::Range<usize>,
+}
+
+fn closures(chars: &[char]) -> Vec<Closure> {
+    let mut closures = Vec::new();
     let mut index = 0;
     while index < chars.len() {
         if let Some(end) = opaque_span_end(chars, index) {
@@ -6298,14 +6345,30 @@ fn closure_parameter_bindings(chars: &[char]) -> Vec<String> {
                 break;
             };
             let parameters = chars[index + 1..close].iter().collect::<String>();
-            for parameter in split_macro_arguments(&parameters, false) {
-                names.extend(pattern_bindings(without_type(parameter)));
-            }
+            let end = top_level_position(chars, close + 1, |at| {
+                matches!(chars[at], ',' | ';' | ')' | ']' | '}')
+            })
+            .unwrap_or(chars.len());
+            closures.push(Closure {
+                parameters: split_macro_arguments(&parameters, false)
+                    .into_iter()
+                    .flat_map(|parameter| pattern_bindings(without_type(parameter)))
+                    .collect(),
+                body: close + 1..end,
+            });
             index = close;
         }
         index += 1;
     }
-    names
+    closures
+}
+
+/// Whether a closure whose body holds `at` binds `name`, as `env` in `.map(|env| *env)` but not
+/// in the `env.args()` after it.
+fn closure_binds_at(chars: &[char], at: usize, name: &str) -> bool {
+    closures(chars).iter().any(|closure| {
+        closure.body.contains(&at) && closure.parameters.iter().any(|bound| bound == name)
+    })
 }
 
 /// `pattern` without a top-level `: Type` annotation.
