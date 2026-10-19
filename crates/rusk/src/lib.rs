@@ -5554,16 +5554,21 @@ fn node_bindings(text: &str, context: Context, has_block: bool) -> NodeBindings 
         }
         return bindings;
     }
+    // The head's `for` or `let` pattern; a `let` nested in the condition, as in
+    // `if let Some(v) = if let Some(x) = a {`, binds where it is written.
+    let nested = lets.split_off(let_pattern_bindings(&chars, false).len().min(lets.len()));
+    let mut head = lets;
     if let Some(rest) = strip_control_label(text).strip_prefix("for ")
         && let Some(at) = find_top_level_keyword(rest, "in")
     {
-        lets.extend(pattern_bindings(&rest[..at]));
+        head.extend(pattern_bindings(&rest[..at]));
     }
     if has_block {
-        bindings.block = lets;
+        bindings.block = head;
     } else {
-        bindings.own.extend(lets);
+        bindings.own.extend(head);
     }
+    bindings.own.extend(nested);
     bindings
 }
 
