@@ -169,6 +169,8 @@ struct Emitter {
     blank_lines: Vec<bool>,
     /// The last source line a node began on.
     last_node_line: usize,
+    /// The source line of the attribute just pushed.
+    attribute_line: Option<usize>,
 }
 
 pub fn transpile(source: &str) -> Result<TranspileOutput, TranspileError> {
@@ -2166,6 +2168,23 @@ fn source_lines(source: &str) -> Result<Vec<SourceLine>, TranspileError> {
             arm_indent = Some(indent);
         }
         let (code, comment) = split_trailing_comment(&text);
+        // Attributes before an item on its line, as in `#[inline] pub fn f():`, are lines of
+        // their own that the emitter writes back on the item's line.
+        let mut code = code;
+        while code.starts_with("#[")
+            && let Some(close) = matching_delimiter(code, 1, '[', ']', false)
+            && !code[close + 1..].trim().is_empty()
+        {
+            lines.push(SourceLine {
+                line,
+                indent,
+                text: code[..=close].to_string(),
+                raw: false,
+                comment: None,
+                closing_comment: None,
+            });
+            code = code[close + 1..].trim_start();
+        }
         lines.push(SourceLine {
             line,
             indent,
@@ -6545,6 +6564,20 @@ impl Emitter {
     /// Pushes a possibly multi-line logical line, mapping each physical line to its source line.
     /// A multi-line header whose `:` stands on its own line opens its `{` on its own line too.
     fn push(&mut self, node: &Node, mut line: String) {
+        // The line after an attribute from the same source line joins it, as in `#[inline] fn`.
+        if self.attribute_line == Some(node.line)
+            && let Some(last) = self.lines.last_mut()
+            && last.trim_start().starts_with("#[")
+        {
+            last.push(' ');
+            line = format!("{last}{}", line.trim_start());
+            self.lines.pop();
+        }
+        self.attribute_line = node
+            .text
+            .trim_start()
+            .starts_with("#[")
+            .then_some(node.line);
         let own_line_marker = node.text.lines().count() > 1
             && node
                 .text
