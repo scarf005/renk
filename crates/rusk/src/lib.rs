@@ -4256,8 +4256,13 @@ fn strip_block_opener(text: &str) -> &str {
     strip_open_brace(strip_block_marker(text).0)
 }
 
+/// `text` without the `{` that ends its code; a `{` in a trailing `//` comment stays.
 fn strip_open_brace(text: &str) -> &str {
-    text.trim().trim_end_matches('{').trim_end()
+    let text = text.trim();
+    if without_trailing_line_comment(text).len() < text.len() {
+        return text;
+    }
+    text.trim_end_matches('{').trim_end()
 }
 
 fn closing_delimiters(text: &str) -> String {
