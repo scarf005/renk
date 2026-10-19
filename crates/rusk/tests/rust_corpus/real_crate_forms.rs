@@ -119,3 +119,18 @@ pub fn arm(x: u8, c: bool) -> Option<u8> {
         _ => 0,
     })
 }
+
+pub fn gated() -> u8 {
+    #[cfg(any(
+        unix,
+        windows,
+    ))]
+    {
+        return 1;
+    }
+    #[allow(unused)]
+    {
+        let _x = 2;
+    }
+    0
+}
