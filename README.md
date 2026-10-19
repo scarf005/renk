@@ -83,6 +83,7 @@ just web # open web editor
 - a `})?` / `}).method()` closing line keeps its suffix after a `{` block, a trailing `match` head, or the last `else` of a chain whose head ends with `{`
 - `match` at the end of a larger expression, e.g. `let x = match y:` or `.filter(|v| match v:`, and `else` branches after `f(if c {` or `let pattern = value` (`let ... else`)
 - dotted path lowering for obvious item paths, e.g. `std.io.Read` -> `std::io::Read`, `Foo.new()` -> `Foo::new()`
+- a `.name` after a lowercase name that a `use`, `mod`, or `extern crate` item anywhere in the file binds is a path, e.g. `use std.{env, fs}` then `env.args()` -> `env::args()`, and so is a lowercase name before a CamelCase segment, e.g. `regex.Regex.new(s)` -> `regex::Regex::new(s)` and `std.vec.Vec[u8].new()` -> `std::vec::Vec::<u8>::new()`; parentheses keep a value receiver, e.g. `(env).len()`
 - a `.name` after an explicit `::` path ending in a CamelCase segment is a path, e.g. `regex::Regex.new(s)` -> `regex::Regex::new(s)`, while `Config::DEFAULT.len()` keeps its value receiver
 - escape hatches: Rust `::` / `::<...>` force path/generic syntax, while parentheses force a value receiver, e.g. `(TEXT).len()`
 - macro definitions with indentation-based `macro_rules!` arms; macro patterns, bodies, and other macro invocation token trees use Rust syntax unchanged, and a multi-line `pattern =>:` arm keeps every indented body line, including closing delimiters

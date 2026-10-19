@@ -31,7 +31,7 @@ fn kind_name(kind: &Kind) -> &'static str = match kind:
     Kind.Pair(..) => "pair"
 
 fn read(path: &str) -> std.io.Result[()]:
-    let text = fs::read_to_string(path)?
+    let text = fs.read_to_string(path)?
     let suffix = if text.is_empty() then ".txt" else ".xml"
     let size = if text.len() > 10 then 2 else if text.is_empty() then 0 else 1
     println!("{suffix} {size}")
