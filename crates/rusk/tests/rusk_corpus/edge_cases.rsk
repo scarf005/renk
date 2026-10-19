@@ -205,3 +205,13 @@ pub fn std_macro_arguments(flag: bool) -> usize:
     let shown = format!("{} {}", dbg!(String.from("a").len()), vec![Vec[u8].new()].len())
     println!("{}", if ordered then shown.len() else kept)
     sizes.iter().sum[usize]() + repeated.len()
+
+mod helpers:
+    pub fn twice(n: usize) -> usize = n * 2
+
+pub fn imported_module_paths() -> usize:
+    use std.{env, fmt.Write as _}
+    let mut shown = String.new()
+    let _ = write!(shown, "{}", env.args().count()) // env.args(
+    let env_name = "env.var(" // ends in (
+    helpers.twice(shown.len() + env_name.len())

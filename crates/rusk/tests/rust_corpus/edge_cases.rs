@@ -89,3 +89,10 @@ pub fn explicit_path_receivers() -> usize {
     let size = std::f64::consts::PI.to_bits() as usize;
     if order.is_gt() && less { text.len() + bits + size } else { 0 }
 }
+
+pub fn imported_module_receivers(path: &str) -> usize {
+    use std::env;
+    let env = path;
+    let count = env::args().count();
+    env.len() + count
+}

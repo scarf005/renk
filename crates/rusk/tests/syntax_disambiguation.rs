@@ -643,3 +643,49 @@ fn rust_conversion_keeps_std_macro_argument_receivers() {
         assert!(output.contains(expected), "missing {expected}\nRusk:\n{rusk}\n{output}");
     }
 }
+
+#[test]
+fn imported_lowercase_names_and_crate_type_paths_lower_dot_calls() {
+    let output = rust(
+        "use std.{env, fs, io.{self, Read as _}}\nuse std.collections as coll\nmod util:\n    pub fn one() -> i32 = 1\nfn main():\n    let args = env.args()\n    fs.write(\"a\", \"b\")\n    let input = io.stdin()\n    let map = coll.HashMap[u8, u8].new()\n    let one = util.one()\n    let env_len = (env).len()\n    let text = \"env.args()\" // env.args(\n    let re = regex.Regex.new(\"a\")\n    let null = serde_json.Value.Null\n    let field = guid.data1\n    let size = name.len()\n    let shown = format!(\"{env.var(\"A\").is_ok()}\")\n",
+    );
+    for expected in [
+        "let args = env::args();",
+        "fs::write(\"a\", \"b\");",
+        "let input = io::stdin();",
+        "let map = coll::HashMap::<u8, u8>::new();",
+        "let one = util::one();",
+        "let env_len = (env).len();",
+        "let text = \"env.args()\"; // env.args(",
+        "let re = regex::Regex::new(\"a\");",
+        "let null = serde_json::Value::Null;",
+        "let field = guid.data1;",
+        "let size = name.len();",
+        "format!(\"{}\", env::var(\"A\").is_ok())",
+    ] {
+        assert!(output.contains(expected), "missing {expected}\n{output}");
+    }
+    assert!(rust("fn f(env: &str) -> usize = env.len()\n").contains("env.len()"));
+
+    let output = rust(
+        "use std.{\n    env, // fs,\n    process,\n}\nfn main():\n    let text = \"\nuse fake.{thing}\n\"\n    let code = process.id()\n    let size = thing.len() + fs.len()\n",
+    );
+    assert!(output.contains("let code = process::id();"), "{output}");
+    assert!(output.contains("let size = thing.len() + fs.len();"), "{output}");
+}
+
+#[test]
+fn rust_conversion_parenthesizes_imported_name_and_crate_field_receivers() {
+    let source = "use std::env;\nfn f(path: &str, guid: Guid) -> usize {\n    let env = path;\n    let count = env::args().count();\n    let re = regex::Regex::new(\"a\");\n    env.len() + count + guid.Data1 as usize\n}\n";
+    let rusk = rust_to_rusk(source).unwrap();
+    let output = rust(&rusk);
+    for expected in [
+        "let count = env::args().count();",
+        "let re = regex::Regex::new(\"a\");",
+        "(env).len() + count + (guid).Data1 as usize",
+    ] {
+        assert!(output.contains(expected), "missing {expected}\nRusk:\n{rusk}\n{output}");
+    }
+    assert!(rusk.contains("env.args().count()"), "{rusk}");
+    assert!(rusk.contains("regex.Regex.new("), "{rusk}");
+}
