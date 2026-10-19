@@ -243,3 +243,24 @@ pub fn closure_match_operands(xs: Vec<u8>) -> bool {
         _ => false,
     }) || count > 3
 }
+
+pub fn borrowed_match_values(mut e: Vec<u32>) -> u32 {
+    let first = &match e
+        .iter()
+        .next()
+    {
+        Some(v) => *v,
+        None => 0,
+    };
+    let last = &mut match e
+        .iter_mut()
+        .map(|value| *value + 1)
+        .last()
+    {
+        Some(v) => v,
+        None => 0,
+    };
+    *last += 1;
+    e.push(*first);
+    *first + *last + !match e.len() { 0 => 1, _ => 2 }
+}
