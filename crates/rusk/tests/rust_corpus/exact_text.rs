@@ -123,3 +123,21 @@ pub fn statement_chains(c: bool, mut n: u8) -> u8 {
     }
     n
 }
+
+pub fn arm_chains(o: Option<u8>, mut n: u8) -> u8 {
+    while n > 0 {
+        match o {
+            Some(0) => {
+                n = 0;
+            }
+            _ => {
+                if n > 1 {
+                    n -= 1;
+                } else { // }
+                    n = 0;
+                }
+            }
+        }
+    }
+    n
+}
