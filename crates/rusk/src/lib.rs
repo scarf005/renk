@@ -162,6 +162,10 @@ struct Emitter {
     tree_stack: Vec<SourceMapNode>,
     /// Trailing source comments by generated line, appended once every line is final.
     comments: Vec<(usize, String)>,
+    /// Whether each source line, numbered from 1, is blank.
+    blank_lines: Vec<bool>,
+    /// The last source line a node began on.
+    last_node_line: usize,
 }
 
 pub fn transpile(source: &str) -> Result<TranspileOutput, TranspileError> {
@@ -172,7 +176,12 @@ fn transpile_lines(source: &str) -> Result<TranspileOutput, TranspileError> {
     let lines = source_lines(source)?;
     let nodes = parse_source_tree(&lines)?;
 
-    let mut emitter = Emitter::default();
+    let mut emitter = Emitter {
+        blank_lines: std::iter::once(false)
+            .chain(source.lines().map(|line| line.trim().is_empty()))
+            .collect(),
+        ..Emitter::default()
+    };
     let modules = module_names(&nodes);
     MODULE_VALUES.set(
         module_value_names(&nodes)
@@ -184,6 +193,7 @@ fn transpile_lines(source: &str) -> Result<TranspileOutput, TranspileError> {
     for (line, comment) in &emitter.comments {
         emitter.lines[*line].push_str(comment);
     }
+    emitter.join_else_lines();
     Ok(TranspileOutput {
         rust: ensure_trailing_newline(&emitter.lines.join("\n")),
         source_map: emitter.source_map,
@@ -6312,7 +6322,19 @@ fn is_inline_struct_literal(text: &str) -> bool {
 }
 
 impl Emitter {
+    /// Starts `node`, after the blank source line before it.
     fn begin_node(&mut self, node: &Node, kind: String) {
+        // Only the first node on a line, not the body an `= match x:` head lowers to.
+        if node.line > self.last_node_line
+            && self.blank_lines.get(node.line - 1) == Some(&true)
+            && self
+                .lines
+                .last()
+                .is_some_and(|last| !last.trim().is_empty())
+        {
+            self.lines.push(String::new());
+        }
+        self.last_node_line = self.last_node_line.max(node.line);
         self.tree_stack.push(SourceMapNode {
             kind,
             source_line: node.line,
@@ -6361,6 +6383,41 @@ impl Emitter {
         }
     }
 
+    /// Writes each `else` after the `}` line before it, as in `} else {`, renumbering the maps.
+    fn join_else_lines(&mut self) {
+        let in_literal = lines_ending_in_literal(&self.lines.join("\n"));
+        let mut joined = Vec::new();
+        for index in (1..self.lines.len()).rev() {
+            if in_literal[index - 1] {
+                continue;
+            }
+            let (before, after) = self.lines.split_at_mut(index);
+            let (close, branch) = (&mut before[index - 1], &after[0]);
+            if close.trim() == "}"
+                && raw_indent(close) == raw_indent(branch)
+                && is_else_branch(branch.trim())
+            {
+                close.push(' ');
+                close.push_str(branch.trim_start());
+                self.lines.remove(index);
+                joined.push(index);
+            }
+        }
+        // A generated line number counts from 1, so line `index + 1` joins line `index`.
+        let renumber = |line: usize| line - joined.iter().filter(|&&index| index < line).count();
+        for entry in &mut self.source_map {
+            entry.generated_line = renumber(entry.generated_line);
+        }
+        fn renumber_tree(nodes: &mut [SourceMapNode], renumber: &dyn Fn(usize) -> usize) {
+            for node in nodes {
+                node.generated_start_line = renumber(node.generated_start_line);
+                node.generated_end_line = renumber(node.generated_end_line);
+                renumber_tree(&mut node.children, renumber);
+            }
+        }
+        renumber_tree(&mut self.source_tree, &renumber);
+    }
+
     fn push_generated(&mut self, line: String) {
         self.lines.extend(line.split('\n').map(str::to_string));
     }
@@ -6407,10 +6464,12 @@ pub struct User {
     pub id: u64,
     pub name: String,
 }
+
 impl User {
     pub fn new(id: u64, name: String) -> Self {
         Self{ id, name }
     }
+
     pub fn display_name(&self) -> &str {
         &self.name
     }
@@ -6465,11 +6524,13 @@ fn log(value: Result[i32, String]):
             r#"pub struct Boxed<T> {
     pub value: T,
 }
+
 impl<T> Boxed<T> {
     pub fn new(value: T) -> Self {
         Self{ value }
     }
 }
+
 fn log(value: Result<i32, String>) {
     match value {
         Ok(number) => {
@@ -6569,6 +6630,7 @@ pub fn id(value: i32) -> i32:
             r#"pub fn main() {
     println!("hello");
 }
+
 pub fn id(value: i32) -> i32 {
     value
 }
@@ -6612,6 +6674,7 @@ fn discarded_units(values: &[i32]) -> Vec[()] = values
             r#"fn bump(value: i32) -> i32 {
     value + 1
 }
+
 fn discarded_units(values: &[i32]) -> Vec<()> {
     values
         .iter()
@@ -6643,6 +6706,7 @@ fn demo(value: Option[i32]):
             r#"struct Foo {
     x: i32,
 }
+
 fn demo(value: Option<i32>) {
     match value {
         Some(number) => number,
@@ -6698,6 +6762,7 @@ pub fn demo() -> String:
             r#"macro_rules! make_message {
     ($name:expr) => { format!("hello {}", $name) };
 }
+
 pub fn demo() -> String {
     make_message!("Ada")
 }
@@ -6727,14 +6792,17 @@ fn show(user: &User):
             r#"struct User {
     name: String,
 }
+
 impl User {
     fn display_name(&self) -> &str {
         &self.name
     }
 }
+
 fn render(user: &User, suffix: &str) -> String {
     format!("{} {1} {2:?}", suffix, user.display_name(), user.display_name())
 }
+
 fn show(user: &User) {
     println!("{}", user.display_name());
     println!("{{user}} {}", user.display_name());
@@ -6757,6 +6825,7 @@ fn main():
             r#"fn swap(pair: (String, usize)) -> (usize, String) {
     (pair.1, pair.0)
 }
+
 fn main() {
     println!("{:?}", swap(("items".to_string(), 3)));
 }

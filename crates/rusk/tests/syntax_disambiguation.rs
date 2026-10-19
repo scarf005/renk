@@ -323,10 +323,10 @@ fn rust_brace_else_lines_continue_the_brace_chain() {
     let output = rust("fn pick(a: bool, b: bool) -> i32:\n    if a {\n        1\n    } else if b {\n        2\n    } else {\n        3\n    }\n");
     assert_eq!(
         output,
-        "fn pick(a: bool, b: bool) -> i32 {\n    if a {\n        1\n    }\n    else if b {\n        2\n    }\n    else {\n        3\n    }\n}\n"
+        "fn pick(a: bool, b: bool) -> i32 {\n    if a {\n        1\n    } else if b {\n        2\n    } else {\n        3\n    }\n}\n"
     );
     let output = rust("fn pick(a: bool) -> usize:\n    let v = if a {\n        vec![1]\n    } else {\n        vec![]\n    }\n    v.len()\n");
-    assert!(output.contains("    }\n    else {\n        vec![]\n    };\n"), "{output}");
+    assert!(output.contains("    } else {\n        vec![]\n    };\n"), "{output}");
 }
 
 #[test]
@@ -562,7 +562,7 @@ fn trailing_if_owns_a_colon_block_chain() {
     );
     assert!(
         output.contains(
-            "        let size = if n > 10 {\n            1\n        }\n        else if n < 0 { // negative\n            2\n        }\n        else {\n            3\n        };\n"
+            "        let size = if n > 10 {\n            1\n        } else if n < 0 { // negative\n            2\n        } else {\n            3\n        };\n"
         ),
         "{output}"
     );
@@ -572,13 +572,13 @@ fn trailing_if_owns_a_colon_block_chain() {
     );
     assert!(
         output.contains(
-            "        total += if Self::BIG < n {\n            let inner = if n % 2 == 0 {\n                n\n            }\n            else {\n                -n\n            };\n            inner\n        }\n        else {\n            0\n        };\n"
+            "        total += if Self::BIG < n {\n            let inner = if n % 2 == 0 {\n                n\n            } else {\n                -n\n            };\n            inner\n        } else {\n            0\n        };\n"
         ),
         "{output}"
     );
     assert!(
         output.contains(
-            "        return if total == 0 {\n            notif + t\n        }\n        else {\n            s.len() as i32\n        }\n"
+            "        return if total == 0 {\n            notif + t\n        } else {\n            s.len() as i32\n        }\n"
         ),
         "{output}"
     );
@@ -616,7 +616,7 @@ fn unused_block_values_end_with_statements() {
         "        m.insert(0, 0);\n",
         "        m.insert(1, 1);\n",
         "        false => None,\n    };\n",
-        "    if c {\n        1\n    }\n    else {\n        2\n    }\n}\n",
+        "    if c {\n        1\n    } else {\n        2\n    }\n}\n",
         "        m.insert(3, 3);\n",
         "        m.insert(4, 4);\n",
     ] {

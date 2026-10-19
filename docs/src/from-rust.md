@@ -31,6 +31,3 @@ cargo test -p rusk --test real_crates -- --ignored --nocapture
 
 The test downloads the crates from crates.io and needs a nightly toolchain for
 `--emit=mir`.
-
-The round trip does not keep blank lines or the exact `} else {` layout; run `rustfmt` on the
-result to restore a canonical layout.
