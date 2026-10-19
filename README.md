@@ -85,7 +85,8 @@ just web # open web editor
 - dotted path lowering for obvious item paths, e.g. `std.io.Read` -> `std::io::Read`, `Foo.new()` -> `Foo::new()`
 - a `.name` after an explicit `::` path ending in a CamelCase segment is a path, e.g. `regex::Regex.new(s)` -> `regex::Regex::new(s)`, while `Config::DEFAULT.len()` keeps its value receiver
 - escape hatches: Rust `::` / `::<...>` force path/generic syntax, while parentheses force a value receiver, e.g. `(TEXT).len()`
-- macro definitions with indentation-based `macro_rules!` arms; macro patterns, bodies, and arbitrary macro invocation token trees use Rust syntax unchanged, and a multi-line `pattern =>:` arm keeps every indented body line, including closing delimiters (std format macros keep their inline-format-expression sugar)
+- macro definitions with indentation-based `macro_rules!` arms; macro patterns, bodies, and other macro invocation token trees use Rust syntax unchanged, and a multi-line `pattern =>:` arm keeps every indented body line, including closing delimiters
+- arguments of std expression macros (the `format!`/`print!`/`write!`/`panic!` family, `assert!`/`assert_eq!`/`assert_ne!` and their `debug_` forms, `dbg!`, `vec!`, `matches!`) are Rusk expressions, e.g. `vec![Foo.new(); 3]` -> `vec![Foo::new(); 3]`; their format strings take inline expressions, e.g. `println!("{user.name()}")` and `assert!(ok, "{xs.len()}")`
 - source formatter that preserves existing line break style; only line width is configurable
 - hierarchical JSON source map generation
 - Rust-to-Rusk, Rust-to-Ruk, Ruk-to-Rust, Ruk-to-Rusk, and Rusk-to-Ruk conversion

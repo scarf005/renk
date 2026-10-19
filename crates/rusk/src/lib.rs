@@ -1374,7 +1374,8 @@ fn is_raw_rust_block_header(header: &str, kind: RustBlockKind) -> bool {
 }
 
 fn lower_rust_syntax(text: &str) -> String {
-    let text = parenthesize_value_receivers(text);
+    let text = map_std_macro_arguments(text, lower_rust_syntax);
+    let text = parenthesize_value_receivers(&text);
     let text = parenthesize_index_calls(&text);
     let text = replace_rust_turbofish(&text);
     replace_angle_generics_with_square(&text)
@@ -3202,7 +3203,8 @@ fn closing_delimiters(text: &str) -> String {
 }
 
 fn lower_basic_expr(text: &str) -> String {
-    let chars = lower_format_macros(text).chars().collect::<Vec<_>>();
+    let text = map_std_macro_arguments(text, lower_expr);
+    let chars = lower_format_macros(&text).chars().collect::<Vec<_>>();
     let lower_value = |range: &[char]| {
         replace_dotted_paths(
             &replace_square_generics(&range.iter().collect::<String>(), GenericMode::Expr),
@@ -3348,9 +3350,105 @@ fn format_macro_prefix(name: &str) -> Option<usize> {
     match name {
         "format" | "format_args" | "print" | "println" | "eprint" | "eprintln" | "panic"
         | "unreachable" | "todo" | "unimplemented" => Some(0),
-        "write" | "writeln" => Some(1),
+        "write" | "writeln" | "assert" | "debug_assert" => Some(1),
+        "assert_eq" | "assert_ne" | "debug_assert_eq" | "debug_assert_ne" => Some(2),
         _ => None,
     }
+}
+
+/// Std macros whose arguments are expressions, or a pattern in `matches!`, so Rusk syntax in them
+/// lowers like any other expression; other macro token trees stay Rust tokens.
+fn is_std_expression_macro(name: &str) -> bool {
+    format_macro_prefix(name).is_some() || matches!(name, "dbg" | "matches" | "vec")
+}
+
+/// `text` with each argument of every std expression macro outside literals and comments replaced
+/// by `lower(argument)`, keeping the separating `,` (or the `;` of `vec![x; n]`), whitespace, and
+/// comments around it.
+fn map_std_macro_arguments(text: &str, lower: fn(&str) -> String) -> String {
+    let chars = text.chars().collect::<Vec<_>>();
+    let mut output = String::new();
+    let mut index = 0usize;
+    while index < chars.len() {
+        if let Some(end) = opaque_span_end(&chars, index) {
+            output.extend(&chars[index..=end]);
+            index = end + 1;
+            continue;
+        }
+        if !is_ident_start(chars[index]) || (index > 0 && is_ident_continue(chars[index - 1])) {
+            output.push(chars[index]);
+            index += 1;
+            continue;
+        }
+        let name_end = read_ident(&chars, index);
+        let name = chars[index..name_end].iter().collect::<String>();
+        let bang = (name_end..chars.len()).find(|&at| !chars[at].is_whitespace());
+        let invocation = macro_invocation_end(&chars, index).filter(|_| {
+            bang.is_some_and(|bang| chars[bang] == '!') && is_std_expression_macro(&name)
+        });
+        let Some(end) = invocation else {
+            output.extend(&chars[index..name_end]);
+            index = name_end;
+            continue;
+        };
+        let open = (name_end..end)
+            .find(|&at| matches!(chars[at], '(' | '[' | '{'))
+            .unwrap_or(end);
+        output.extend(&chars[index..=open]);
+        let mut start = open + 1;
+        let mut depth = 0usize;
+        let mut cursor = start;
+        while cursor < end {
+            if let Some(span_end) = opaque_span_end(&chars, cursor) {
+                cursor = span_end + 1;
+                continue;
+            }
+            if chars[cursor..].starts_with(&[':', ':', '<'])
+                && let Some(close) = matching_bracket(&chars, cursor + 2, '<', '>')
+            {
+                cursor = close + 1;
+                continue;
+            }
+            match chars[cursor] {
+                '(' | '[' | '{' => depth += 1,
+                ')' | ']' | '}' => depth = depth.saturating_sub(1),
+                ',' | ';' if depth == 0 => {
+                    output.push_str(&map_code(&chars[start..cursor], lower));
+                    output.push(chars[cursor]);
+                    start = cursor + 1;
+                }
+                _ => {}
+            }
+            cursor += 1;
+        }
+        output.push_str(&map_code(&chars[start..end], lower));
+        output.push(chars[end]);
+        index = end + 1;
+    }
+    output
+}
+
+/// `lower` applied to the code of `chars`, keeping the whitespace and comments around it.
+fn map_code(chars: &[char], lower: fn(&str) -> String) -> String {
+    let mut first = None;
+    let mut last = 0usize;
+    let mut index = 0usize;
+    while index < chars.len() {
+        let is_comment = chars[index] == '/' && matches!(chars.get(index + 1), Some('/' | '*'));
+        let end = opaque_span_end(chars, index).unwrap_or(index);
+        if !is_comment && !chars[index].is_whitespace() {
+            first.get_or_insert(index);
+            last = end + 1;
+        }
+        index = end + 1;
+    }
+    let Some(first) = first else {
+        return chars.iter().collect();
+    };
+    let code = chars[first..last].iter().collect::<String>();
+    chars[..first].iter().collect::<String>()
+        + &lower(&code)
+        + &chars[last..].iter().collect::<String>()
 }
 
 /// Replaces the arguments of every std format macro invocation outside literals with
