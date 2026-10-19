@@ -3425,7 +3425,8 @@ fn emit_scoped_sequence(
                 closing.push(',');
             } else {
                 closing.push_str(&suffix);
-                if is_statement || has_explicit_semicolon || !is_last {
+                // Branches ending with statements leave the chain `()`, a statement already.
+                if is_statement || has_explicit_semicolon || (!is_last && branch_is_value) {
                     closing.push(';');
                 }
             }
