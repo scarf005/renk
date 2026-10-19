@@ -2421,15 +2421,26 @@ fn emit_node(node: &Node, context: Context, is_last: bool, emitter: &mut Emitter
     emitter.begin_node(node, classify_node(node, context));
     let head = emitter.lines.len();
     let bindings = node_bindings(&node.text, context, !node.children.is_empty());
-    // Items such as a nested `fn` do not see the enclosing function's locals.
-    let outer = is_function(strip_block_marker(node.text.trim()).0).then(|| VALUE_SCOPES.take());
+    let header = strip_block_marker(node.text.trim()).0;
+    // Items such as a nested `fn` do not see the enclosing function's locals, only the const
+    // generics of an enclosing `impl` or `trait`.
+    let outer = is_function(header).then(|| {
+        let generics = ITEM_GENERICS.take();
+        (VALUE_SCOPES.replace(vec![generics.clone()]), generics)
+    });
+    let outer_generics = (is_impl_or_mod_item(header) || is_trait_item(header))
+        .then(|| ITEM_GENERICS.replace(bindings.own.clone()));
     with_value_scope(bindings.own, || {
         BLOCK_BINDINGS.set(bindings.block);
         emit_node_body(node, context, is_last, emitter);
         BLOCK_BINDINGS.take();
     });
-    if let Some(outer) = outer {
-        VALUE_SCOPES.set(outer);
+    if let Some(generics) = outer_generics {
+        ITEM_GENERICS.set(generics);
+    }
+    if let Some((scopes, generics)) = outer {
+        VALUE_SCOPES.set(scopes);
+        ITEM_GENERICS.set(generics);
     }
     VALUE_SCOPES.with_borrow_mut(|scopes| {
         if let Some(scope) = scopes.last_mut() {
@@ -3863,7 +3874,14 @@ fn split_macro_arguments(text: &str, format_macro: bool) -> Vec<&str> {
             '{' => curly += 1,
             '}' => curly = curly.saturating_sub(1),
             '"' if format_macro => index = format_string_end(text, index).unwrap_or(index),
-            '"' | '\'' => index = quoted_string_end(text, index),
+            '"' => index = quoted_string_end(text, index),
+            '\'' => {
+                // A lifetime such as `'a` is not a char literal.
+                let rest = text[index..].chars().collect::<Vec<_>>();
+                if let Some(end) = char_literal_end(&rest, 0) {
+                    index += rest[..end].iter().map(|c| c.len_utf8()).sum::<usize>();
+                }
+            }
             ',' if round == 0 && square == 0 && curly == 0 => {
                 arguments.push(&text[start..index]);
                 start = index + 1;
@@ -4596,12 +4614,16 @@ thread_local! {
     static VALUE_SCOPES: RefCell<Vec<Vec<String>>> = const { RefCell::new(Vec::new()) };
     /// Names the node being emitted binds for its block only, such as `x` in `for x in xs:`.
     static BLOCK_BINDINGS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    /// Const generics of the enclosing `impl` or `trait`, which its functions see.
+    static ITEM_GENERICS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
 }
 
 fn with_value_scopes<T>(convert: impl FnOnce() -> T) -> T {
     let scopes = VALUE_SCOPES.take();
+    let generics = ITEM_GENERICS.take();
     let result = convert();
     VALUE_SCOPES.set(scopes);
+    ITEM_GENERICS.set(generics);
     result
 }
 
@@ -4654,6 +4676,7 @@ fn node_bindings(text: &str, context: Context, has_block: bool) -> NodeBindings 
         if let Some(open) = top_level_position(&chars, name, |at| chars[at] == '(')
             && let Some(close) = matching_bracket(&chars, open, '(', ')')
         {
+            bindings.own.extend(const_generic_bindings(&chars[..open]));
             let parameters = chars[open + 1..close].iter().collect::<String>();
             for parameter in split_macro_arguments(&parameters, false) {
                 bindings
@@ -4663,10 +4686,26 @@ fn node_bindings(text: &str, context: Context, has_block: bool) -> NodeBindings 
         }
         return bindings;
     }
+    if is_impl_or_mod_item(text) || is_trait_item(text) {
+        bindings.own = const_generic_bindings(&chars);
+        return bindings;
+    }
     let mut lets = let_pattern_bindings(&chars, true);
     if is_let(text) {
-        bindings.siblings = let_pattern_bindings(&chars, false);
-        bindings.own.extend(lets.split_off(bindings.siblings.len()));
+        // Each `let` statement of the line, as in `let a = 1; let b = 2`, binds for later lines.
+        let mut start = 0;
+        while start < chars.len() {
+            let end =
+                top_level_position(&chars, start, |at| chars[at] == ';').unwrap_or(chars.len());
+            let statement = &chars[start..end];
+            let mut lets = let_pattern_bindings(statement, true);
+            if is_let(statement.iter().collect::<String>().trim_start()) {
+                let first = let_pattern_bindings(statement, false);
+                bindings.siblings.extend(lets.drain(..first.len()));
+            }
+            bindings.own.extend(lets);
+            start = end + 1;
+        }
         return bindings;
     }
     if let Some(rest) = strip_control_label(text).strip_prefix("for ")
@@ -4680,6 +4719,22 @@ fn node_bindings(text: &str, context: Context, has_block: bool) -> NodeBindings 
         bindings.own.extend(lets);
     }
     bindings
+}
+
+/// Const generic parameters a header such as `impl[const N: usize] Grid[N]` declares.
+fn const_generic_bindings(chars: &[char]) -> Vec<String> {
+    (0..chars.len())
+        .filter(|&at| keyword_at(chars, at, "const"))
+        .filter_map(|at| {
+            let mut start = at + "const".len();
+            skip_whitespace_chars(chars, &mut start);
+            let end = read_ident(chars, start);
+            let mut after = end;
+            skip_whitespace_chars(chars, &mut after);
+            (end > start && chars.get(after) == Some(&':'))
+                .then(|| chars[start..end].iter().collect())
+        })
+        .collect()
 }
 
 /// Names the patterns of `matches!(value, PATTERN if guard)` bind, which its guard uses.
