@@ -209,6 +209,53 @@ pub fn format_source(source: &str, options: FormatOptions) -> Result<String, Tra
     ))
 }
 
+/// A script without a top-level `fn main` with its lines wrapped in a `fn main` returning
+/// `Result`, so top-level statements run in order and can use `?`, and the 1-based line of the
+/// inserted header. Leading blank, comment, and `#![...]` lines stay in front of the header.
+pub fn wrap_script_statements(source: &str, syntax: SourceSyntax) -> Option<(String, usize)> {
+    let lines = source.lines().collect::<Vec<_>>();
+    let in_literal = lines_ending_in_literal(source);
+    let starts_code = |index: usize| index == 0 || !in_literal[index - 1];
+    let declares_main = |line: &str| {
+        let line = line.strip_prefix("pub ").unwrap_or(line);
+        let line = line.strip_prefix("async ").unwrap_or(line);
+        line.strip_prefix("fn main")
+            .is_some_and(|rest| rest.trim_start().starts_with('('))
+    };
+    if (0..lines.len()).any(|index| starts_code(index) && declares_main(lines[index])) {
+        return None;
+    }
+    let header = (0..lines.len())
+        .find(|&index| {
+            let line = lines[index].trim();
+            !(line.is_empty() || line.starts_with("//") || line.starts_with("#!["))
+        })
+        .unwrap_or(lines.len());
+    let (open, close) = match syntax {
+        SourceSyntax::Rusk => ("fn main() -> Result[(), Box[dyn std.error.Error]]:", ""),
+        _ => (
+            "fn main() -> Result<(), Box<dyn std::error::Error>> {",
+            "\n}",
+        ),
+    };
+    let body = (header..lines.len()).map(|index| {
+        if starts_code(index) && !lines[index].is_empty() {
+            format!("    {}", lines[index])
+        } else {
+            lines[index].to_string()
+        }
+    });
+    let wrapped = lines[..header]
+        .iter()
+        .map(|line| line.to_string())
+        .chain([open.to_string()])
+        .chain(body)
+        .chain([format!("    Ok(()){close}")])
+        .collect::<Vec<_>>()
+        .join("\n");
+    Some((ensure_trailing_newline(&wrapped), header + 1))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceSyntax {
     Rusk,

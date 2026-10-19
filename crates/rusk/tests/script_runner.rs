@@ -228,7 +228,7 @@ fn script_top_level_statements_run_in_a_fallible_main() {
     );
     assert_eq!(stdout, "", "{stderr}");
     assert_eq!(code, Some(1), "{stderr}");
-    assert!(stderr.contains("invalid digit"), "{stderr}");
+    assert!(stderr.contains("InvalidDigit"), "{stderr}");
 
     let (code, stdout, stderr, _) = run("tool.rk", "let x = 2\nprintln!(\"{}\", x * 3)\n");
     assert_eq!(stdout, "6\n", "{stderr}");
