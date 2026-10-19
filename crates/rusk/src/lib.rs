@@ -403,6 +403,8 @@ impl RukSemicolonInferer {
         // The lone `{` line ending a multi-line header, and the scope its first line closed.
         let mut header_end = None::<usize>;
         let mut header_closed = None::<RukScope>;
+        // Inside an attribute such as `#[cfg(any(` that continues over several lines.
+        let mut in_attribute = false;
         for index in 0..self.lines.len() {
             header_end = header_end.filter(|&end| end >= index).or(heads[index]);
             let in_long_header = header_end.is_some_and(|end| end > index);
@@ -425,7 +427,11 @@ impl RukSemicolonInferer {
                         let next = next.trim();
                         next == "{" || next == "where" || next.starts_with("where ")
                     }));
-            let converted = if self.in_macro() || header_continues || in_long_header {
+            if delimiter_depth == 0 {
+                in_attribute = text.starts_with('#') && next_delimiter_depth > 0;
+            }
+            let converted = if self.in_macro() || header_continues || in_long_header || in_attribute
+            {
                 raw.to_string()
             } else if closed.is_some_and(|scope| scope.ends_statement)
                 && split_line_comment(text).map_or(text, |(code, _)| code).trim_end() == "}"
@@ -2114,8 +2120,10 @@ fn lone_opener_heads(lines: &[&str], in_literal: &[bool], opener: &str) -> Vec<O
         };
         let head_code = code(lines[head]);
         if raw_indent(lines[head]) == indent
-            // A header right before its `{` line, or continued on indented lines.
-            && (start == end || (start..end).any(|between| !lines[between].trim().is_empty()))
+            // A control or `let` header right before its `{` line, or a header continued on
+            // indented lines; `))]` ending an attribute stays apart from a bare block.
+            && ((start..end).any(|between| !lines[between].trim().is_empty())
+                || (start == end && (starts_control_flow(&head_code) || is_let(&head_code))))
             && !head_code.is_empty()
             && !head_code.starts_with(['#', '/'])
             && !head_code.ends_with([';', ',', '{', '}'])
