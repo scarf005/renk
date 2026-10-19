@@ -893,3 +893,12 @@ fn module_declarations_keep_their_semicolon() {
     assert!(!output.contains("; {"), "{output}");
     assert_eq!(rust("mod a\nmod b;\n"), "mod a;\nmod b;\n");
 }
+
+#[test]
+fn trailing_heads_with_struct_literal_scrutinees_own_blocks() {
+    let rusk = rust_to_rusk(
+        "fn f(k: u8) -> u8 {\n    let v = if get(K { k }) {\n        1\n    } else {\n        2\n    };\n    v\n}\n",
+    )
+    .unwrap();
+    assert_lines(&rusk, &["    let v = if get(K { k }):\n"]);
+}
