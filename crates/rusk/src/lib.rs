@@ -979,7 +979,7 @@ fn convert_rust_lines(source: &str, aggressive: bool) -> Result<String, Transpil
         let mut text = format!("{text}{comment}");
         let mut group = None;
         let mut open = OpenDelimiters::default();
-        let mut header_end = heads[index];
+        let (start, mut header_end) = (index, heads[index]);
         while !variant
             && (joins_next_line(
                 &text,
@@ -992,11 +992,10 @@ fn convert_rust_lines(source: &str, aggressive: bool) -> Result<String, Transpil
         {
             text.push('\n');
             text.push_str(keep_literal_end(next, in_literal[index]));
-            // The `{` ending a header opens its body, even after an operand block such as
-            // `&& match x {` that left a group open.
-            let ends_header = header_end == Some(index);
             header_end = header_end.filter(|&end| end > index).or(heads[index]);
-            if ends_header && header_end.is_none() {
+            // The `{` ending the statement's header opens its body, even after an operand block
+            // such as `&& match x {` that left a group open.
+            if heads[start] == Some(index) {
                 break;
             }
         }
