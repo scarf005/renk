@@ -130,3 +130,44 @@ pub fn closure_operands(a: bool, kind: u8, items: &[u8]) -> bool {
             *item > 1
         })
 }
+
+pub fn wrapped_conditions(a: u8, c: char) -> u8 {
+    if (matches!(
+        a,
+        1 | 2
+    ) && matches!(c, '<' | '='))
+    {
+        return 2;
+    } else {
+        std::mem::drop(c);
+    }
+    while [
+        a,
+        1
+    ] == [0, 1]
+    {
+        return 3;
+    }
+    let wide = if (matches!(
+        a,
+        3
+    ) || a > 4)
+    {
+        2
+    } else {
+        0
+    };
+    let pair = (
+        a,
+        c,
+    );
+    {
+        let _ = pair;
+    }
+    std::mem::drop(
+        a
+    );
+    {
+        return wide;
+    }
+}
