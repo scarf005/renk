@@ -229,24 +229,49 @@ fn build_script(
         .stdout(process::Stdio::piped())
         .spawn()?;
     let rust_file = rust_path.file_name().unwrap_or_default().to_string_lossy();
+    let diagnostic = ScriptDiagnostic {
+        rust_file: &rust_file,
+        script: &script_path.display().to_string(),
+        source_lines,
+    };
     let mut executable = None;
+    // Cargo replays the warnings of a fresh package on every build, so a package's warnings wait
+    // for its artifact and print only when it was compiled, or before its first error.
+    let mut warnings = Vec::<(String, String)>::new();
+    let flush = |package: &str, show: bool, warnings: &mut Vec<(String, String)>| {
+        for (_, rendered) in warnings.extract_if(.., |(owner, _)| owner == package) {
+            if show {
+                eprint!("{}", diagnostic.remap(&rendered));
+            }
+        }
+    };
     // Messages are read as cargo writes them so diagnostics precede cargo's own stderr summary.
     let messages = io::BufReader::new(cargo.stdout.take().ok_or("cargo has no stdout")?);
     for message in io::BufRead::lines(messages)
         .map_while(Result::ok)
         .filter_map(|line| serde_json::from_str::<serde_json::Value>(&line).ok())
     {
+        let package = message["package_id"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
         if let Some(rendered) = message["message"]["rendered"].as_str() {
-            let diagnostic = ScriptDiagnostic {
-                rust_file: &rust_file,
-                script: &script_path.display().to_string(),
-                source_lines,
-            };
-            eprint!("{}", diagnostic.remap(rendered));
+            if message["message"]["level"] == "warning" {
+                warnings.push((package.clone(), rendered.to_string()));
+            } else {
+                flush(&package, true, &mut warnings);
+                eprint!("{}", diagnostic.remap(rendered));
+            }
+        }
+        if message["reason"] == "compiler-artifact" {
+            flush(&package, message["fresh"] != true, &mut warnings);
         }
         if let Some(path) = message["executable"].as_str() {
             executable = Some(PathBuf::from(path));
         }
+    }
+    for (_, rendered) in warnings {
+        eprint!("{}", diagnostic.remap(&rendered));
     }
     let status = cargo.wait()?;
     if !status.success() {
