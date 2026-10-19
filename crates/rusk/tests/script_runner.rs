@@ -249,3 +249,33 @@ fn script_top_level_statements_run_in_a_fallible_main() {
     assert!(stderr.contains("tabbed.rsk: line 3"), "{stderr}");
     let _ = fs::remove_dir_all(dir);
 }
+
+#[test]
+fn script_warnings_print_only_when_the_script_compiles() {
+    let dir = temp_dir("script-fresh-warnings");
+    let script = dir.join("warned.rsk");
+    let run = || {
+        let output = Command::new(env!("CARGO_BIN_EXE_rusk"))
+            .arg("script")
+            .arg(&script)
+            .env("XDG_CACHE_HOME", dir.join("cache"))
+            .output()
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "1\n");
+        String::from_utf8_lossy(&output.stderr).into_owned()
+    };
+    fs::write(
+        &script,
+        "fn main():\n    let unused = 1\n    println!(\"1\")\n",
+    )
+    .unwrap();
+    assert!(run().contains("unused variable"));
+    assert_eq!(run(), "");
+    fs::write(
+        &script,
+        "fn main():\n    let unused = 2\n    println!(\"1\")\n",
+    )
+    .unwrap();
+    assert!(run().contains("unused variable"));
+    let _ = fs::remove_dir_all(dir);
+}
