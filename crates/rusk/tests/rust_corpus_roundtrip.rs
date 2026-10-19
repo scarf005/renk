@@ -39,6 +39,7 @@ const CORPUS: &[(&str, &str)] = &[
     ("item_tails", include_str!("rust_corpus/item_tails.rs")),
     ("block_comments", include_str!("rust_corpus/block_comments.rs")),
     ("one_line_items", include_str!("rust_corpus/one_line_items.rs")),
+    ("split_continuations", include_str!("rust_corpus/split_continuations.rs")),
 ];
 
 const RUSK_CORPUS: &[(&str, &str)] = &[
