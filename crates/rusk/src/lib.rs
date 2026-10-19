@@ -5545,14 +5545,22 @@ fn module_value_names(nodes: &[Node]) -> Vec<String> {
         .collect()
 }
 
-/// The names `nodes` declare or import as modules, as in `mod config` or `use std.env`, which
-/// keep paths beside a function of the same name.
+/// The names `nodes` declare or import from other crates as modules, as in `mod config` or
+/// `use std.env`, which keep paths beside a function of the same name.
 fn module_names(nodes: &[Node]) -> Vec<String> {
     nodes
         .iter()
         .flat_map(|node| {
             let header = strip_block_marker(node.text.trim()).0;
-            let names = if starts_item(header, "use") {
+            let path = without_visibility(header)
+                .strip_prefix("use ")
+                .unwrap_or_default();
+            // `use super.parse_args` imports a local item, which stays what it is.
+            let local = ["crate", "super", "self"].iter().any(|root| {
+                path.strip_prefix(root)
+                    .is_some_and(|rest| rest.starts_with(['.', ':']))
+            });
+            let names = if starts_item(header, "use") && !local {
                 header
                     .split(|c: char| !is_ident_continue(c))
                     .map(str::to_string)
