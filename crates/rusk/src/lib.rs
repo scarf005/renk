@@ -556,7 +556,13 @@ impl RukSemicolonInferer {
     }
 
     fn should_add_semicolon(&self, text: &str, index: usize) -> bool {
-        if self.continues_on_next_line(index) {
+        // A match arm, as in `None => {}`, ends with its body, unlike the inline `match` of
+        // `let z = match o { _ => 1 }`.
+        let is_arm = split_arrow(text).is_some_and(|(pattern, _)| {
+            open_delimiters(pattern).is_some_and(|open| open.is_empty())
+        }) && !is_let(text)
+            && !is_assignment(text);
+        if self.continues_on_next_line(index) || is_arm {
             return false;
         }
         if is_let(text)
@@ -665,6 +671,38 @@ impl RukSemicolonInferer {
             .filter(|&line| self.lines[line].trim_start().starts_with('}'))
     }
 
+    /// Whether each arm of the `match` opened at `index` is a block ending with a statement, as
+    /// in `None => {}` or `Some(x) => {` / `v.push(x)` / `}`, so the `match` is `()`.
+    fn has_block_arms(&self, index: usize, indent: usize) -> bool {
+        let Some(end) = self.block_chain_end(index, indent) else {
+            return false;
+        };
+        let arms = (index + 1..end)
+            .map(|line| {
+                (
+                    raw_indent(&self.lines[line]),
+                    without_trailing_line_comment(self.lines[line].trim()).trim_end(),
+                )
+            })
+            .filter(|(_, code)| !code.is_empty() && !is_comment(code))
+            .collect::<Vec<_>>();
+        let Some(&(arm_indent, _)) = arms.first() else {
+            return false;
+        };
+        arms.iter()
+            .filter(|(at, code)| *at == arm_indent && !code.starts_with('}'))
+            .all(|(_, code)| {
+                split_arrow(code).is_some_and(|(_, body)| {
+                    let body = body.trim();
+                    body == "{"
+                        || is_brace_group(body) && {
+                            let inner = body[1..body.len() - 1].trim();
+                            inner.is_empty() || inner.ends_with(';')
+                        }
+                })
+            })
+    }
+
     /// Opens the scope of a line ending with `{`; a `} else {` line continues the closed scope.
     fn open_scope_from_line(
         &mut self,
@@ -718,7 +756,9 @@ impl RukSemicolonInferer {
             && (is_let(header) || is_assignment(header))
             && !starts_control_flow(header))
             || binding.is_some_and(|line| is_let(&line) || is_assignment(&line))
-            || (kind == RukScopeKind::Statement && header.starts_with("match "));
+            || (kind == RukScopeKind::Statement
+                && header.starts_with("match ")
+                && !self.has_block_arms(index, indent));
         self.scopes.push(RukScope {
             indent,
             kind,
@@ -3362,7 +3402,7 @@ fn emit_general(node: &Node, context: Context, is_last: bool, emitter: &mut Emit
                 Context::Match,
                 emitter,
                 lower_expr(block_text),
-                has_explicit_semicolon || !is_last,
+                has_explicit_semicolon || (!is_last && !has_unit_arms(node)),
                 true,
             );
         } else if is_match(block_text)
@@ -3760,7 +3800,7 @@ fn emit_match_arm(node: &Node, emitter: &mut Emitter) {
         if expr.is_empty() {
             emitter.push(node, format!("{}{} => {{", indent, pattern));
             emit_nodes(&node.children, Context::Block, emitter);
-            emitter.push_generated(format!("{}}},", indent));
+            emitter.push_generated(format!("{}}}", indent));
         } else if has_explicit_block_opener(node.text.trim()) {
             // A body opening a block, as `x => match y:`, `x => unsafe:`, or `x => f(|v| {`.
             let expr = strip_open_brace(expr).trim_end();
@@ -3785,11 +3825,13 @@ fn emit_match_arm(node: &Node, emitter: &mut Emitter) {
         } else if has_explicit_semicolon {
             emitter.push(node, format!("{}{} => {{", indent, pattern));
             emitter.push_generated(format!("{}{};", spaces(node.indent + 4), lower_expr(expr)));
-            emitter.push_generated(format!("{}}},", indent));
+            emitter.push_generated(format!("{}}}", indent));
         } else {
+            // A block body, as in `None => {}`, needs no comma.
+            let comma = if is_brace_group(expr) { "" } else { "," };
             emitter.push(
                 node,
-                format!("{}{} => {},", indent, pattern, lower_expr(expr)),
+                format!("{}{} => {}{comma}", indent, pattern, lower_expr(expr)),
             );
         }
     } else if node.children.is_empty() {
@@ -3798,8 +3840,50 @@ fn emit_match_arm(node: &Node, emitter: &mut Emitter) {
     } else {
         emitter.push(node, format!("{}{} => {{", indent, lower_expr(text)));
         emit_nodes(&node.children, Context::Block, emitter);
-        emitter.push_generated(format!("{}}},", indent));
+        emitter.push_generated(format!("{}}}", indent));
     }
+}
+
+/// Whether `text` is one `{...}` group, as in `{}` or `{ f(); }`.
+fn is_brace_group(text: &str) -> bool {
+    text.starts_with('{') && matching_delimiter(text, 0, '{', '}', false) == Some(text.len() - 1)
+}
+
+/// Whether each arm of the `match` at `node` is a block ending with a statement, as in
+/// `None => {}` or `Some(x) =>:` / `v.push(x);`, so the `match` is `()` and needs no `;`.
+fn has_unit_arms(node: &Node) -> bool {
+    let is_statement = |text: &str| {
+        let (text, explicit) = strip_explicit_semicolon(text);
+        explicit || is_let(text) || is_assignment(text) || is_jump_statement(text)
+    };
+    let arms = node
+        .children
+        .iter()
+        .filter(|arm| !is_comment(arm.text.trim()))
+        .collect::<Vec<_>>();
+    !arms.is_empty()
+        && arms.iter().all(|arm| {
+            let text = strip_block_marker(arm.text.trim()).0;
+            let Some((_, expr)) = split_arrow(text) else {
+                return false;
+            };
+            let expr = expr.trim();
+            match arm
+                .children
+                .iter()
+                .rfind(|child| !is_comment(child.text.trim()))
+            {
+                Some(last) if expr.is_empty() => is_statement(last.text.trim()),
+                Some(_) => false,
+                None => {
+                    strip_explicit_semicolon(expr).1
+                        || is_brace_group(expr) && {
+                            let inner = expr[1..expr.len() - 1].trim();
+                            inner.is_empty() || inner.ends_with(';')
+                        }
+                }
+            }
+        })
 }
 
 /// The context of the block a match arm body such as `match y:` or `unsafe:` opens.
@@ -6496,7 +6580,7 @@ fn parse(line: &str) -> Result[i32, String]:
         Ok(value) => {
             println!("{}", value);
             Ok(value)
-        },
+        }
         Err(error) => Err(error.to_string()),
     }
 }
@@ -6535,7 +6619,7 @@ fn log(value: Result<i32, String>) {
     match value {
         Ok(number) => {
             println!("{}", number);
-        },
+        }
         Err(error) => error,
     };
 }
