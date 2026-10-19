@@ -954,7 +954,7 @@ fn closure_return_types_without_bodies_do_not_panic() {
 #[test]
 fn closure_parameters_bind_after_fields_async_and_branches() {
     let output = rust(
-        "fn f(c: bool):\n    let p = P{ f: |s: String| s.len() }\n    let g = async |s: String| s.len()\n    let h = if c then |s: String| s.len() else |t: String| t.len()\n    println!(\"{xs.iter().map(|s| s.len()).sum::<usize>()}\")\n",
+        "fn f(c: bool, xs: Vec<String>):\n    let p = P{ f: |s: String| s.len() }\n    let g = async |s: String| s.len()\n    let h = if c then |s: String| s.len() else |t: String| t.len()\n    println!(\"{xs.iter().map(|s| s.len()).sum::<usize>()}\")\n",
     );
     assert_lines(
         &output,
@@ -999,4 +999,15 @@ fn statics_are_values() {
 fn closure_parameters_in_std_macros_lower_their_types() {
     let output = rust("fn f():\n    let v = vec![|a: u8, b: Vec[u8]| b.len()]\n");
     assert_lines(&output, &["vec![|a: u8, b: Vec<u8>| b.len()]"]);
+}
+
+#[test]
+fn inline_macro_arms_without_a_closing_brace_do_not_panic() {
+    let _ = rust_to_rusk("macro_rules! r#\"{>\n    \"#é");
+}
+
+#[test]
+fn inline_macro_arms_before_a_block_comment_keep_the_comment_closed() {
+    let output = rust_to_rusk("macro_rules! m {() => {\n    1\n}} /* end */\n").unwrap();
+    assert_lines(&output, &["/* end */"]);
 }
