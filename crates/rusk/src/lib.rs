@@ -173,6 +173,7 @@ fn transpile_lines(source: &str) -> Result<TranspileOutput, TranspileError> {
     let nodes = parse_source_tree(&lines)?;
 
     let mut emitter = Emitter::default();
+    MODULE_VALUES.set(function_names(&nodes));
     emit_nodes(&nodes, Context::Root, &mut emitter);
     for (line, comment) in &emitter.comments {
         emitter.lines[*line].push_str(comment);
@@ -552,10 +553,16 @@ impl RukSemicolonInferer {
         {
             return false;
         }
-        if !self.is_tail_of_current_scope(index) {
+        if !self.is_tail_of_current_scope(index) && !self.is_cfg_alternative(index, index) {
             return true;
         }
         !self.tail_is_value()
+    }
+
+    /// Whether lines `start..=end` are one of several tails, each under its own `#[cfg(...)]`.
+    fn is_cfg_alternative(&self, start: usize, end: usize) -> bool {
+        let is_cfg = |line: Option<&str>| line.is_some_and(|line| line.trim().starts_with("#[cfg"));
+        is_cfg(self.previous_code_line(start)) && is_cfg(self.next_code_line(end))
     }
 
     fn is_tail_of_current_scope(&self, index: usize) -> bool {
@@ -656,7 +663,9 @@ impl RukSemicolonInferer {
             .block_chain_end(index, indent)
             .filter(|_| starts_control_flow(header))
         {
-            if self.tail_is_value() && self.is_tail_of_current_scope(end) {
+            if self.tail_is_value()
+                && (self.is_tail_of_current_scope(end) || self.is_cfg_alternative(index, end))
+            {
                 RukScopeKind::Value
             } else {
                 RukScopeKind::Statement
@@ -900,6 +909,13 @@ fn convert_rust_lines(source: &str, aggressive: bool) -> Result<String, Transpil
                 ))
         {
             stack.pop();
+            // Rusk drops the `,` of a match arm or field, as in `})?,`.
+            let text = match stack.last().map(|block| block.kind) {
+                Some(RustBlockKind::Match | RustBlockKind::StructLike | RustBlockKind::Enum) => {
+                    text.strip_suffix(',').unwrap_or(text)
+                }
+                _ => text,
+            };
             output.push(format!("{indent}{}{comment}", lower_rust_syntax(text)));
             continue;
         }
@@ -915,6 +931,14 @@ fn convert_rust_lines(source: &str, aggressive: bool) -> Result<String, Transpil
             continue;
         }
 
+        if stack
+            .last()
+            .is_some_and(|block| block.kind == RustBlockKind::Macro)
+            && is_comment(text)
+        {
+            output.push(format!("{indent}{text}{comment}"));
+            continue;
+        }
         if stack.last().is_some_and(|block| block.kind == RustBlockKind::Macro) {
             // Macro arms keep Rust tokens; a multi-line arm becomes `pattern =>:` and its body.
             // A pattern over several lines, such as `(` ... `) => {`, joins up to its arrow.
@@ -2131,6 +2155,30 @@ fn lone_opener_heads(lines: &[&str], in_literal: &[bool], opener: &str) -> Vec<O
             heads[head] = Some(end);
         }
     }
+    // A condition holding a block, as in `if match x {` ... `} {`, ends at its `}` line that
+    // opens the body.
+    for (head, line) in lines.iter().enumerate() {
+        let head_code = code(line);
+        let condition = ["if ", "while ", "else if "]
+            .iter()
+            .find_map(|keyword| head_code.strip_prefix(keyword));
+        if (head > 0 && in_literal[head - 1])
+            || !condition.is_some_and(|condition| condition.starts_with("match "))
+            || !head_code.ends_with('{')
+        {
+            continue;
+        }
+        let indent = raw_indent(line);
+        heads[head] = (head + 1..lines.len())
+            .take_while(|&end| lines[end].trim().is_empty() || raw_indent(lines[end]) >= indent)
+            .find(|&end| {
+                let end_code = code(lines[end]);
+                // `} {` or `}:`, unlike `} && match y {`.
+                raw_indent(lines[end]) == indent
+                    && end_code.strip_prefix('}').map(str::trim_start) == Some(opener)
+            })
+            .or(heads[head]);
+    }
     heads
 }
 
@@ -2739,8 +2787,22 @@ fn emit_scoped_sequence(
 ) {
     let mut chain: Option<(String, bool)> = None;
     let mut branch_is_value = false;
+    let is_cfg = |index: usize| nodes[index].text.trim().starts_with("#[cfg");
+    // The head of the `else` chain ending at `index`.
+    let chain_head = |mut index: usize| {
+        while index > 0 && {
+            let text = nodes[index].text.trim();
+            is_else_branch(text) || is_comment(text)
+        } {
+            index -= 1;
+        }
+        index
+    };
     for (index, node) in nodes.iter().enumerate() {
-        let is_last = tail_is_value && index + 1 == nodes.len();
+        // One of several tails, each under its own `#[cfg(...)]`, is a tail too.
+        let is_last = tail_is_value
+            && (index + 1 == nodes.len()
+                || (is_cfg(index + 1) && chain_head(index) > 0 && is_cfg(chain_head(index) - 1)));
         let head = node.text.trim();
         if chain.is_some() && is_comment(head) {
             // A comment between `}` and `else` stays inside the chain.
@@ -2751,11 +2813,17 @@ fn emit_scoped_sequence(
             // A chain's branches are values when the chain is the tail or its head uses them, as
             // in `let x = if c {`.
             let (head, _) = strip_explicit_semicolon(head);
+            let end = index
+                + nodes[index + 1..]
+                    .iter()
+                    .take_while(|next| {
+                        is_else_branch(next.text.trim()) || is_comment(next.text.trim())
+                    })
+                    .count();
             branch_is_value = !is_control(strip_block_marker(head).0)
                 || (tail_is_value
-                    && nodes[index + 1..].iter().all(|next| {
-                        is_else_branch(next.text.trim()) || is_comment(next.text.trim())
-                    }));
+                    && (end + 1 == nodes.len()
+                        || (is_cfg(end + 1) && index > 0 && is_cfg(index - 1))));
         }
         let continues = !is_comment(head)
             && nodes[index + 1..]
@@ -3952,7 +4020,8 @@ fn is_closure_start(chars: &[char], bar: usize) -> bool {
     before.is_empty()
         || matches!(before.last(), Some('(' | '[' | '{' | ',' | ';' | '='))
         || before.ends_with(&['=', '>'])
-        || ["move", "return"].iter().any(|keyword| {
+        || before.last() == Some(&'&')
+        || ["move", "return", "mut"].iter().any(|keyword| {
             end.checked_sub(keyword.len())
                 .is_some_and(|at| keyword_at(before, at, keyword))
         })
@@ -5225,19 +5294,49 @@ thread_local! {
     static BLOCK_BINDINGS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     /// Const generics of the enclosing `impl` or `trait`, which its functions see.
     static ITEM_GENERICS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    /// Free functions of the source, values everywhere, as in `parse_args.parse2(tokens)`.
+    static MODULE_VALUES: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+}
+
+/// The names of the free functions in `nodes`, outside `impl` and `trait` items.
+fn function_names(nodes: &[Node]) -> Vec<String> {
+    nodes
+        .iter()
+        .flat_map(|node| {
+            let header = strip_block_marker(node.text.trim()).0;
+            let name = is_function(header).then(|| {
+                let after = &header[header.find("fn ").map_or(0, |at| at + 3)..];
+                after[..after
+                    .find(|c: char| !is_ident_continue(c))
+                    .unwrap_or(after.len())]
+                    .to_string()
+            });
+            let nested = if is_impl_or_mod_item(header) && !starts_item(header, "mod")
+                || is_trait_item(header)
+            {
+                Vec::new()
+            } else {
+                function_names(&node.children)
+            };
+            name.into_iter().chain(nested)
+        })
+        .collect()
 }
 
 fn with_value_scopes<T>(convert: impl FnOnce() -> T) -> T {
     let scopes = VALUE_SCOPES.take();
     let generics = ITEM_GENERICS.take();
+    let functions = MODULE_VALUES.take();
     let result = convert();
     VALUE_SCOPES.set(scopes);
     ITEM_GENERICS.set(generics);
+    MODULE_VALUES.set(functions);
     result
 }
 
 fn is_value_bound(name: &str) -> bool {
     VALUE_SCOPES.with_borrow(|scopes| scopes.iter().flatten().any(|bound| bound == name))
+        || MODULE_VALUES.with_borrow(|functions| functions.iter().any(|function| function == name))
 }
 
 fn with_value_scope<T>(names: Vec<String>, emit: impl FnOnce() -> T) -> T {
@@ -5272,6 +5371,7 @@ fn node_bindings(text: &str, context: Context, has_block: bool) -> NodeBindings 
     let chars = text.chars().collect::<Vec<_>>();
     bindings.own = closure_parameter_bindings(&chars);
     bindings.own.extend(matches_pattern_bindings(text));
+    bindings.own.extend(inline_arm_bindings(text));
     if context == Context::Match {
         if let Some((pattern, _)) = split_arrow(text) {
             let pattern =
@@ -5347,6 +5447,43 @@ fn const_generic_bindings(chars: &[char]) -> Vec<String> {
 }
 
 /// Names the patterns of `matches!(value, PATTERN if guard)` bind, which its guard uses.
+/// The names bound by the arms of a `match` written inside `text`, as `name` in
+/// `member: match &node.ident { Some(name) => name.clone(), ... }`.
+fn inline_arm_bindings(text: &str) -> Vec<String> {
+    let chars = text.chars().collect::<Vec<_>>();
+    let mut names = Vec::new();
+    let mut index = 0;
+    while index + 1 < chars.len() {
+        if let Some(end) =
+            opaque_span_end(&chars, index).or_else(|| macro_invocation_end(&chars, index))
+        {
+            index = end + 1;
+            continue;
+        }
+        if chars[index..].starts_with(&['=', '>']) {
+            // The pattern starts after the `{` or `,` that opens this arm.
+            let mut depth = 0usize;
+            let mut start = index;
+            while start > 0 {
+                match chars[start - 1] {
+                    ')' | ']' | '}' => depth += 1,
+                    '(' | '[' if depth > 0 => depth -= 1,
+                    '{' | ',' if depth == 0 => break,
+                    '{' => depth -= 1,
+                    _ => {}
+                }
+                start -= 1;
+            }
+            let pattern = chars[start..index].iter().collect::<String>();
+            let pattern =
+                find_top_level_keyword(&pattern, "if").map_or(&*pattern, |at| &pattern[..at]);
+            names.extend(pattern_bindings(pattern));
+        }
+        index += 1;
+    }
+    names
+}
+
 fn matches_pattern_bindings(text: &str) -> Vec<String> {
     let mut names = Vec::new();
     for (at, _) in text.match_indices("matches!(") {
