@@ -1,0 +1,9 @@
+[book]
+title = "Rusk"
+authors = ["scarf"]
+language = "en"
+src = "src"
+
+[output.html]
+git-repository-url = "https://github.com/scarf005/rusk"
+edit-url-template = "https://github.com/scarf005/rusk/edit/main/docs/{path}"

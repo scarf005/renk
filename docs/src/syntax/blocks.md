@@ -1,0 +1,80 @@
+# Blocks
+
+## Indentation
+
+A line ending with `:` opens a block that holds the more indented lines after it. This works
+for `struct`, `enum`, `trait`, `impl`, `mod`, `macro_rules!`, `fn`, `if`, `else`, `match`,
+loops, `unsafe`, and `async`. Rusk writes the braces, the `,` after fields and arms, and the `;`
+after statements.
+
+```rsk
+pub enum Shape:
+    Circle(f64)
+    Square(f64)
+
+pub fn area(shape: &Shape) -> f64:
+    match shape:
+        Shape.Circle(radius) => 3.14 * radius * radius
+        Shape.Square(side) => side * side
+```
+
+A Rust `{` block is still accepted, for example to keep a one-line body:
+
+```rsk
+pub fn main():
+    let value = { 1 + 2 }
+    if value > 2 { println!("big") }
+```
+
+## Semicolons
+
+A statement ends at the end of its line. Rusk infers the `;` from the signature: a function
+returning a value keeps its last expression as the value, and a unit function ends it with
+`;`. Write `;` yourself only to discard a value inference keeps.
+
+## Function shorthand
+
+`fn name(...) -> T = expr` is a function whose body is one expression. The expression can open a
+block, as in `= match n:` followed by indented arms.
+
+```rsk
+pub fn twice(value: i32) -> i32 = value * 2
+
+pub fn name(n: i32) -> &'static str = match n:
+    0 => "zero"
+    _ => "many"
+```
+
+## Multi-line headers
+
+A header continued over more indented lines, such as a `where` clause or a long condition,
+opens its body with a `:` line at the header's indent, where rustfmt puts the `{`:
+
+```rsk
+pub fn show[T](value: T) -> String
+where
+    T: std.fmt.Debug,
+:
+    format!("{value:?}")
+
+pub fn check(a: bool, b: bool) -> bool:
+    if a
+        && b
+    :
+        return true
+    false
+```
+
+## Groups
+
+A line ending with `(` or `[`, a struct literal or `use` tree ending with `{`, an unterminated
+string, or a trailing `=` continues until the group closes. The group's contents are Rust
+syntax, and `.method()` or `?` lines at the same indent after it extend the expression.
+
+```rsk
+pub fn total(values: &[i32]) -> i32:
+    values
+        .iter()
+        .map(|value| value * 2)
+        .sum()
+```

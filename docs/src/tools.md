@@ -1,0 +1,64 @@
+# Tools
+
+## Formatter
+
+`rusk fmt` trims trailing whitespace and validates indentation without reflowing expressions,
+so both compact and already-broken chains keep their line breaks. The only option is
+`--line-width`.
+
+```sh
+rusk fmt src/main.rsk -o src/main.rsk
+rusk fmt src/main.rsk --line-width 120
+```
+
+## Cargo wrapper
+
+`rusk` wraps Cargo commands. It transpiles `.rsk` and `.rk` files under Cargo source roots
+(`src`, `examples`, `tests`, `benches`, and `build.rsk`/`build.rk`) into generated `.rs` files,
+then runs Cargo. Existing `.rs` files that rusk did not generate are never overwritten.
+
+```sh
+rusk run        # cargo run
+rusk check      # cargo check
+rusk cargo test # cargo test
+```
+
+## Scripts
+
+`rusk script FILE.rsk [ARGS...]` builds a single-file script with
+`cargo +nightly -Zscript build` and runs it. A script keeps the cargo-script `---`
+frontmatter, and gets `package.edition = "2024"` when it names no edition.
+
+```rsk
+#!/usr/bin/env -S rusk script
+---
+[dependencies]
+regex = "1"
+---
+
+fn main():
+    println!("{}", regex::Regex::new("a+").unwrap().is_match("caab"))
+```
+
+- All scripts build in one shared `$XDG_CACHE_HOME/rusk/build/`, so each dependency compiles
+  once. A script's package is named `<stem>-<hash>` unless it sets `package.name`; a script
+  with its own name builds in cargo's per-script directory instead.
+- A script without a top-level `fn main` runs its top-level lines in order inside
+  `fn main() -> Result<(), Box<dyn std::error::Error>>`, so they can use `?`.
+- `RUSK_SCRIPT` holds the script's absolute path, and the script's exit code is rusk's.
+- Compiler diagnostics point at the script's lines and quote its source.
+- `rusk script --no-cargo FILE.rsk` runs the cached binary without cargo's freshness checks
+  and rebuilds only when the generated Rust changes.
+
+## Language server
+
+`rusk-lsp` is a stdio Language Server Protocol server. It reports diagnostics for `.rsk` and
+`.rk` files and document symbols for `.rsk`, and proxies Rust features through the generated
+Rust when `rust-analyzer` is available. A Zed extension lives in
+[`editors/zed`](https://github.com/scarf005/rusk/tree/main/editors/zed).
+
+## Web runner
+
+`podman compose up --build` serves the web editor at `http://localhost:8080`. It transpiles
+in the browser and compiles and runs snippets with the image's `rustc`, limited to 64 KiB of
+source, 256 KiB of output, two concurrent runs, and ten runs per minute.

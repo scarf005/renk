@@ -4,6 +4,8 @@
 
 `rusk` is an alternative syntax for [rust](https://rust-lang.org) inspired by the [2023 post rust's ugly syntax ](https://matklad.github.io/2023/01/26/rusts-ugly-syntax.html). `ruk` (`.rk`) is Rust syntax with optional semicolons inferred from function signatures.
 
+Documentation: <https://scarf005.github.io/rusk/>
+
 ## Example
 
 ```rsk
