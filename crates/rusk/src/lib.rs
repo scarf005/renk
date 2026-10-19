@@ -4600,7 +4600,8 @@ fn type_annotation_spans(chars: &[char]) -> Vec<(usize, usize)> {
             index = pattern_end;
             continue;
         }
-        // The self type of a qualified path such as `<Vec[u8] as PartialEq[Vec[u8]]>::eq`.
+        // The self type of a qualified path such as `<Vec[u8] as PartialEq[Vec[u8]]>::eq` or
+        // `<Vec[u8]>::new`.
         if chars[index] == '<'
             && chars
                 .get(index + 1)
@@ -4612,7 +4613,7 @@ fn type_annotation_spans(chars: &[char]) -> Vec<(usize, usize)> {
             && let Some(as_at) = top_level_position(chars, index + 1, |at| {
                 chars[at] == '>' || keyword_at(chars, at, "as")
             })
-            .filter(|&at| chars[at] != '>')
+            .filter(|&at| chars[at] != '>' || chars[at + 1..].starts_with(&[':', ':']))
         {
             spans.push((index + 1, as_at));
             index = as_at;
