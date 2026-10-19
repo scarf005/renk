@@ -557,6 +557,17 @@ impl RukSemicolonInferer {
             .is_none_or(|next| next.trim_start().starts_with('}'))
     }
 
+    fn previous_code_line(&self, index: usize) -> Option<&str> {
+        self.lines[..index]
+            .iter()
+            .rev()
+            .map(String::as_str)
+            .find(|line| {
+                let text = line.trim();
+                !text.is_empty() && !is_comment(text)
+            })
+    }
+
     fn next_code_line(&self, index: usize) -> Option<&str> {
         self.lines.iter().skip(index + 1).map(String::as_str).find(|line| {
             let text = line.trim();
@@ -617,6 +628,12 @@ impl RukSemicolonInferer {
             return;
         }
         let header = strip_open_brace(text);
+        // A value continued from `let x =` on the previous line.
+        let binding = self.previous_code_line(index).map(|line| {
+            let code = split_line_comment(line.trim()).map_or(line.trim(), |(code, _)| code);
+            code.trim_end().to_string()
+        });
+        let binding = binding.filter(|line| line.ends_with('=') && starts_control_flow(header));
         let kind = if is_function(header) {
             RukScopeKind::Function {
                 returns_value: function_returns_value(header),
@@ -625,7 +642,7 @@ impl RukSemicolonInferer {
             RukScopeKind::Trait
         } else if is_macro_item(header) {
             RukScopeKind::Macro
-        } else if opens_value_block(header) {
+        } else if opens_value_block(header) || binding.is_some() {
             RukScopeKind::Value
         } else if is_loop(header) {
             RukScopeKind::Statement
@@ -645,6 +662,7 @@ impl RukSemicolonInferer {
         let ends_statement = (!is_function(header)
             && (is_let(header) || is_assignment(header))
             && !starts_control_flow(header))
+            || binding.is_some_and(|line| is_let(&line) || is_assignment(&line))
             || (kind == RukScopeKind::Statement && header.starts_with("match "));
         self.scopes.push(RukScope {
             indent,
@@ -784,7 +802,9 @@ fn looks_like_item_header_without_body(text: &str) -> bool {
 }
 
 fn looks_like_trait_item_without_body(text: &str) -> bool {
-    is_function(text) || text.starts_with("type ") || text.starts_with("const ")
+    (is_function(text) && !text.ends_with('}'))
+        || text.starts_with("type ")
+        || text.starts_with("const ")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -828,7 +848,11 @@ fn convert_rust_lines(source: &str, aggressive: bool) -> Result<String, Transpil
 
     let source = &expand_indent_tabs(source);
     let in_literal = lines_ending_in_literal(source);
-    let heads = lone_opener_heads(&source.lines().collect::<Vec<_>>(), &in_literal, "{");
+    let heads = with_pipe_patterns(
+        lone_opener_heads(&source.lines().collect::<Vec<_>>(), &in_literal, "{"),
+        &source.lines().collect::<Vec<_>>(),
+        &in_literal,
+    );
     let mut raw_lines = source.lines().enumerate().peekable();
     while let Some((index, raw)) = raw_lines.next() {
         let raw = keep_literal_end(raw, in_literal[index]);
@@ -1019,10 +1043,15 @@ fn line_rewrites(lines: &[String], rewrite: fn(&str) -> Option<String>) -> Vec<R
         .iter()
         .enumerate()
         .filter_map(|(index, line)| {
-            rewrite(line).map(|text| Rewrite {
+            // Comments keep their text, as the token check cannot see them.
+            let (code, comment) = split_trailing_comment(line);
+            if is_comment(code.trim()) {
+                return None;
+            }
+            rewrite(code).map(|text| Rewrite {
                 start: index,
                 end: index + 1,
-                text,
+                text: format!("{text}{comment}"),
             })
         })
         .collect()
@@ -1361,9 +1390,18 @@ fn is_rust_closing_delimiter_line(text: &str) -> bool {
 
 fn convert_rust_statement(text: &str, parent: Option<RustBlockKind>) -> ConvertedRustStatement {
     let text = text.trim();
-    if is_comment(text) {
+    if is_comment(text) || (is_macro_item(text) && !text.ends_with('{')) {
         return ConvertedRustStatement {
             text: text.to_string(),
+            opens: None,
+        };
+    }
+    if (is_rust_impl_or_mod_item(text) || is_trait_item(text))
+        && let Some((head, body)) = one_line_body(text)
+    {
+        // A one-line item body keeps its Rust tokens.
+        return ConvertedRustStatement {
+            text: format!("{}{body}", lower_rust_syntax(head)),
             opens: None,
         };
     }
@@ -1840,7 +1878,11 @@ fn source_lines(source: &str) -> Result<Vec<SourceLine>, TranspileError> {
     let mut macro_indent = None;
     let mut arm_indent = None;
     let in_literal = lines_ending_in_literal(source);
-    let heads = lone_opener_heads(&source.lines().collect::<Vec<_>>(), &in_literal, ":");
+    let heads = with_pipe_patterns(
+        lone_opener_heads(&source.lines().collect::<Vec<_>>(), &in_literal, ":"),
+        &source.lines().collect::<Vec<_>>(),
+        &in_literal,
+    );
     while let Some((index, raw)) = raw_lines.next() {
         let line = index + 1;
         let without_comment = keep_literal_end(raw, in_literal[index]);
@@ -1924,7 +1966,7 @@ fn source_lines(source: &str) -> Result<Vec<SourceLine>, TranspileError> {
 }
 
 /// Whether the logical line `text` continues on the `next` physical line: inside a literal or
-/// block comment, after a trailing `=`, before a same-indent `| pattern` line, or in a group opened by a line ending with `(`/`[` (or a
+/// block comment, after a trailing `=`, or in a group opened by a line ending with `(`/`[` (or a
 /// struct literal or `use` tree `{`). A group lasts until its outer delimiter closes, so blocks
 /// inside it stay Rust syntax, and then extends over following `.method` / `?` lines at the same
 /// `indent`; any other line ending with `{` or `:` owns an indented block.
@@ -1985,11 +2027,7 @@ fn joins_next_line(
             && !["==", "!=", "<=", ">="]
                 .iter()
                 .any(|operator| trimmed.ends_with(operator)))
-            || next.is_some_and(|next| {
-                continues_where_clause(text, next, indent)
-                    // A pattern such as `A | B` continued with `| C` at the same indent.
-                    || (raw_indent(next) == indent && next.trim_start().starts_with("| "))
-            }))
+            || next.is_some_and(|next| continues_where_clause(text, next, indent)))
 }
 
 /// Whether `text` leaves a macro invocation's delimiter open, as in `quote_spanned! {span=>` or
@@ -2021,6 +2059,37 @@ fn opens_macro_braces(text: &str) -> bool {
 /// For each line heading a multi-line header, such as a long `if` condition, the index of the line
 /// holding only `opener` (`{` in Rust, `:` in Rusk) at the head's indent after its more indented
 /// continuation lines, as rustfmt lays them out.
+/// `heads` extended so a pattern such as `A` continued with `| B` lines at its indent, with
+/// comments between them, reads as one line.
+fn with_pipe_patterns(
+    mut heads: Vec<Option<usize>>,
+    lines: &[&str],
+    in_literal: &[bool],
+) -> Vec<Option<usize>> {
+    for start in 0..lines.len() {
+        if lines[start].trim().is_empty() || (start > 0 && in_literal[start - 1]) {
+            continue;
+        }
+        let indent = raw_indent(lines[start]);
+        let mut end = None;
+        let mut next = start + 1;
+        while next < lines.len() && !in_literal[next - 1] {
+            let code = lines[next].trim();
+            if raw_indent(lines[next]) != indent || !(code.is_empty() || is_comment(code)) {
+                if raw_indent(lines[next]) == indent && code.starts_with("| ") {
+                    end = Some(next);
+                    next += 1;
+                    continue;
+                }
+                break;
+            }
+            next += 1;
+        }
+        heads[start] = heads[start].max(end);
+    }
+    heads
+}
+
 fn lone_opener_heads(lines: &[&str], in_literal: &[bool], opener: &str) -> Vec<Option<usize>> {
     let code = |line: &str| without_trailing_line_comment(line).trim().to_string();
     let mut heads = vec![None; lines.len()];
@@ -2045,7 +2114,8 @@ fn lone_opener_heads(lines: &[&str], in_literal: &[bool], opener: &str) -> Vec<O
         };
         let head_code = code(lines[head]);
         if raw_indent(lines[head]) == indent
-            && (start..end).any(|between| !lines[between].trim().is_empty())
+            // A header right before its `{` line, or continued on indented lines.
+            && (start == end || (start..end).any(|between| !lines[between].trim().is_empty()))
             && !head_code.is_empty()
             && !head_code.starts_with(['#', '/'])
             && !head_code.ends_with([';', ',', '{', '}'])
@@ -2294,18 +2364,32 @@ fn parse_nodes(
     mut index: usize,
     indent: usize,
 ) -> Result<(Vec<Node>, usize), TranspileError> {
-    let mut nodes = Vec::new();
+    let mut nodes = Vec::<Node>::new();
     while index < lines.len() {
         let line = &lines[index];
         if line.indent < indent {
             break;
         }
-        if line.indent > indent {
+        // An `else` continues the `if` head of `let x =` / `    if c:` at that head's indent.
+        if line.indent > indent
+            && !(is_else_branch(line.text.trim())
+                && nodes
+                    .iter()
+                    .rev()
+                    .find(|node| !is_else_branch(node.text.trim()))
+                    .is_some_and(|head| {
+                        let last = head.text.lines().last().unwrap_or_default();
+                        head.text.contains('\n')
+                            && raw_indent(last) == line.indent
+                            && is_trailing_if(strip_block_marker(head.text.trim()).0)
+                    }))
+        {
             return Err(TranspileError {
                 line: line.line,
                 message: "indentation must belong to the previous line".to_string(),
             });
         }
+        let indent = line.indent;
 
         index += 1;
         let mut children = Vec::new();
@@ -2356,19 +2440,25 @@ fn accepts_closing_line(text: &str, siblings: &[Node]) -> bool {
                 .rev()
                 .find(|node| !is_else_branch(node.text.trim()))
                 .is_some_and(|head| {
-                    let head = head.text.trim();
-                    head.ends_with('{') || is_trailing_if(strip_block_marker(head).0)
+                    let head = strip_block_marker(head.text.trim()).0;
+                    head.ends_with('{')
+                        || is_trailing_if(head)
+                        // An `if` inside an open call, as in `p => max(if c:`.
+                        || (head.contains("if ")
+                            && open_delimiters(head).is_some_and(|open| !open.is_empty()))
                 }))
 }
 
-/// The part after `}` of a closing line that continues the expression, such as `)?` in `})?`
-/// or `)` and the `.method()` lines after `})`.
+/// The part after `}` of a closing line that continues the expression, such as `)?` in `})?`,
+/// `, b)` in `}, b)`, or `)` and the `.method()` lines after `})`.
 fn closing_tail(text: &str) -> Option<&str> {
     let tail = text.trim().strip_prefix('}')?;
-    tail.trim_start_matches([')', ']'])
-        .trim_start()
-        .starts_with(['?', '.'])
-        .then_some(tail)
+    let rest = tail.trim_start_matches([')', ']']).trim_start();
+    (rest.starts_with(['?', '.'])
+        || rest
+            .strip_prefix(',')
+            .is_some_and(|arguments| !arguments.trim().is_empty()))
+    .then_some(tail)
 }
 
 /// Whether `text` is a closing line such as `})` that the `next` line continues with a chain.
@@ -2665,9 +2755,15 @@ fn emit_scoped_sequence(
                 .find(|next| !is_comment(next.text.trim()))
                 .is_some_and(|next| is_else_branch(next.text.trim()));
         let is_branch = chain.is_some() || continues;
+        // The `else` of an arm such as `p => if c:` is a block branch, not an arm.
+        let node_context = if context == Context::Match && is_else_branch(head) {
+            Context::Block
+        } else {
+            context
+        };
         emit_node(
             node,
-            context,
+            node_context,
             if is_branch { branch_is_value } else { is_last },
             emitter,
         );
@@ -2696,9 +2792,15 @@ fn emit_scoped_sequence(
                 None => (suffix, false),
             };
             closing.truncate(end);
-            closing.push_str(&suffix);
-            if is_statement || has_explicit_semicolon || !is_last {
-                closing.push(';');
+            if context == Context::Match {
+                // An arm chain ends with its closing delimiters and `,`.
+                closing.push_str(suffix.trim_end_matches(','));
+                closing.push(',');
+            } else {
+                closing.push_str(&suffix);
+                if is_statement || has_explicit_semicolon || !is_last {
+                    closing.push(';');
+                }
             }
         }
     }
@@ -2855,11 +2957,19 @@ fn emit_general(node: &Node, context: Context, is_last: bool, emitter: &mut Emit
     let text = node.text.trim();
     let (block_text, _) = strip_block_marker(text);
     if is_struct_item(block_text) {
-        emit_braced_item(node, Context::Struct, emitter, lower_signature(block_text));
+        emit_braced_item(
+            node,
+            Context::Struct,
+            emitter,
+            lower_field_or_variant(block_text),
+        );
     } else if is_enum_item(block_text) {
         emit_braced_item(node, Context::Enum, emitter, lower_signature(block_text));
     } else if is_trait_item(block_text) {
         emit_braced_item(node, Context::Trait, emitter, lower_signature(block_text));
+    } else if is_macro_item(block_text) && node.children.is_empty() {
+        // A `macro_rules!` written on its lines, as in `macro_rules! m(...);`, keeps its tokens.
+        emitter.push(node, format!("{}{text}", spaces(node.indent)));
     } else if is_macro_item(block_text) {
         emit_braced_item(node, Context::Macro, emitter, lower_signature(block_text));
     } else if is_function(block_text) {
@@ -2891,6 +3001,9 @@ fn emit_general(node: &Node, context: Context, is_last: bool, emitter: &mut Emit
         {
             let indent = spaces(node.indent);
             emitter.push(node, format!("{}{} {{", indent, lower_expr(block_text)));
+            // The `}` lines up with the head's last line, as in `let x =` / `    if c {`.
+            let indent =
+                spaces(raw_indent(node.text.lines().last().unwrap_or_default()).max(node.indent));
             let context = if is_match(block_text) || is_trailing_match(block_text) {
                 Context::Match
             } else {
@@ -2957,9 +3070,15 @@ fn emit_braced_item_statement(
         && header.ends_with('}')
         && open_delimiters(header).is_some_and(|open| open.is_empty())
     {
-        // A one-line body, as in `pub trait Sealed {}` or `macro_rules! m { () => {} }`, is
-        // already Rust.
-        emitter.push(node, format!("{indent}{header}"));
+        // The fields of a one-line struct are lowered; the body of a one-line item such as
+        // `impl[T] Sealed for Vec[T] { fn f() {} }` keeps its Rust tokens.
+        let line = match one_line_body(strip_block_marker(node.text.trim()).0) {
+            Some((head, body)) if !matches!(child_context, Context::Struct | Context::Enum) => {
+                format!("{}{body}", lower_signature(head))
+            }
+            _ => header.to_string(),
+        };
+        emitter.push(node, format!("{indent}{line}"));
         return;
     }
     if node.children.is_empty() && matches!(child_context, Context::Struct | Context::Enum) {
@@ -3043,7 +3162,9 @@ fn emit_statement(node: &Node, _context: Context, is_last: bool, emitter: &mut E
     let indent = spaces(node.indent);
     let (text, has_explicit_semicolon) = strip_explicit_semicolon(node.text.trim());
     let (block_text, _) = strip_block_marker(text);
-    if !node.children.is_empty() && are_continuations(&node.children) {
+    // A head ending with `{` or `:` owns statements, such as `(O).init(f)` or `*x = 1`.
+    if !node.children.is_empty() && !text.ends_with(['{', ':']) && are_continuations(&node.children)
+    {
         emitter.push(node, format!("{}{}", indent, lower_expr(text)));
         emit_continuations(
             &node.children,
@@ -3096,6 +3217,16 @@ fn emit_statement(node: &Node, _context: Context, is_last: bool, emitter: &mut E
         };
         emitter.push(node, format!("{}{}{}", indent, lower_expr(text), suffix));
     }
+}
+
+/// `text` split before the top-level `{ ... }` that ends it, as in `impl A { fn f() {} }`.
+fn one_line_body(text: &str) -> Option<(&str, &str)> {
+    let chars = text.chars().collect::<Vec<_>>();
+    let open = top_level_position(&chars, 0, |at| chars[at] == '{')?;
+    (matching_bracket(&chars, open, '{', '}') == Some(chars.len() - 1)).then(|| {
+        let at = text.char_indices().nth(open).map_or(0, |(at, _)| at);
+        text.split_at(at)
+    })
 }
 
 fn is_brace_macro_invocation(text: &str) -> bool {
@@ -3156,7 +3287,12 @@ fn emit_raw_braced_expr(node: &Node, head: &str, is_last: bool, emitter: &mut Em
 /// The lowered suffix of a `})?` closing line and whether it ends with an explicit `;`.
 fn closing_suffix(tail: &str) -> (String, bool) {
     let (tail, has_explicit_semicolon) = strip_explicit_semicolon(tail);
-    (lower_expr(tail), has_explicit_semicolon)
+    // The tail binds its own names, as `x` in `}, |x| x.len())`.
+    let bindings = node_bindings(tail, Context::Block, false).own;
+    (
+        with_value_scope(bindings, || lower_expr(tail)),
+        has_explicit_semicolon,
+    )
 }
 
 fn emit_continuations(
@@ -3225,7 +3361,10 @@ fn emit_trait_member(node: &Node, emitter: &mut Emitter) {
     let text = node.text.trim();
     let (block_text, _) = strip_block_marker(text);
     let (signature, _) = strip_explicit_semicolon(block_text);
-    if is_function(signature) && (text.contains('=') || !node.children.is_empty()) {
+    // A default body is `= value`, an indented block, or a one-line `{ ... }`.
+    if is_function(signature)
+        && (text.contains('=') || signature.ends_with('}') || !node.children.is_empty())
+    {
         emit_function(node, emitter);
     } else if is_function(signature) {
         emitter.push(
@@ -3461,8 +3600,20 @@ fn lower_use_tree(text: &str) -> String {
     output
 }
 
+/// A field, a variant, or a struct header; the fields of a one-line `Name { a: Vec[u8] }` are
+/// signatures rather than a const expression.
 fn lower_field_or_variant(text: &str) -> String {
-    lower_signature(text)
+    let chars = text.chars().collect::<Vec<_>>();
+    match top_level_position(&chars, 0, |at| chars[at] == '{')
+        .filter(|&open| matching_bracket(&chars, open, '{', '}') == Some(chars.len() - 1))
+    {
+        Some(open) => format!(
+            "{}{{{}}}",
+            lower_signature(&chars[..open].iter().collect::<String>()),
+            lower_signature(&chars[open + 1..chars.len() - 1].iter().collect::<String>())
+        ),
+        None => lower_signature(text),
+    }
 }
 
 fn lower_expr(text: &str) -> String {
@@ -3641,8 +3792,8 @@ fn lower_basic_expr(text: &str) -> String {
     output
 }
 
-/// Type positions inside expressions: `let`/`static`/`const` annotations and closure
-/// parameter/return types.
+/// Type positions inside expressions: `let`/`static`/`const` annotations, closure
+/// parameter/return types, and `as` cast targets.
 fn type_annotation_spans(chars: &[char]) -> Vec<(usize, usize)> {
     let mut spans = Vec::new();
     let mut index = 0usize;
@@ -3666,6 +3817,47 @@ fn type_annotation_spans(chars: &[char]) -> Vec<(usize, usize)> {
             opaque_span_end(chars, index).or_else(|| macro_invocation_end(chars, index))
         {
             index = end + 1;
+            continue;
+        }
+        if index > 0 && keyword_at(chars, index, "let") && chars.get(index + 3) == Some(&' ') {
+            // A `let` inside a block of a group, as in `f(unsafe {` / `let x: T = ...`.
+            let pattern_end = top_level_position(chars, index + 3, |at| {
+                chars[at] == ';'
+                    || (chars[at] == '='
+                        && !matches!(chars.get(at + 1), Some('=' | '>'))
+                        && !matches!(chars[at - 1], '=' | '!' | '<' | '>'))
+            })
+            .unwrap_or(chars.len());
+            if let Some(colon) = top_level_position(&chars[..pattern_end], index + 3, |at| {
+                is_single_colon(chars, at)
+            }) {
+                spans.push((colon + 1, pattern_end));
+            }
+            index = pattern_end;
+            continue;
+        }
+        // The self type of a qualified path such as `<Vec[u8] as PartialEq[Vec[u8]]>::eq`.
+        if chars[index] == '<'
+            && chars
+                .get(index + 1)
+                .is_some_and(|next| !next.is_whitespace() && *next != '=')
+            && chars[..index]
+                .iter()
+                .rfind(|character| !character.is_whitespace())
+                .is_none_or(|before| !is_ident_continue(*before) && !matches!(before, ')' | ']'))
+            && let Some(as_at) = top_level_position(chars, index + 1, |at| {
+                chars[at] == '>' || keyword_at(chars, at, "as")
+            })
+            .filter(|&at| chars[at] != '>')
+        {
+            spans.push((index + 1, as_at));
+            index = as_at;
+            continue;
+        }
+        if keyword_at(chars, index, "as") && chars.get(index + 2) == Some(&' ') {
+            let end = cast_type_end(chars, index + 3);
+            spans.push((index + 3, end));
+            index = end;
             continue;
         }
         if chars[index] != '|' || !is_closure_start(chars, index) {
@@ -3702,6 +3894,41 @@ fn type_annotation_spans(chars: &[char]) -> Vec<(usize, usize)> {
         index = params_end + 1;
     }
     spans
+}
+
+/// The end of the cast type starting at `start`, such as `*const [Bucket[K, V]]` in
+/// `entries as *const [Bucket[K, V]] as *const Self`.
+fn cast_type_end(chars: &[char], start: usize) -> usize {
+    let mut depth = 0usize;
+    let mut index = start;
+    while index < chars.len() {
+        match chars[index] {
+            '[' | '(' => depth += 1,
+            ']' | ')' if depth == 0 => break,
+            ']' | ')' => depth -= 1,
+            ' ' if depth == 0 => {
+                // `*const T`, `&mut T`, `dyn T`, and `&'a T` continue after their space.
+                let word = chars[start..index]
+                    .iter()
+                    .rev()
+                    .take_while(|character| !matches!(character, ' ' | '&' | '*'))
+                    .collect::<String>();
+                if !matches!(&*word, "tsnoc" | "tum" | "nyd") && !word.ends_with('\'') {
+                    break;
+                }
+            }
+            character
+                if depth == 0
+                    && !is_ident_continue(character)
+                    && !matches!(character, '.' | ':' | '&' | '*' | '\'') =>
+            {
+                break;
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+    index
 }
 
 fn is_single_colon(chars: &[char], at: usize) -> bool {
@@ -4616,6 +4843,20 @@ fn replace_dotted_paths(text: &str, mode: PathMode) -> String {
             continue;
         }
 
+        // A number such as `0.0f64` keeps its suffix, so `0.0f64.to_bits()` stays a method call.
+        if chars[index].is_ascii_digit() {
+            let start = index;
+            while index < chars.len()
+                && (is_ident_continue(chars[index])
+                    || (chars[index] == '.'
+                        && chars.get(index + 1).is_some_and(char::is_ascii_digit)))
+            {
+                index += 1;
+            }
+            output.extend(chars[start..index].iter());
+            continue;
+        }
+
         if is_ident_start(chars[index]) {
             let start = index;
             let explicit_path_before = start >= 2 && chars[start - 2..start] == [':', ':'];
@@ -5261,8 +5502,35 @@ fn is_macro_item(text: &str) -> bool {
     text.starts_with("macro_rules!")
 }
 
+/// Whether `text` starts a function item after its qualifiers, as in
+/// `pub(crate) const unsafe extern "C" fn`; `let q = quote! { fn f() {} }` is not one.
 fn is_function(text: &str) -> bool {
-    text.starts_with("fn ") || text.starts_with("pub fn ") || text.contains(" fn ")
+    let mut rest = text;
+    loop {
+        if rest.starts_with("fn ") {
+            return true;
+        }
+        let qualified = match rest.strip_prefix("pub(") {
+            Some(scope) => scope.find(')').map(|at| &scope[at + 1..]),
+            None => [
+                "pub", "const", "async", "unsafe", "safe", "default", "extern",
+            ]
+            .iter()
+            .find_map(|qualifier| rest.strip_prefix(qualifier))
+            .filter(|after| after.starts_with(' ')),
+        };
+        let Some(after) = qualified else {
+            return false;
+        };
+        rest = after.trim_start();
+        // The ABI of `extern "C" fn`.
+        if let Some(abi) = rest.strip_prefix('"') {
+            let Some(end) = abi.find('"') else {
+                return false;
+            };
+            rest = abi[end + 1..].trim_start();
+        }
+    }
 }
 
 fn function_returns_value(signature: &str) -> bool {
@@ -5437,14 +5705,21 @@ fn is_jump_statement(text: &str) -> bool {
 }
 
 fn is_assignment(text: &str) -> bool {
-    [" += ", " -= ", " *= ", " /= ", " %= ", " = "]
-        .iter()
-        .any(|operator| text.contains(operator))
+    let chars = text.chars().collect::<Vec<_>>();
+    // At the top level, unlike the `=` of `}, |x| { let y = x; y })`.
+    top_level_position(&chars, 0, |at| {
+        [" += ", " -= ", " *= ", " /= ", " %= ", " = "]
+            .iter()
+            .any(|operator| chars[at..].starts_with(&operator.chars().collect::<Vec<_>>()))
+    })
+    .is_some()
         && !text.contains(" == ")
         && !text.contains(" != ")
         && !text.contains(" <= ")
         && !text.contains(" >= ")
         && !text.contains(" => ")
+        // The `=` of `if let` / `while let` binds a pattern in a condition.
+        && !is_control(text)
 }
 
 fn looks_like_struct_literal(node: &Node) -> bool {
