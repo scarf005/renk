@@ -32,5 +32,9 @@ pub fn format_args(cli: &Cli, index: usize, name: &str, out: &mut String) -> std
     );
     let shown = format!("{}", (|x: u8| x)(1));
     println!("{shown} {error}");
+    assert!(NAME.len() > 0, "{} {}", NAMES[0].len(), NAMES.len());
+    let sizes = vec![NAME.len(); 2];
+    debug_assert_eq!(sizes, vec![NAMES.len(), NAME.len()].iter().copied().collect::<Vec<_>>());
+    assert!(matches!(std::cmp::Ordering::Less.reverse(), std::cmp::Ordering::Greater));
     Ok(())
 }

@@ -186,3 +186,22 @@ pub fn unit_tail(c: bool):
         values.pop()
     else:
         values.first().copied()
+
+macro_rules! keep:
+    ($value:expr) => $value
+
+pub fn std_macro_arguments(flag: bool) -> usize:
+    let words = vec![String.from("a, b"), std.string::String.new()]
+    let sizes = vec![
+        words[0].len(), // a, b
+        Vec[u8].new().len(),
+    ]
+    let repeated = vec![String.new(); 2]
+    assert!(words.iter().any(|w| w.len() < std.usize.MAX), "missing {words.len()}")
+    assert_eq!(sizes.len(), if flag then 2 else 2, "{}, {}", "x, y", repeated.len())
+    debug_assert_ne!(std.cmp::Ordering.Less, std.cmp::Ordering.Greater)
+    let ordered = matches!((std.cmp::Ordering.Less).reverse(), std.cmp::Ordering.Greater | std.cmp::Ordering.Equal)
+    let kept = keep!(sizes.len())
+    let shown = format!("{} {}", dbg!(String.from("a").len()), vec![Vec[u8].new()].len())
+    println!("{}", if ordered then shown.len() else kept)
+    sizes.iter().sum[usize]() + repeated.len()

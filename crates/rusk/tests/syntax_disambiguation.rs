@@ -605,3 +605,41 @@ fn unused_block_values_end_with_statements() {
         assert!(output.contains(expected), "missing {expected:?}\n{output}");
     }
 }
+
+#[test]
+fn std_macro_arguments_lower_like_expressions() {
+    let output = rust(
+        "fn demo(a: bool):\n    println!(\"{}, {}\", \"a, Foo.new()\", Foo.new())\n    writeln!(std.io.stdout(), \"{}\", std.i32.MAX)\n    let v = vec![Vec[i32].new(), std.vec.Vec.new()]\n    let r = vec![Foo.new(); 3]\n    assert!(xs.iter().any(|x| *x == std.i32.MAX), \"missing {xs.len()}\")\n    assert_eq!(Foo.new(), if a then 1 else 2)\n    dbg!(Foo.new())\n    let m = matches!(op, Op.Add(_) | Op.Mul(_))\n    let u = my_macro!(Foo.new())\n    let w = vec![\n        Foo.new(), // a, Foo.new()\n        HashMap::<u8, u8>::new(),\n    ]\n",
+    );
+    for expected in [
+        "println!(\"{}, {}\", \"a, Foo.new()\", Foo::new());",
+        "writeln!(std::io::stdout(), \"{}\", std::i32::MAX);",
+        "vec![Vec::<i32>::new(), std::vec::Vec::new()];",
+        "vec![Foo::new(); 3];",
+        "assert!(xs.iter().any(|x| *x == std::i32::MAX), \"missing {}\", xs.len());",
+        "assert_eq!(Foo::new(), if a { 1 } else { 2 });",
+        "dbg!(Foo::new());",
+        "matches!(op, Op::Add(_) | Op::Mul(_));",
+        "my_macro!(Foo.new());",
+        "        Foo::new(), // a, Foo.new()\n        HashMap::<u8, u8>::new(),\n",
+    ] {
+        assert!(output.contains(expected), "missing {expected}\n{output}");
+    }
+}
+
+#[test]
+fn rust_conversion_keeps_std_macro_argument_receivers() {
+    let rusk = rust_to_rusk(
+        "const TEXT: &str = \"a\";\nfn f(xs: &[fn() -> usize]) -> usize {\n    assert!(TEXT.len() > 0);\n    let v = vec![TEXT.len(); 2];\n    let called = vec![xs[0]()];\n    dbg!(std::cmp::Ordering::Less.reverse());\n    v.len() + called.len()\n}\n",
+    )
+    .unwrap();
+    let output = rust(&rusk);
+    for expected in [
+        "assert!((TEXT).len() > 0);",
+        "vec![(TEXT).len(); 2];",
+        "vec![(xs[0])()];",
+        "dbg!((std::cmp::Ordering::Less).reverse());",
+    ] {
+        assert!(output.contains(expected), "missing {expected}\nRusk:\n{rusk}\n{output}");
+    }
+}
