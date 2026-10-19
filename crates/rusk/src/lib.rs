@@ -884,12 +884,14 @@ fn convert_rust_lines(source: &str, aggressive: bool) -> Result<String, Transpil
         }
         let mut text = format!("{text}{comment}");
         let mut group = None;
+        let mut open = OpenDelimiters::default();
         let mut header_end = heads[index];
         while (joins_next_line(
             &text,
             raw_lines.peek().map(|(_, next)| *next),
             raw_indent(raw),
             &mut group,
+            &mut open,
         ) || header_end.is_some())
             && let Some((index, next)) = raw_lines.next()
         {
@@ -1804,12 +1806,14 @@ fn source_lines(source: &str) -> Result<Vec<SourceLine>, TranspileError> {
             text = branch.to_string();
         }
         let mut group = None;
+        let mut open = OpenDelimiters::default();
         let mut header_end = heads[index];
         while joins_next_line(
             &text,
             raw_lines.peek().map(|(_, next)| *next),
             raw_indent(without_comment),
             &mut group,
+            &mut open,
         ) || header_end.is_some()
         {
             let Some((index, next)) = raw_lines.next() else {
@@ -1853,8 +1857,9 @@ fn joins_next_line(
     next: Option<&str>,
     indent: usize,
     group: &mut Option<char>,
+    open: &mut OpenDelimiters,
 ) -> bool {
-    let Some(open) = open_delimiters(text) else {
+    let Some(open) = open.update(text) else {
         return true;
     };
     // The line that decides is the last non-blank one, so a blank line after `= // note` waits too.
@@ -2116,27 +2121,45 @@ fn keep_literal_end(line: &str, in_literal: bool) -> &str {
 
 /// Unclosed delimiters at the end of `text`, or `None` while a literal or block comment is open.
 fn open_delimiters(text: &str) -> Option<Vec<char>> {
-    let chars = text.chars().collect::<Vec<_>>();
-    let mut open = Vec::new();
-    let mut index = 0usize;
-    while index < chars.len() {
-        if let Some(end) = opaque_span_end(&chars, index) {
-            if !opaque_span_is_closed(&chars, index, end) {
-                return None;
+    OpenDelimiters::default().update(text).map(<[char]>::to_vec)
+}
+
+/// The delimiters a logical line leaves open, scanned incrementally as its physical lines are
+/// appended, so joining a long group stays linear.
+#[derive(Default)]
+struct OpenDelimiters {
+    open: Vec<char>,
+    /// Bytes of the text already scanned; a literal or comment left open is rescanned.
+    scanned: usize,
+}
+
+impl OpenDelimiters {
+    /// The delimiters `text` leaves open, or `None` inside a literal or block comment; `text`
+    /// extends the text of the previous call.
+    fn update(&mut self, text: &str) -> Option<&[char]> {
+        let chars = text[self.scanned..].chars().collect::<Vec<_>>();
+        let mut index = 0usize;
+        while index < chars.len() {
+            if let Some(end) = opaque_span_end(&chars, index) {
+                if !opaque_span_is_closed(&chars, index, end) {
+                    return None;
+                }
+                self.scanned += chars[index..=end].iter().map(|c| c.len_utf8()).sum::<usize>();
+                index = end + 1;
+                continue;
             }
-            index = end + 1;
-            continue;
-        }
-        match chars[index] {
-            delimiter @ ('(' | '[' | '{') => open.push(delimiter),
-            ')' | ']' | '}' => {
-                open.pop();
+            match chars[index] {
+                delimiter @ ('(' | '[' | '{') => self.open.push(delimiter),
+                ')' | ']' | '}' => {
+                    self.open.pop();
+                }
+                _ => {}
             }
-            _ => {}
+            self.scanned += chars[index].len_utf8();
+            index += 1;
         }
-        index += 1;
+        Some(&self.open)
     }
-    Some(open)
 }
 
 fn opaque_span_is_closed(chars: &[char], start: usize, end: usize) -> bool {
