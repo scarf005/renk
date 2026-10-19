@@ -197,3 +197,55 @@ fn script_compiler_diagnostics_point_at_script_lines() {
     }
     let _ = fs::remove_dir_all(dir);
 }
+
+#[test]
+fn script_top_level_statements_run_in_a_fallible_main() {
+    let dir = temp_dir("script-top-level");
+    let run = |name: &str, source: &str| {
+        let script = dir.join(name);
+        fs::write(&script, source).unwrap();
+        let output = Command::new(env!("CARGO_BIN_EXE_rusk"))
+            .arg("script")
+            .arg(&script)
+            .env("XDG_CACHE_HOME", dir.join("cache"))
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        (output.status.code(), stdout, stderr, script)
+    };
+
+    let (code, stdout, stderr, _) = run(
+        "tool.rsk",
+        "#!/usr/bin/env -S rusk script\n#![allow(dead_code)]\nuse std.collections.HashMap\n\nstruct Count:\n    n: i32\n\nlet text = r#\"\nfn main():\n    nested\n\"#\nlet n: i32 = \"4\".parse()?\nlet mut seen = HashMap.new()\nfor i in 0..n:\n    seen.insert(i, Count{ n: i * 2 })\nprintln!(\"{} {} {}\", seen.len(), seen[&3].n, text.lines().count())\n",
+    );
+    assert_eq!(stdout, "4 6 3\n", "{stderr}");
+    assert_eq!(code, Some(0), "{stderr}");
+
+    let (code, stdout, stderr, _) = run(
+        "fail.rsk",
+        "let n: i32 = \"x\".parse()?\nprintln!(\"{n}\")\n",
+    );
+    assert_eq!(stdout, "", "{stderr}");
+    assert_eq!(code, Some(1), "{stderr}");
+    assert!(stderr.contains("invalid digit"), "{stderr}");
+
+    let (code, stdout, stderr, _) = run("tool.rk", "let x = 2\nprintln!(\"{}\", x * 3)\n");
+    assert_eq!(stdout, "6\n", "{stderr}");
+    assert_eq!(code, Some(0), "{stderr}");
+
+    let (code, _, stderr, script) = run(
+        "typed.rsk",
+        "let x = 1\nlet y: i32 = \"no\"\nprintln!(\"{x}\")\n",
+    );
+    assert_ne!(code, Some(0), "{stderr}");
+    assert!(
+        stderr.contains(&format!("--> {}:2:", script.display())),
+        "{stderr}"
+    );
+
+    let (code, _, stderr, _) = run("tabbed.rsk", "let x = 1\nif x > 0:\n\tprintln!()\n");
+    assert_eq!(code, Some(1), "{stderr}");
+    assert!(stderr.contains("tabbed.rsk: line 3"), "{stderr}");
+    let _ = fs::remove_dir_all(dir);
+}
