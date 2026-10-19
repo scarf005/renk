@@ -199,10 +199,13 @@ pub fn format_source(source: &str, options: FormatOptions) -> Result<String, Tra
     Ok(ensure_trailing_newline(
         source
             .lines()
-            .zip(in_literal)
-            .map(|(line, in_literal)| {
-                if in_literal {
+            .enumerate()
+            .map(|(index, line)| {
+                if in_literal[index] {
                     line.to_string()
+                } else if index > 0 && in_literal[index - 1] {
+                    // The line starts inside the literal, so its indentation is literal content.
+                    line.trim_end().to_string()
                 } else {
                     format_line(line)
                 }
@@ -303,10 +306,10 @@ pub fn ruk_to_rusk(source: &str) -> Result<String, TranspileError> {
 
 /// Drops every Rust semicolon that Ruk inference restores, keeping the rest.
 pub fn rust_to_ruk(source: &str) -> Result<String, TranspileError> {
+    let source = &expand_indent_tabs(source);
     let mut rust = Vec::new();
     let mut output = Vec::new();
-    for ((index, raw), in_literal) in source.lines().enumerate().zip(lines_ending_in_literal(source)) {
-        reject_tabs(raw, index + 1)?;
+    for (raw, in_literal) in source.lines().zip(lines_ending_in_literal(source)) {
         let raw = keep_literal_end(raw, in_literal);
         if raw.trim() != GENERATED_HEADER.trim_end() {
             rust.push(raw);
@@ -366,10 +369,10 @@ struct RukSemicolonInferer {
 
 impl RukSemicolonInferer {
     fn new(source: &str) -> Result<Self, TranspileError> {
+        reject_indent_tabs(source)?;
         let mut lines = Vec::<String>::new();
         let mut joins_next = false;
-        for ((index, raw), in_literal) in source.lines().enumerate().zip(lines_ending_in_literal(source)) {
-            reject_tabs(raw, index + 1)?;
+        for (raw, in_literal) in source.lines().zip(lines_ending_in_literal(source)) {
             match lines.last_mut() {
                 Some(line) if joins_next => {
                     line.push('\n');
@@ -814,11 +817,11 @@ fn convert_rust_lines(source: &str, aggressive: bool) -> Result<String, Transpil
     // Delimiter depth inside a multi-line `macro_rules!` arm body, whose lines stay Rust tokens.
     let mut arm_depth = None;
 
+    let source = &expand_indent_tabs(source);
     let in_literal = lines_ending_in_literal(source);
     let heads = lone_opener_heads(&source.lines().collect::<Vec<_>>(), &in_literal, "{");
     let mut raw_lines = source.lines().enumerate().peekable();
     while let Some((index, raw)) = raw_lines.next() {
-        reject_tabs(raw, index + 1)?;
         let raw = keep_literal_end(raw, in_literal[index]);
         if let Some(depth) = arm_depth {
             let depth = macro_depth_after_line(depth, raw);
@@ -895,7 +898,6 @@ fn convert_rust_lines(source: &str, aggressive: bool) -> Result<String, Transpil
         ) || header_end.is_some())
             && let Some((index, next)) = raw_lines.next()
         {
-            reject_tabs(next, index + 1)?;
             text.push('\n');
             text.push_str(keep_literal_end(next, in_literal[index]));
             header_end = header_end.filter(|&end| end > index).or(heads[index]);
@@ -1752,17 +1754,52 @@ fn escape_json(text: &str) -> String {
     escaped
 }
 
-fn reject_tabs(raw: &str, line: usize) -> Result<(), TranspileError> {
-    if raw.contains('\t') {
-        return Err(TranspileError {
-            line,
+/// Lines outside multi-line literals, with their 0-based index, whose indentation has a tab.
+fn indent_tab_lines(source: &str) -> impl Iterator<Item = usize> {
+    let in_literal = lines_ending_in_literal(source);
+    source.lines().enumerate().filter_map(move |(index, raw)| {
+        let continues_literal = index > 0 && in_literal[index - 1];
+        let indent = &raw[..raw.len() - raw.trim_start().len()];
+        (!continues_literal && indent.contains('\t')).then_some(index)
+    })
+}
+
+/// Rusk and Ruk read structure from indentation, so a tab there is ambiguous.
+fn reject_indent_tabs(source: &str) -> Result<(), TranspileError> {
+    match indent_tab_lines(source).next() {
+        Some(index) => Err(TranspileError {
+            line: index + 1,
             message: "tabs are not supported; use spaces".to_string(),
-        });
+        }),
+        None => Ok(()),
     }
-    Ok(())
+}
+
+/// Rust `source` with tabs in indentation expanded to 4-column tab stops.
+fn expand_indent_tabs(source: &str) -> String {
+    let tabbed = indent_tab_lines(source).collect::<Vec<_>>();
+    if tabbed.is_empty() {
+        return source.to_string();
+    }
+    source
+        .split('\n')
+        .enumerate()
+        .map(|(index, line)| {
+            if tabbed.binary_search(&index).is_err() {
+                return line.to_string();
+            }
+            let code = line.trim_start();
+            let width = line[..line.len() - code.len()]
+                .chars()
+                .fold(0, |width, c| if c == '\t' { width / 4 * 4 + 4 } else { width + 1 });
+            format!("{}{code}", spaces(width))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn source_lines(source: &str) -> Result<Vec<SourceLine>, TranspileError> {
+    reject_indent_tabs(source)?;
     let mut lines = Vec::new();
     let mut raw_lines = source.lines().enumerate().peekable();
     // Indents of the enclosing `macro_rules!` item and of the multi-line arm being read.
@@ -1776,7 +1813,6 @@ fn source_lines(source: &str) -> Result<Vec<SourceLine>, TranspileError> {
         let trimmed = without_comment.trim();
         let indent = raw_indent(without_comment);
         if !trimmed.is_empty() && arm_indent.is_some_and(|arm| indent > arm) {
-            reject_tabs(raw, line)?;
             lines.push(SourceLine {
                 line,
                 indent,
@@ -1795,7 +1831,6 @@ fn source_lines(source: &str) -> Result<Vec<SourceLine>, TranspileError> {
         if macro_indent.is_some_and(|item| indent <= item) {
             macro_indent = None;
         }
-        reject_tabs(raw, line)?;
         let mut text = without_comment.trim_start().to_string();
         // `} else {` continues a `{` chain whose closing braces the emitter writes itself.
         if let Some(branch) = text
@@ -1823,7 +1858,6 @@ fn source_lines(source: &str) -> Result<Vec<SourceLine>, TranspileError> {
                         .to_string(),
                 });
             };
-            reject_tabs(next, index + 1)?;
             text.push('\n');
             text.push_str(keep_literal_end(next, in_literal[index]));
             header_end = header_end.filter(|&end| end > index).or(heads[index]);
@@ -1869,7 +1903,7 @@ fn joins_next_line(
         // Generic parameters over several lines, closed by a `>` line at the head's indent.
         if !code.trim_start().starts_with('>') {
             return next.is_some_and(|next| {
-                raw_indent(next) > indent
+                (!next.trim().is_empty() && raw_indent(next) > indent)
                     || (raw_indent(next) == indent && next.trim_start().starts_with('>'))
             });
         }
@@ -1901,7 +1935,9 @@ fn joins_next_line(
         *group = open.first().copied();
         return true;
     }
-    if code.trim_end().ends_with('<') && next.is_some_and(|next| raw_indent(next) > indent) {
+    if code.trim_end().ends_with('<')
+        && next.is_some_and(|next| !next.trim().is_empty() && raw_indent(next) > indent)
+    {
         *group = Some('<');
         return true;
     }
