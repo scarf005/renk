@@ -35,6 +35,7 @@ const CORPUS: &[(&str, &str)] = &[
     ("long_conditions", include_str!("rust_corpus/long_conditions.rs")),
     ("match_arm_blocks", include_str!("rust_corpus/match_arm_blocks.rs")),
     ("bare_blocks", include_str!("rust_corpus/bare_blocks.rs")),
+    ("wrapped_groups", include_str!("rust_corpus/wrapped_groups.rs")),
 ];
 
 const RUSK_CORPUS: &[(&str, &str)] = &[
