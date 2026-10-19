@@ -2396,6 +2396,8 @@ fn validate_match_arm(node: &Node) -> Result<(), TranspileError> {
             validate_nodes(&node.children, Context::Block)
         } else if node.children.is_empty() {
             Ok(())
+        } else if has_block_marker(node.text.trim()) {
+            validate_nodes(&node.children, arm_block_context(expr))
         } else if are_continuations(&node.children) {
             validate_nodes(&node.children, Context::Block)
         } else {
@@ -3033,6 +3035,17 @@ fn emit_match_arm(node: &Node, emitter: &mut Emitter) {
             emitter.push(node, format!("{}{} => {{", indent, pattern));
             emit_nodes(&node.children, Context::Block, emitter);
             emitter.push_generated(format!("{}}},", indent));
+        } else if has_block_marker(node.text.trim()) {
+            // A body opening a block, as `x => match y:`, `x => unsafe:`, or `x => f(:`.
+            let space = if expr.ends_with(['(', '[']) { "" } else { " " };
+            emitter.push(node, format!("{indent}{pattern} => {}{space}{{", lower_expr(expr)));
+            emit_nodes(&node.children, arm_block_context(expr), emitter);
+            let (closing, _) = node
+                .closing
+                .as_deref()
+                .map_or_else(|| (closing_delimiters(expr), false), closing_suffix);
+            let comma = if closing.is_empty() { "" } else { "," };
+            emitter.push_generated(format!("{indent}}}{closing}{comma}"));
         } else if !node.children.is_empty() {
             emitter.push(
                 node,
@@ -3059,6 +3072,15 @@ fn emit_match_arm(node: &Node, emitter: &mut Emitter) {
         emitter.push(node, format!("{}{} => {{", indent, lower_expr(text)));
         emit_nodes(&node.children, Context::Block, emitter);
         emitter.push_generated(format!("{}}},", indent));
+    }
+}
+
+/// The context of the block a match arm body such as `match y:` or `unsafe:` opens.
+fn arm_block_context(expr: &str) -> Context {
+    if is_match(expr) || is_trailing_match(expr) {
+        Context::Match
+    } else {
+        Context::Block
     }
 }
 
