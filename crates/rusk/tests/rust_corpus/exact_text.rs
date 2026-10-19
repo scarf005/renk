@@ -45,3 +45,14 @@ pub fn block_arms(o: Option<u8>, v: &mut Vec<u8>) -> u8 {
     };
     n
 }
+
+pub fn one_line_statements(c: bool, v: &mut Vec<u8>) -> u8 {
+    if c { v.push(1); }
+    if c { v.push(2); } else { v.clear(); }
+    if c { 1 } else { 2 };
+    match c { true => 1, false => 2 };
+    {
+        v.push(3);
+    }
+    3
+}
