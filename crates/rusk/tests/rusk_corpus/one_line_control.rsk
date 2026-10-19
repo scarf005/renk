@@ -1,0 +1,8 @@
+fn count(v: Vec[u32], names: Vec[String], c: bool) -> usize:
+    let mut n = 0
+    for x in v.iter() { n += Vec[u32].new().len() + *x as usize }
+    for name in names.iter() { n += name.len() }
+    while c && n < 3 { n += std.cmp.max(1, 2) }
+    if c { n += Vec[u8].new().len() } // {
+    loop { break }
+    if names.is_empty() { n } else { n + names[0].len() }

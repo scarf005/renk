@@ -44,6 +44,7 @@ const CORPUS: &[(&str, &str)] = &[
     ("nested_blocks", include_str!("rust_corpus/nested_blocks.rs")),
     ("macro_matchers", include_str!("rust_corpus/macro_matchers.rs")),
     ("casts", include_str!("rust_corpus/casts.rs")),
+    ("one_line_control", include_str!("rust_corpus/one_line_control.rs")),
 ];
 
 const RUSK_CORPUS: &[(&str, &str)] = &[
@@ -53,6 +54,10 @@ const RUSK_CORPUS: &[(&str, &str)] = &[
         include_str!("rusk_corpus/trailing_comments.rsk"),
     ),
     ("casts", include_str!("rusk_corpus/casts.rsk")),
+    (
+        "one_line_control",
+        include_str!("rusk_corpus/one_line_control.rsk"),
+    ),
 ];
 
 #[test]
