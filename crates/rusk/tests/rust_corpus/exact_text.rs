@@ -141,3 +141,13 @@ pub fn arm_chains(o: Option<u8>, mut n: u8) -> u8 {
     }
     n
 }
+
+use std::env;
+
+pub fn closure_chains(v: Vec<String>, c: bool) -> usize {
+    v.iter().map(|env| if c {
+        1
+    } else {
+        env.len()
+    }).count() + env::args().count()
+}
