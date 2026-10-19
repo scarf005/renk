@@ -58,7 +58,10 @@ const RUSK_CORPUS: &[(&str, &str)] = &[
         "one_line_control",
         include_str!("rusk_corpus/one_line_control.rsk"),
     ),
+    ("cfg_statements", include_str!("rusk_corpus/cfg_statements.rsk")),
 ];
+
+const RUK_CORPUS: &[(&str, &str)] = &[("statements", include_str!("rusk_corpus/statements.rk"))];
 
 #[test]
 fn rust_corpus_roundtrips_to_compilable_rust() {
@@ -149,6 +152,22 @@ fn rusk_corpus_transpiles_to_compilable_rust() {
         });
         compile_rust(&out_dir, name, "rusk-roundtrip", &roundtripped);
         assert_eq!(multiline_literals(&roundtripped), multiline_literals(&rust), "{name}");
+    }
+
+    let _ = fs::remove_dir_all(out_dir);
+}
+
+#[test]
+fn ruk_corpus_transpiles_to_compilable_rust() {
+    let out_dir = env::temp_dir().join(format!("rusk-ruk-corpus-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&out_dir);
+    fs::create_dir_all(&out_dir).unwrap();
+
+    for (name, ruk) in RUK_CORPUS {
+        let rust = ruk_to_rust(ruk).unwrap_or_else(|error| {
+            panic!("failed to convert Ruk corpus case {name} to Rust: {error}")
+        });
+        compile_rust(&out_dir, name, "ruk", &rust);
     }
 
     let _ = fs::remove_dir_all(out_dir);

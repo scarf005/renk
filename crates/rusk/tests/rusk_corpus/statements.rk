@@ -1,0 +1,63 @@
+pub struct S(u32);
+
+unsafe extern "C" { fn abs(x: i32) -> i32; }
+
+impl S {
+    #[inline] pub fn get(&self) -> Vec<u32> {
+        let v = vec![self.0]
+        v
+    }
+    #[inline] pub fn n(&self) -> u32 { self.0 }
+}
+
+pub fn foo(a: u32, b: u32) -> u32 {
+    a + b
+}
+
+pub fn wrapped_then_block(v: &mut Vec<u32>, c: bool) -> u32 {
+    let x = foo(
+        1,
+        2,
+    )
+    {
+        v.push(x)
+    }
+    let n = v
+        .iter()
+        .count()
+    {
+        v.push(n as u32) // {
+    }
+    let y = if c
+        && v.is_empty()
+    {
+        1
+    } else {
+        2
+    }
+    x + y + unsafe { abs(-1) } as u32
+}
+
+pub fn cfg_statements(v: &mut Vec<u32>) -> usize {
+    #[cfg(unix)]
+    v.push(1)
+    #[cfg(not(unix))]
+    v.push(2)
+    #[cfg(unix)]
+    let x = 1
+    #[cfg(not(unix))]
+    let x = 2
+    v.push(x)
+    v.len()
+}
+
+pub fn cfg_tail() -> u32 {
+    #[cfg(unix)]
+    {
+        1
+    }
+    #[cfg(not(unix))]
+    {
+        2
+    }
+}

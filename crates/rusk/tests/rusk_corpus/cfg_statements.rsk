@@ -1,0 +1,11 @@
+pub fn cfg_statements(v: &mut Vec[u32]) -> usize:
+    #[cfg(unix)]
+    v.push(1)
+    #[cfg(not(unix))]
+    v.push(2)
+    #[cfg(unix)]
+    let x = 1
+    #[cfg(not(unix))]
+    let x = 2
+    v.push(x)
+    v.len()
