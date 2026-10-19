@@ -2268,7 +2268,13 @@ fn lone_opener_heads(lines: &[&str], in_literal: &[bool], opener: &str) -> Vec<O
             continue;
         };
         let head_code = code(lines[head]);
+        // A `let` or assignment continued on its lines, as in `let x = foo(` / `)` or `let n = v`
+        // / `.count()`, ends before a bare block unless its value is a control expression.
+        let is_statement = (is_let(&head_code) || is_assignment(&head_code))
+            && split_once_top_level(&head_code, '=')
+                .is_none_or(|(_, value)| !starts_control_flow(value.trim()));
         if raw_indent(lines[head]) == indent
+            && !is_statement
             // A control or `let` header right before its `{` line, or a header continued on
             // indented lines; `))]` ending an attribute stays apart from a bare block.
             && ((start..end).any(|between| !lines[between].trim().is_empty())
