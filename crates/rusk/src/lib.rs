@@ -4168,11 +4168,27 @@ fn is_brace_group(text: &str) -> bool {
 
 /// Whether each arm of the `match` at `node` is a block ending with a statement, as in
 /// `None => {}` or `Some(x) =>:` / `v.push(x);`, so the `match` is `()` and needs no `;`.
+/// Whether `node` is a statement, or a control block such as `if c:` / `else:` whose body ends
+/// with one; a `loop` takes its value from `break`.
+fn ends_with_statement(node: &Node) -> bool {
+    let (text, explicit) = strip_explicit_semicolon(node.text.trim());
+    let head = strip_block_marker(text).0;
+    explicit
+        || is_let(text)
+        || is_assignment(text)
+        || is_jump_statement(text)
+        || head.starts_with("while ")
+        || head.starts_with("for ")
+        || (is_control(head)
+            && head != "loop"
+            && node
+                .children
+                .iter()
+                .rfind(|child| !is_comment(child.text.trim()))
+                .is_some_and(ends_with_statement))
+}
+
 fn has_unit_arms(node: &Node) -> bool {
-    let is_statement = |text: &str| {
-        let (text, explicit) = strip_explicit_semicolon(text);
-        explicit || is_let(text) || is_assignment(text) || is_jump_statement(text)
-    };
     let arms = node
         .children
         .iter()
@@ -4190,7 +4206,7 @@ fn has_unit_arms(node: &Node) -> bool {
                 .iter()
                 .rfind(|child| !is_comment(child.text.trim()))
             {
-                Some(last) if expr.is_empty() => is_statement(last.text.trim()),
+                Some(last) if expr.is_empty() => ends_with_statement(last),
                 Some(_) => false,
                 None => {
                     strip_explicit_semicolon(expr).1
