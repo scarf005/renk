@@ -561,6 +561,7 @@ impl RukSemicolonInferer {
         }
         // An item or a `name! { ... }` invocation, which may also be an item, needs no `;`.
         if looks_like_item_header_without_body(text)
+            || is_extern_block(text)
             || is_brace_macro_invocation(text)
             || (is_macro_item(text) && text.ends_with('}'))
         {
@@ -5938,6 +5939,13 @@ fn is_function(text: &str) -> bool {
         if rest.starts_with("fn ") {
             return true;
         }
+        // An attribute on the same line, as in `#[inline] pub fn get(&self)`.
+        if rest.starts_with("#[")
+            && let Some(close) = matching_delimiter(rest, 1, '[', ']', false)
+        {
+            rest = rest[close + 1..].trim_start();
+            continue;
+        }
         let qualified = match rest.strip_prefix("pub(") {
             Some(scope) => scope.find(')').map(|at| &scope[at + 1..]),
             None => [
@@ -6084,6 +6092,13 @@ fn starts_item(text: &str, keyword: &str) -> bool {
 
 fn is_let(text: &str) -> bool {
     text.starts_with("let ")
+}
+
+/// Whether `text` starts an `extern` block, as in `unsafe extern "C" { fn abs(x: i32) -> i32; }`.
+fn is_extern_block(text: &str) -> bool {
+    let text = without_visibility(text);
+    let text = text.strip_prefix("unsafe ").unwrap_or(text);
+    starts_item(text, "extern") && !text.starts_with("extern crate ") && !is_function(text)
 }
 
 fn is_use_or_extern_crate(text: &str) -> bool {
