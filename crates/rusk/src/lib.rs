@@ -3227,6 +3227,7 @@ fn emit_general(node: &Node, context: Context, is_last: bool, emitter: &mut Emit
     } else if starts_item(strip_explicit_semicolon(text).0, "mod")
         && node.children.is_empty()
         && !has_block_marker(text)
+        && !text.ends_with('}')
     {
         // A module declared in its own file.
         let (text, _) = strip_explicit_semicolon(text);
