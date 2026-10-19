@@ -63,3 +63,18 @@ where
 {
     t.clone()
 }
+
+pub fn closing_comments(c: bool, v: &mut Vec<u8>) -> u8 {
+    if c {
+        v.push(1);
+    } // pushed
+    for x in [1, 2] {
+        v.push(x);
+    } /* both } */
+    let n = if c {
+        1
+    } else {
+        2
+    }; // picked
+    n
+} // end
