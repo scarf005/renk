@@ -155,6 +155,36 @@ fn mir_items_ignore_layout_but_not_code() {
         mir_items(&swapped)[0],
         mir_items(&mir(&format!("{entry}{one}{two}"), ""))[0]
     );
+    let uses = |first: &str, second: &str| {
+        mir(
+            &format!(
+                "{entry}{}{}",
+                one.replace("const 1_u8", &format!("const {{{first}: &u8}}")),
+                two.replace("const 2_u8", &format!("const {{{second}: &u8}}"))
+            ),
+            &format!("{a}{b}"),
+        )
+    };
+    assert_eq!(
+        mir_items(&uses("alloc3", "alloc4")),
+        mir_items(
+            &uses("alloc4", "alloc3")
+                .replace("alloc3 (", "alloc9 (")
+                .replace("alloc4 (", "alloc3 (")
+                .replace("alloc9 (", "alloc4 (")
+        )
+    );
+    assert_ne!(
+        mir_items(&uses("alloc3", "alloc4")),
+        mir_items(&uses("alloc4", "alloc3"))
+    );
+    let text = |text: &str| {
+        mir(
+            &one.replace("const 1_u8", &format!("const \"x@a.rs:1 {text}}}\"")),
+            "",
+        )
+    };
+    assert_ne!(mir_items(&text("one")), mir_items(&text("two")));
 }
 
 /// The vendored crate sources, downloaded once into `root`.
