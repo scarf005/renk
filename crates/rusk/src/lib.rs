@@ -3244,8 +3244,12 @@ fn emit_general(node: &Node, context: Context, is_last: bool, emitter: &mut Emit
                     ""
                 }
             ));
-        } else if is_control(block_text) && block_text.ends_with("{}") && node.children.is_empty() {
-            // An empty body, as in `while step() {}`, is already Rust.
+        } else if is_control(block_text)
+            && block_text.ends_with('}')
+            && node.children.is_empty()
+            && open_delimiters(block_text).is_some_and(|open| open.is_empty())
+        {
+            // A one-line body, as in `while step() {}` or `if c { n += 1 }`, is an expression.
             emitter.push(node, format!("{}{}", spaces(node.indent), lower_expr(block_text)));
         } else if is_control(block_text) {
             // Loop bodies and blocks whose value is unused end with a statement.
