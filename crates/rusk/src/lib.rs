@@ -454,7 +454,7 @@ impl RukSemicolonInferer {
             };
             if in_long_header
                 || (looks_like_item_header_without_body(&header)
-                    && !header.ends_with(['{', ';'])
+                    && !header.ends_with(['{', ';', '}'])
                     && !terminated)
             {
                 signature = Some(header);
@@ -536,7 +536,11 @@ impl RukSemicolonInferer {
         if self.in_trait_scope() && looks_like_trait_item_without_body(text) {
             return true;
         }
-        if looks_like_item_header_without_body(text) {
+        // An item or a `name! { ... }` invocation, which may also be an item, needs no `;`.
+        if looks_like_item_header_without_body(text)
+            || is_brace_macro_invocation(text)
+            || (is_macro_item(text) && text.ends_with('}'))
+        {
             return false;
         }
         if !self.is_tail_of_current_scope(index) {
@@ -871,7 +875,16 @@ fn convert_rust_lines(source: &str, aggressive: bool) -> Result<String, Transpil
 
         if stack.last().is_some_and(|block| block.kind == RustBlockKind::Macro) {
             // Macro arms keep Rust tokens; a multi-line arm becomes `pattern =>:` and its body.
-            let arm = text.trim_end_matches(';');
+            // A pattern over several lines, such as `(` ... `) => {`, joins up to its arrow.
+            let mut arm = text.to_string();
+            while macro_depth_after_line(0, &arm) > 0
+                && !has_top_level_arrow(&arm)
+                && let Some((index, next)) = raw_lines.next()
+            {
+                arm.push('\n');
+                arm.push_str(keep_literal_end(next, in_literal[index]));
+            }
+            let arm = arm.trim_end_matches(';');
             match split_arrow(arm) {
                 Some((pattern, body)) if macro_depth_after_line(0, body) > 0 => {
                     output.push(format!("{indent}{} =>:", pattern.trim_end()));
@@ -885,17 +898,23 @@ fn convert_rust_lines(source: &str, aggressive: bool) -> Result<String, Transpil
             }
             continue;
         }
+        // A struct variant such as `Linked {` owns an indented block rather than a Rust group.
+        let variant = stack
+            .last()
+            .is_some_and(|block| block.kind == RustBlockKind::Enum)
+            && text.ends_with('{');
         let mut text = format!("{text}{comment}");
         let mut group = None;
         let mut open = OpenDelimiters::default();
         let mut header_end = heads[index];
-        while (joins_next_line(
-            &text,
-            raw_lines.peek().map(|(_, next)| *next),
-            raw_indent(raw),
-            &mut group,
-            &mut open,
-        ) || header_end.is_some())
+        while !variant
+            && (joins_next_line(
+                &text,
+                raw_lines.peek().map(|(_, next)| *next),
+                raw_indent(raw),
+                &mut group,
+                &mut open,
+            ) || header_end.is_some())
             && let Some((index, next)) = raw_lines.next()
         {
             text.push('\n');
@@ -2885,6 +2904,15 @@ fn emit_braced_item_statement(
     let indent = spaces(node.indent);
     let (header, _) = strip_block_marker(&header);
     let header = strip_open_brace(header);
+    if node.children.is_empty()
+        && header.ends_with('}')
+        && open_delimiters(header).is_some_and(|open| open.is_empty())
+    {
+        // A one-line body, as in `pub trait Sealed {}` or `macro_rules! m { () => {} }`, is
+        // already Rust.
+        emitter.push(node, format!("{indent}{header}"));
+        return;
+    }
     if node.children.is_empty() && matches!(child_context, Context::Struct | Context::Enum) {
         let terminator = if header.ends_with(['}', ';']) {
             ""
@@ -3009,13 +3037,21 @@ fn emit_statement(node: &Node, _context: Context, is_last: bool, emitter: &mut E
             is_last && !has_explicit_semicolon,
         );
     } else {
-        let suffix = if is_last && !has_explicit_semicolon {
+        // A `name! { ... }` statement, which may also be an item, needs no `;`.
+        let suffix = if has_explicit_semicolon {
+            ";"
+        } else if is_last || is_brace_macro_invocation(text) {
             ""
         } else {
             ";"
         };
         emitter.push(node, format!("{}{}{}", indent, lower_expr(text), suffix));
     }
+}
+
+fn is_brace_macro_invocation(text: &str) -> bool {
+    let chars = text.chars().collect::<Vec<_>>();
+    text.ends_with('}') && macro_invocation_end(&chars, 0) == Some(chars.len() - 1)
 }
 
 fn emit_multiline_closure_expr(node: &Node, head: &str, is_last: bool, emitter: &mut Emitter) {
@@ -3271,6 +3307,11 @@ fn emit_struct_literal_field(node: &Node, emitter: &mut Emitter) {
             format!("{}{},", spaces(node.indent), lower_expr(text)),
         );
     }
+}
+
+fn has_top_level_arrow(text: &str) -> bool {
+    let chars = text.chars().collect::<Vec<_>>();
+    top_level_position(&chars, 0, |at| chars[at..].starts_with(&['=', '>'])).is_some()
 }
 
 /// `text` split at its first top-level `=>`, so a macro arm pattern such as `($a:expr => $b:expr)`
@@ -5198,9 +5239,31 @@ fn is_trailing_match(text: &str) -> bool {
                     || before
                         .strip_suffix("return")
                         .is_some_and(|rest| !rest.ends_with(is_ident_continue)))
-                && !text[at..].contains(['{', '}'])
+                && !has_top_level_brace(&text[at..])
                 && open_delimiters(&text[at..]).is_some_and(|open| open.is_empty())
         })
+}
+
+/// Whether `text` has a `{` or `}` outside parentheses and brackets, unlike the struct literal
+/// in `match f(Key { k }):`.
+fn has_top_level_brace(text: &str) -> bool {
+    let chars = text.chars().collect::<Vec<_>>();
+    let mut depth = 0usize;
+    let mut index = 0;
+    while index < chars.len() {
+        if let Some(end) = opaque_span_end(&chars, index) {
+            index = end + 1;
+            continue;
+        }
+        match chars[index] {
+            '(' | '[' => depth += 1,
+            ')' | ']' => depth = depth.saturating_sub(1),
+            '{' | '}' if depth == 0 => return true,
+            _ => {}
+        }
+        index += 1;
+    }
+    false
 }
 
 /// Whether `text` ends in a block-owning `if` head after a binding or `return`, such as
@@ -5213,7 +5276,7 @@ fn is_trailing_if(text: &str) -> bool {
                 || before
                     .strip_suffix("return")
                     .is_some_and(|rest| !rest.ends_with(is_ident_continue)))
-            && !text[at..].contains(['{', '}'])
+            && !has_top_level_brace(&text[at..])
             && !is_inline_if_expression(&text[at..])
             && open_delimiters(&text[at..]).is_some_and(|open| open.is_empty())
     })
