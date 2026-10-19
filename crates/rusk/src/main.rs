@@ -212,7 +212,15 @@ fn run_script(raw_args: Vec<String>) -> Result<i32, Box<dyn std::error::Error>> 
         }
     };
     let mut command = Command::new(&binary);
-    command.env("RUSK_SCRIPT", &source_path).args(raw_args);
+    // What `cargo run` would set, since the binary runs without it.
+    command
+        .env("RUSK_SCRIPT", &source_path)
+        .env(
+            "CARGO_MANIFEST_DIR",
+            rust_path.parent().unwrap_or(&rust_path),
+        )
+        .env("CARGO_PKG_NAME", &script.package)
+        .args(raw_args);
     #[cfg(unix)]
     return Err(std::os::unix::process::CommandExt::exec(&mut command).into());
     #[cfg(not(unix))]
@@ -244,6 +252,14 @@ fn build_script(
         .arg("--manifest-path")
         .arg(rust_path)
         .envs(build_dir.map(|dir| ("CARGO_BUILD_BUILD_DIR", dir)))
+        // A package the script names itself can share its name with another script's, so it
+        // keeps a target dir of its own even when the user sets one for everything.
+        .args(build_dir.is_none().then_some("--target-dir"))
+        .args(
+            build_dir
+                .is_none()
+                .then(|| rust_path.with_extension("target")),
+        )
         .stdout(process::Stdio::piped())
         .spawn()?;
     let mut executable = None;
@@ -503,6 +519,7 @@ struct ScriptRust {
     source_lines: Vec<(usize, bool)>,
     /// Whether rusk named the package, which keeps it apart from other scripts' packages.
     named_package: bool,
+    package: String,
 }
 
 /// Transpiles a single-file script, keeping the cargo-script frontmatter in front of the generated
@@ -518,7 +535,7 @@ fn script_rust(
             .first()
             .is_some_and(|line| line.starts_with("#!") && !line.starts_with("#![")),
     );
-    let (manifest, mut named_package) = with_package_defaults("", package);
+    let (manifest, mut named_package, mut package_name) = with_package_defaults("", package);
     let mut frontmatter = format!("---\n{manifest}---\n");
     let mut frontmatter_line = 1;
     let fence_start = (body_start..lines.len()).find(|&index| !lines[index].trim().is_empty());
@@ -529,7 +546,8 @@ fn script_rust(
             return Err(format!("line {}: unclosed frontmatter", start + 1).into());
         };
         let manifest;
-        (manifest, named_package) = with_package_defaults(&lines[start + 1..end].concat(), package);
+        (manifest, named_package, package_name) =
+            with_package_defaults(&lines[start + 1..end].concat(), package);
         frontmatter = lines[start].to_string() + &manifest;
         frontmatter += lines[end].trim_end();
         frontmatter.push('\n');
@@ -587,6 +605,7 @@ fn script_rust(
         rust: frontmatter + &rust,
         source_lines,
         named_package,
+        package: package_name,
     })
 }
 
@@ -595,14 +614,14 @@ fn script_rust(
 const SCRIPT_EDITION: &str = "2024";
 
 /// Adds `package.edition` and `package.name` to a cargo-script manifest that lacks them, and says
-/// whether it added the name; cargo reports invalid TOML.
-fn with_package_defaults(manifest: &str, name: &str) -> (String, bool) {
+/// whether it added the name and what the name is; cargo reports invalid TOML.
+fn with_package_defaults(manifest: &str, name: &str) -> (String, bool, String) {
     let Ok(mut document) = manifest.parse::<toml_edit::DocumentMut>() else {
-        return (manifest.to_string(), false);
+        return (manifest.to_string(), false, String::new());
     };
     let package = document.entry("package").or_insert(toml_edit::table());
     let Some(package) = package.as_table_like_mut() else {
-        return (manifest.to_string(), false);
+        return (manifest.to_string(), false, String::new());
     };
     if !package.contains_key("edition") {
         package.insert("edition", toml_edit::value(SCRIPT_EDITION));
@@ -611,7 +630,12 @@ fn with_package_defaults(manifest: &str, name: &str) -> (String, bool) {
     if named {
         package.insert("name", toml_edit::value(name));
     }
-    (document.to_string(), named)
+    let name = package
+        .get("name")
+        .and_then(|name| name.as_str())
+        .unwrap_or_default()
+        .to_string();
+    (document.to_string(), named, name)
 }
 
 /// A package name unique to the script's cache entry. Cargo keys a root package's artifacts by

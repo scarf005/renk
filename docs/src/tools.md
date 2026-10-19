@@ -42,10 +42,11 @@ fn main():
 
 - All scripts build in one shared `$XDG_CACHE_HOME/rusk/build/`, so each dependency compiles
   once. A script's package is named `<stem>-<hash>` unless it sets `package.name`; a script
-  with its own name builds in cargo's per-script directory instead.
+  with its own name builds in a target directory of its own instead.
 - A script without a top-level `fn main` runs its top-level lines in order inside
   `fn main() -> Result<(), Box<dyn std::error::Error>>`, so they can use `?`.
-- `RUSK_SCRIPT` holds the script's absolute path, and the script's exit code is rusk's.
+- `RUSK_SCRIPT` holds the script's absolute path, `CARGO_MANIFEST_DIR` and `CARGO_PKG_NAME`
+  are set as `cargo run` sets them, and the script's exit code is rusk's.
 - Compiler diagnostics point at the script's lines and quote its source.
 - `rusk script --no-cargo FILE.rsk` runs the cached binary without cargo's freshness checks
   and rebuilds only when the generated Rust changes.
