@@ -165,7 +165,7 @@ struct Emitter {
 }
 
 pub fn transpile(source: &str) -> Result<TranspileOutput, TranspileError> {
-    with_imported_names(source, || transpile_lines(source))
+    with_value_scopes(|| transpile_lines(source))
 }
 
 fn transpile_lines(source: &str) -> Result<TranspileOutput, TranspileError> {
@@ -771,7 +771,7 @@ pub fn rust_to_rusk_aggressive(source: &str) -> Result<String, TranspileError> {
 }
 
 fn convert_rust_to_rusk(source: &str, aggressive: bool) -> Result<String, TranspileError> {
-    with_imported_names(source, || convert_rust_lines(source, aggressive))
+    with_value_scopes(|| convert_rust_lines(source, aggressive))
 }
 
 fn convert_rust_lines(source: &str, aggressive: bool) -> Result<String, TranspileError> {
@@ -1047,8 +1047,7 @@ fn drop_semicolon(line: &str) -> Option<String> {
 }
 
 /// Writes `A::b` paths as `A.b`: every path in `use` lines and item headers, and expression
-/// paths whose head Rusk lowers back (`std`, `crate`, `Self`, uppercase or imported names, or a
-/// name before a CamelCase segment).
+/// paths whose head Rusk lowers back, that is, any head but `self` and constants.
 fn dot_rust_paths(line: &str) -> Option<String> {
     let code = line.trim_start();
     let code = code.strip_prefix("pub ").unwrap_or(code);
@@ -1390,8 +1389,8 @@ fn lower_rust_syntax(text: &str) -> String {
     replace_angle_generics_with_square(&text)
 }
 
-/// Rust `NAME.field`, `NAME[i].field`, and `Enum::Variant.method()` are value accesses, while Rusk
-/// reads an uppercase head or a CamelCase path segment as a path; parenthesize such receivers so the conversion does not depend on that heuristic.
+/// Rust `Unit.method()`, `Enum::Variant.method()`, and `Unit[i].field` are value accesses, while
+/// Rusk reads a CamelCase head or path segment as a type; parenthesize such receivers.
 fn parenthesize_value_receivers(text: &str) -> String {
     let chars = text.chars().collect::<Vec<_>>();
     let mut output = String::new();
@@ -1423,19 +1422,12 @@ fn parenthesize_value_receivers(text: &str) -> String {
         let member = |at: usize| {
             chars.get(at) == Some(&'.') && chars.get(at + 1).copied().is_some_and(is_ident_start)
         };
+        let type_like = chars[last].is_uppercase()
+            && !is_screaming_case(&chars[last..end].iter().collect::<String>());
         let indexed_member = chars.get(end) == Some(&'[')
-            && chars[last].is_uppercase()
+            && type_like
             && matching_bracket(&chars, end, '[', ']').is_some_and(|close| member(close + 1));
-        if !continues_path
-            && (indexed_member
-                || member(end)
-                    && if last == index {
-                        let field = chars[end + 1..read_ident(&chars, end + 1)].iter().collect();
-                        should_convert_path(&[head.clone(), field], PathMode::Expr, None)
-                    } else {
-                        is_camel_case(&chars[last..end].iter().collect::<String>())
-                    })
-        {
+        if !continues_path && (indexed_member || member(end) && type_like) {
             output.push_str(&format!("({head})"));
         } else {
             output.push_str(&head);
@@ -2352,6 +2344,17 @@ fn emit_nodes(nodes: &[Node], context: Context, emitter: &mut Emitter) {
 /// closing suffix of the chain head (such as `);` in `let x = f(if c {`) moves to the last
 /// branch of the chain.
 fn emit_sequence(nodes: &[Node], context: Context, tail_is_value: bool, emitter: &mut Emitter) {
+    with_value_scope(BLOCK_BINDINGS.take(), || {
+        emit_scoped_sequence(nodes, context, tail_is_value, emitter)
+    });
+}
+
+fn emit_scoped_sequence(
+    nodes: &[Node],
+    context: Context,
+    tail_is_value: bool,
+    emitter: &mut Emitter,
+) {
     let mut chain: Option<(String, bool)> = None;
     let mut branch_is_value = false;
     for (index, node) in nodes.iter().enumerate() {
@@ -2417,7 +2420,22 @@ fn is_else_branch(text: &str) -> bool {
 fn emit_node(node: &Node, context: Context, is_last: bool, emitter: &mut Emitter) {
     emitter.begin_node(node, classify_node(node, context));
     let head = emitter.lines.len();
-    emit_node_body(node, context, is_last, emitter);
+    let bindings = node_bindings(&node.text, context, !node.children.is_empty());
+    // Items such as a nested `fn` do not see the enclosing function's locals.
+    let outer = is_function(strip_block_marker(node.text.trim()).0).then(|| VALUE_SCOPES.take());
+    with_value_scope(bindings.own, || {
+        BLOCK_BINDINGS.set(bindings.block);
+        emit_node_body(node, context, is_last, emitter);
+        BLOCK_BINDINGS.take();
+    });
+    if let Some(outer) = outer {
+        VALUE_SCOPES.set(outer);
+    }
+    VALUE_SCOPES.with_borrow_mut(|scopes| {
+        if let Some(scope) = scopes.last_mut() {
+            scope.extend(bindings.siblings);
+        }
+    });
     if let Some(comment) = &node.comment
         && let Some(last) = emitter.lines.len().checked_sub(1)
     {
@@ -4116,6 +4134,7 @@ fn replace_square_generics(text: &str, mode: GenericMode) -> String {
                 // A CamelCase segment of a dotted path, as in `std.vec.Vec[u8].new()`, is a type.
                 let name = chars[index..name_end].iter().collect::<String>();
                 let path_head = chars[index].is_uppercase()
+                    && !is_screaming_case(&name)
                     && (index == 0
                         || chars[index - 1] != '.'
                         || (is_camel_case(&name) && {
@@ -4222,6 +4241,9 @@ fn replace_dotted_paths(text: &str, mode: PathMode) -> String {
         if is_ident_start(chars[index]) {
             let start = index;
             let explicit_path_before = start >= 2 && chars[start - 2..start] == [':', ':'];
+            // A member of a value, as `inner` in `make().inner.len()`, but not a range end.
+            let member =
+                start >= 1 && chars[start - 1] == '.' && (start < 2 || chars[start - 2] != '.');
             let mut segments = Vec::new();
             let mut dot_positions = Vec::new();
             let mut explicit_path = explicit_path_before;
@@ -4278,6 +4300,7 @@ fn replace_dotted_paths(text: &str, mode: PathMode) -> String {
             // path; `Config::DEFAULT.len()` and `(Ordering::Less).reverse()` keep value receivers.
             let should_convert = !dot_positions.is_empty()
                 && !in_type_const_expr
+                && !member
                 && if explicit_path {
                     mode == PathMode::Type || before_first_dot.as_deref().is_some_and(is_camel_case)
                 } else {
@@ -4546,88 +4569,235 @@ fn is_builtin_type(token: &str) -> bool {
     )
 }
 
+/// Whether `a.b` reads as a path: unless `a` is `self`, a constant (`SCREAMING_CASE`), or a
+/// value bound around it (a `let`, parameter, or pattern), `a` names a type, module, or crate.
 fn should_convert_path(segments: &[String], mode: PathMode, next: Option<char>) -> bool {
     match mode {
         PathMode::Type => true,
         PathMode::Expr => {
             let first = segments.first().map(String::as_str).unwrap_or_default();
-            matches!(first, "std" | "core" | "alloc" | "crate" | "super" | "Self")
-                || first.chars().next().is_some_and(char::is_uppercase)
-                || IMPORTED_NAMES.with_borrow(|names| names.iter().any(|name| name == first))
-                // A crate or module followed by a type, as in `regex.Regex.new()`.
-                || (first != "self" && segments.get(1).is_some_and(|second| is_camel_case(second)))
-                || next == Some('!')
+            next == Some('!')
+                || (first != "self" && !is_screaming_case(first) && !is_value_bound(first))
         }
     }
+}
+
+/// A constant or static name such as `MAX` or `TABLE_2`; a single letter like `T` is a type.
+fn is_screaming_case(name: &str) -> bool {
+    name.chars().count() > 1
+        && name.starts_with(char::is_uppercase)
+        && name
+            .chars()
+            .all(|c| c.is_uppercase() || c.is_ascii_digit() || c == '_')
 }
 
 thread_local! {
-    /// Lowercase names the source being converted imports, whose `.name` is a path as after
-    /// `std`; set for the duration of [`transpile`] and Rust-to-Rusk conversion.
-    static IMPORTED_NAMES: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    /// Value names bound by each enclosing block, innermost last, while emitting Rusk.
+    static VALUE_SCOPES: RefCell<Vec<Vec<String>>> = const { RefCell::new(Vec::new()) };
+    /// Names the node being emitted binds for its block only, such as `x` in `for x in xs:`.
+    static BLOCK_BINDINGS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
 }
 
-fn with_imported_names<T>(source: &str, convert: impl FnOnce() -> T) -> T {
-    let previous = IMPORTED_NAMES.replace(imported_names(source));
+fn with_value_scopes<T>(convert: impl FnOnce() -> T) -> T {
+    let scopes = VALUE_SCOPES.take();
     let result = convert();
-    IMPORTED_NAMES.set(previous);
+    VALUE_SCOPES.set(scopes);
     result
 }
 
-/// Lowercase names that `use`, `mod`, and `extern crate` items anywhere in `source` bring into
-/// scope, such as `env` in `use std.{env, fs}` and `util` in `mod util:`.
-fn imported_names(source: &str) -> Vec<String> {
-    let lines = source.lines().collect::<Vec<_>>();
-    let in_literal = lines_ending_in_literal(source);
-    let mut names = Vec::new();
-    let mut index = 0usize;
-    while index < lines.len() {
-        let starts_code = index == 0 || !in_literal[index - 1];
-        let text = without_visibility(lines[index].trim_start());
-        index += 1;
-        if !starts_code {
-            continue;
+fn is_value_bound(name: &str) -> bool {
+    VALUE_SCOPES.with_borrow(|scopes| scopes.iter().flatten().any(|bound| bound == name))
+}
+
+fn with_value_scope<T>(names: Vec<String>, emit: impl FnOnce() -> T) -> T {
+    VALUE_SCOPES.with_borrow_mut(|scopes| scopes.push(names));
+    let result = emit();
+    VALUE_SCOPES.with_borrow_mut(|scopes| scopes.pop());
+    result
+}
+
+/// Value names a node binds: in its own text and children (closure, function, match arm, and
+/// `matches!` parameters, and the `let`s inside an expression, as in
+/// `let n = if let Some(v) = x then v.len() else 0`), in its block only (an `if let`, `while let`,
+/// or `for` pattern, whose head still sees the outer names), and for later siblings (a statement
+/// `let`).
+#[derive(Default)]
+struct NodeBindings {
+    own: Vec<String>,
+    block: Vec<String>,
+    siblings: Vec<String>,
+}
+
+fn node_bindings(text: &str, context: Context, has_block: bool) -> NodeBindings {
+    let mut bindings = NodeBindings::default();
+    if !matches!(
+        context,
+        Context::Root | Context::Block | Context::Match | Context::Trait
+    ) {
+        return bindings;
+    }
+    let (text, _) = strip_explicit_semicolon(text.trim());
+    let (text, _) = strip_block_marker(text);
+    let chars = text.chars().collect::<Vec<_>>();
+    bindings.own = closure_parameter_bindings(&chars);
+    bindings.own.extend(matches_pattern_bindings(text));
+    if context == Context::Match {
+        if let Some((pattern, _)) = split_arrow(text) {
+            let pattern =
+                find_top_level_keyword(pattern, "if").map_or(pattern, |at| &pattern[..at]);
+            bindings.own.extend(pattern_bindings(pattern));
         }
-        if let Some(tree) = text.strip_prefix("use ") {
-            let mut tree = without_trailing_line_comment(tree).to_string();
-            while count_unquoted(&tree, '{') > count_unquoted(&tree, '}') && index < lines.len() {
-                tree.push_str(without_trailing_line_comment(lines[index]));
-                index += 1;
-            }
-            use_tree_names(tree.trim_end_matches(';'), "", &mut names);
-        } else if let Some(rest) = text
-            .strip_prefix("mod ")
-            .or_else(|| text.strip_prefix("extern crate "))
+        return bindings;
+    }
+    if is_function(text) {
+        let name = text.find("fn ").map_or(0, |at| text[..at].chars().count());
+        if let Some(open) = top_level_position(&chars, name, |at| chars[at] == '(')
+            && let Some(close) = matching_bracket(&chars, open, '(', ')')
         {
-            let rest = without_trailing_line_comment(rest).trim_end_matches([';', ':', '{', ' ']);
-            let name = rest.rsplit_once(" as ").map_or(rest, |(_, alias)| alias);
-            names.push(name.trim().to_string());
+            let parameters = chars[open + 1..close].iter().collect::<String>();
+            for parameter in split_macro_arguments(&parameters, false) {
+                bindings
+                    .own
+                    .extend(pattern_bindings(without_type(parameter)));
+            }
+        }
+        return bindings;
+    }
+    let mut lets = let_pattern_bindings(&chars, true);
+    if is_let(text) {
+        bindings.siblings = let_pattern_bindings(&chars, false);
+        bindings.own.extend(lets.split_off(bindings.siblings.len()));
+        return bindings;
+    }
+    if let Some(rest) = strip_control_label(text).strip_prefix("for ")
+        && let Some(at) = find_top_level_keyword(rest, "in")
+    {
+        lets.extend(pattern_bindings(&rest[..at]));
+    }
+    if has_block {
+        bindings.block = lets;
+    } else {
+        bindings.own.extend(lets);
+    }
+    bindings
+}
+
+/// Names the patterns of `matches!(value, PATTERN if guard)` bind, which its guard uses.
+fn matches_pattern_bindings(text: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    for (at, _) in text.match_indices("matches!(") {
+        let chars = text[at + "matches!".len()..].chars().collect::<Vec<_>>();
+        let Some(close) = matching_bracket(&chars, 0, '(', ')') else {
+            continue;
+        };
+        let arguments = chars[1..close].iter().collect::<String>();
+        if let Some(pattern) = split_macro_arguments(&arguments, false).get(1) {
+            let pattern =
+                find_top_level_keyword(pattern, "if").map_or(*pattern, |at| &pattern[..at]);
+            names.extend(pattern_bindings(pattern));
         }
     }
-    names.retain(|name| name.starts_with(|first: char| first.is_lowercase()));
     names
 }
 
-/// Pushes the names a use tree such as `std.{env, io.{self, Read as _}}` binds; `parent` is the
-/// last segment before the enclosing group, which `self` names.
-fn use_tree_names(tree: &str, parent: &str, names: &mut Vec<String>) {
-    let tree = tree.trim();
-    if let Some(open) = tree.find('{') {
-        let prefix = tree[..open].trim_end_matches(['.', ':']);
-        let last = prefix.rsplit(['.', ':']).next().unwrap_or_default();
-        let inner = &tree[open + 1..];
-        let inner = &inner[..inner.rfind('}').unwrap_or(inner.len())];
-        for part in split_macro_arguments(inner, false) {
-            use_tree_names(part, last, names);
+/// Names bound by the first or, with `all`, each `let PATTERN =`, as in
+/// `if let Some(a) = x && let b = y`.
+fn let_pattern_bindings(chars: &[char], all: bool) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut index = 0;
+    while index < chars.len() {
+        if let Some(end) = opaque_span_end(chars, index) {
+            index = end + 1;
+            continue;
         }
-    } else if let Some((_, alias)) = tree.split_once(" as ") {
-        names.push(alias.trim().to_string());
-    } else {
-        match tree.rsplit(['.', ':']).next().unwrap_or_default() {
-            "self" => names.push(parent.to_string()),
-            name => names.push(name.to_string()),
+        if keyword_at(chars, index, "let") {
+            let pattern_start = index + 3;
+            let end = top_level_position(chars, pattern_start, |at| {
+                chars[at] == '='
+                    && !matches!(chars.get(at + 1), Some('=' | '>'))
+                    && !matches!(chars[at - 1], '=' | '!' | '<' | '>')
+            })
+            .unwrap_or(chars.len());
+            let pattern = chars[pattern_start..end].iter().collect::<String>();
+            names.extend(pattern_bindings(without_type(&pattern)));
+            if !all {
+                break;
+            }
+            index = end;
         }
+        index += 1;
     }
+    names
+}
+
+/// Parameters of each closure in `chars`, macro arguments included, such as `a` and `b` in
+/// `|a, (b, _): (u8, u8)|`.
+fn closure_parameter_bindings(chars: &[char]) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut index = 0;
+    while index < chars.len() {
+        if let Some(end) = opaque_span_end(chars, index) {
+            index = end + 1;
+            continue;
+        }
+        if chars[index] == '|' && is_closure_start(chars, index) {
+            let Some(close) = top_level_position(chars, index + 1, |at| chars[at] == '|') else {
+                break;
+            };
+            let parameters = chars[index + 1..close].iter().collect::<String>();
+            for parameter in split_macro_arguments(&parameters, false) {
+                names.extend(pattern_bindings(without_type(parameter)));
+            }
+            index = close;
+        }
+        index += 1;
+    }
+    names
+}
+
+/// `pattern` without a top-level `: Type` annotation.
+fn without_type(pattern: &str) -> &str {
+    let chars = pattern.chars().collect::<Vec<_>>();
+    top_level_position(&chars, 0, |at| is_single_colon(&chars, at)).map_or(pattern, |at| {
+        &pattern[..pattern.char_indices().nth(at).map_or(0, |(byte, _)| byte)]
+    })
+}
+
+/// Lowercase names a pattern such as `Some((ref mut a, b @ 1..=3))` or `Point { x: px, y }`
+/// binds; paths, constructors, and struct field names before `:` bind nothing.
+fn pattern_bindings(pattern: &str) -> Vec<String> {
+    let chars = pattern.chars().collect::<Vec<_>>();
+    let mut names = Vec::new();
+    let mut index = 0;
+    while index < chars.len() {
+        if let Some(end) = opaque_span_end(&chars, index) {
+            index = end + 1;
+            continue;
+        }
+        let starts_name = is_ident_start(chars[index])
+            && (index == 0 || !(is_ident_continue(chars[index - 1]) || chars[index - 1] == '.'));
+        if !starts_name {
+            index += 1;
+            continue;
+        }
+        let end = read_ident(&chars, index);
+        let name = chars[index..end].iter().collect::<String>();
+        let mut after = end;
+        skip_whitespace_chars(&chars, &mut after);
+        let qualified = index >= 2 && chars[index - 2..index] == [':', ':'];
+        if !qualified
+            && !name.starts_with(char::is_uppercase)
+            && !matches!(
+                name.as_str(),
+                "_" | "ref" | "mut" | "box" | "true" | "false" | "self"
+            )
+            && !matches!(chars.get(after), Some('(' | '{' | '!' | '.' | '[' | ':'))
+        {
+            names.push(name);
+        }
+        index = end;
+    }
+    names
 }
 
 fn is_camel_case(ident: &str) -> bool {
