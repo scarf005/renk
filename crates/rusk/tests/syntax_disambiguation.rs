@@ -1019,3 +1019,11 @@ fn modules_keep_paths_beside_functions_of_the_same_name() {
     );
     assert_lines(&output, &["config::load()", "env::args()"]);
 }
+
+#[test]
+fn local_imports_of_a_function_keep_it_a_value() {
+    let output = rust(
+        "fn parse_args(t: u8) -> u8 = t\n\nfn f(t: u8):\n    let n = parse_args.clone()(t)\n\nmod tests:\n    use super.parse_args\n    use crate.parse_args as p\n",
+    );
+    assert_lines(&output, &["parse_args.clone()(t)"]);
+}

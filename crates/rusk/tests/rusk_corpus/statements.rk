@@ -61,3 +61,121 @@ pub fn cfg_tail() -> u32 {
         2
     }
 }
+
+pub fn wrapped_typed_condition(v: Vec<u32>, c: bool) -> u32 {
+    let it: Box<dyn Iterator<Item = u32>> = if c
+        && v.is_empty()
+    {
+        Box::new(v.into_iter())
+    } else {
+        Box::new(std::iter::empty())
+    }
+    let n = 'a: loop
+    {
+        break 'a 1
+    }
+    let q =
+    {
+        2
+    }
+    it.count() as u32 + n + q
+}
+
+pub fn keywords_inside_statements(v: Vec<u32>) -> usize {
+    let n = v
+        .iter()
+        .map(|x| if *x > 0 { 1 } else { 0 })
+        .count()
+    {
+        println!("{n}")
+    }
+    let msg = format!("if {}", v.len()) // loop {
+    {
+        println!("{msg}")
+    }
+    let f: Box<dyn for<'a> Fn(&'a u32) -> u32> = Box::new(|x| *x)
+    {
+        println!("{}", f(&1))
+    }
+    let a = 'blk:
+    {
+        break 'blk 1
+    }
+    n + a
+}
+
+pub fn control_operands(e: Vec<u32>, y: Option<u32>, c: bool, d: bool) -> u32 {
+    let g = &mut match e
+        .iter()
+        .map(|value| value + 1)
+        .next()
+    {
+        Some(v) => v,
+        None => 0,
+    }
+    let Some(x) = y else
+    {
+        return 0
+    }
+    let b = 1 > if c
+        && d
+    {
+        1
+    } else {
+        2
+    }
+    let r = 0..if c
+        && d
+    {
+        1
+    } else {
+        2
+    }
+    *g + x + b as u32 + r.count() as u32
+}
+
+pub fn bare() {}
+
+pub fn types_holding_control_words() {
+    let g: fn() = bare
+    let h: unsafe fn() = g
+    {
+        bare()
+    }
+    let h2: Vec<for<'a> fn(&'a u8)> = Vec::new()
+    {
+        bare()
+    }
+    let c = async move || 1
+    {
+        bare()
+    }
+    let r#else = 1
+    let y = r#else
+    {
+        bare()
+    }
+    let _ = (h, h2, c, y)
+}
+
+pub fn closed_control_blocks(c: bool, o: Option<u8>) -> i32 {
+    let g = || -1i32
+    let x = unsafe { g() } + 1
+    {
+        bare()
+    }
+    let y = if c { 1 } else { 2 } + 1
+    {
+        bare()
+    }
+    let z = match o { _ => 1 } + 1
+    {
+        bare()
+    }
+    let pick = |f: fn(), _: &str| f
+    let h: for<'a> fn() = pick(bare, " in ")
+    {
+        h()
+    }
+    x + y + z
+}

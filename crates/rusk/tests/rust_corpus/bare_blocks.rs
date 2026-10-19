@@ -19,3 +19,14 @@ pub fn blocks(flag: bool) -> u8 {
         doubled
     }
 }
+
+pub fn keywords_inside_chains(v: &[u32]) -> usize {
+    let n = v
+        .iter()
+        .filter(|x| if **x > 1 { true } else { false })
+        .count();
+    {
+        println!("{n}");
+    }
+    n
+}
