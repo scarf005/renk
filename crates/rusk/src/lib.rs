@@ -4133,6 +4133,7 @@ fn cast_type_end(chars: &[char], start: usize) -> usize {
             '[' | '(' => depth += 1,
             ']' | ')' if depth == 0 => break,
             ']' | ')' => depth -= 1,
+            '.' if depth == 0 && chars.get(index + 1) == Some(&'.') => break,
             ' ' if depth == 0 => {
                 // `*const T`, `&mut T`, `dyn T`, and `&'a T` continue after their space.
                 let word = chars[start..index]
