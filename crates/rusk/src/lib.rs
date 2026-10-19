@@ -556,6 +556,14 @@ impl RukSemicolonInferer {
     }
 
     fn should_add_semicolon(&self, text: &str, index: usize) -> bool {
+        // A one-line control statement whose blocks end with statements, as in
+        // `if c { f(); }`, is `()`.
+        if (starts_control_flow(text) || text.starts_with("match "))
+            && text.ends_with('}')
+            && has_unit_blocks(text)
+        {
+            return false;
+        }
         // A match arm, as in `None => {}`, ends with its body, unlike the inline `match` of
         // `let z = match o { _ => 1 }`.
         let is_arm = split_arrow(text).is_some_and(|(pattern, _)| {
@@ -3440,8 +3448,21 @@ fn emit_general(node: &Node, context: Context, is_last: bool, emitter: &mut Emit
             && node.children.is_empty()
             && open_delimiters(block_text).is_some_and(|open| open.is_empty())
         {
-            // A one-line body, as in `while step() {}` or `if c { n += 1 }`, is an expression.
-            emitter.push(node, format!("{}{}", spaces(node.indent), lower_expr(block_text)));
+            // A one-line body, as in `while step() {}` or `if c { n += 1 }`, is an expression,
+            // a statement unless its blocks end with statements.
+            let semicolon = if !is_last && !has_unit_blocks(block_text) {
+                ";"
+            } else {
+                ""
+            };
+            emitter.push(
+                node,
+                format!(
+                    "{}{}{semicolon}",
+                    spaces(node.indent),
+                    lower_expr(block_text)
+                ),
+            );
         } else if is_control(block_text) {
             // Loop bodies and blocks whose value is unused end with a statement.
             emit_braced_item_statement(
@@ -3492,7 +3513,8 @@ fn emit_braced_item_statement(
             }
             _ => header.to_string(),
         };
-        emitter.push(node, format!("{indent}{line}"));
+        let semicolon = if has_explicit_semicolon { ";" } else { "" };
+        emitter.push(node, format!("{indent}{line}{semicolon}"));
         return;
     }
     if node.children.is_empty() && matches!(child_context, Context::Struct | Context::Enum) {
@@ -3842,6 +3864,25 @@ fn emit_match_arm(node: &Node, emitter: &mut Emitter) {
         emit_nodes(&node.children, Context::Block, emitter);
         emitter.push_generated(format!("{}}}", indent));
     }
+}
+
+/// Whether each `{...}` group of the one-line `text` outside other groups is empty or ends with a
+/// statement, as in `if c { f(); } else {}`, so `text` is `()`.
+fn has_unit_blocks(text: &str) -> bool {
+    let mut rest = text;
+    let mut found = false;
+    while let Some(open) = rest.find('{') {
+        let Some(close) = matching_delimiter(rest, open, '{', '}', false) else {
+            return false;
+        };
+        let inner = rest[open + 1..close].trim();
+        if !inner.is_empty() && !inner.ends_with(';') {
+            return false;
+        }
+        found = true;
+        rest = &rest[close + 1..];
+    }
+    found
 }
 
 /// Whether `text` is one `{...}` group, as in `{}` or `{ f(); }`.
