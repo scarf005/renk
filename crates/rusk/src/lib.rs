@@ -439,7 +439,7 @@ impl RukSemicolonInferer {
             let suppress_semicolon = leaves_delimiter_open
                 && delimiter_base_brace_depth.is_none_or(|base| brace_depth <= base);
             let closed = self.close_scopes_for_line(text, indent);
-            let code = split_line_comment(text).map_or(text, |(code, _)| code).trim_end();
+            let code = &text[..code_len(text)];
             let in_header = signature.is_some() || looks_like_item_header_without_body(code);
             // A header line before its `where` clause or before the `{` line after it.
             let header_continues = in_header
@@ -542,7 +542,7 @@ impl RukSemicolonInferer {
         if suppress_semicolon {
             return raw.to_string();
         }
-        let code = split_line_comment(text).map_or(text, |(code, _)| code).trim_end();
+        let code = &text[..code_len(text)];
         if !ruk_line_needs_semicolon(code) {
             return raw.to_string();
         }
@@ -747,6 +747,19 @@ impl RukSemicolonInferer {
             code.trim_end().to_string()
         });
         let binding = binding.filter(|line| line.ends_with('=') && starts_control_flow(header));
+        // The `else` of a `let` on earlier lines: a wrapped `let ... else`, as in
+        // `let Some(y) = v` / `    .first()` / `else {`, or an `if` value, as in
+        // `let w = if c { 1 }` / `else {`.
+        let let_head = self.lines[..index]
+            .iter()
+            .rev()
+            .map(|line| split_line_comment(line.trim()).map_or(line.trim(), |(code, _)| code))
+            .zip(self.lines[..index].iter().rev())
+            .filter(|(code, _)| !code.is_empty())
+            .find(|(_, line)| raw_indent(line) <= indent)
+            .map(|(code, _)| code.trim_end())
+            .filter(|code| header == "else" && is_let(code) && !code.ends_with('{'));
+        let let_else = let_head.is_some_and(|code| !code.ends_with('}'));
         let kind = if is_function(header) {
             RukScopeKind::Function {
                 returns_value: function_returns_value(header),
@@ -755,9 +768,12 @@ impl RukSemicolonInferer {
             RukScopeKind::Trait
         } else if is_macro_item(header) {
             RukScopeKind::Macro
-        } else if opens_value_block(header) || binding.is_some() {
+        } else if opens_value_block(header)
+            || binding.is_some()
+            || (let_head.is_some() && !let_else)
+        {
             RukScopeKind::Value
-        } else if is_loop(header) {
+        } else if is_loop(header) || let_else {
             RukScopeKind::Statement
         } else if let Some(end) = self
             .block_chain_end(index, indent)
@@ -778,6 +794,7 @@ impl RukSemicolonInferer {
             && (is_let(header) || is_assignment(header))
             && !starts_control_flow(header))
             || binding.is_some_and(|line| is_let(&line) || is_assignment(&line))
+            || let_head.is_some()
             || (kind == RukScopeKind::Statement
                 && header.starts_with("match ")
                 && !self.has_block_arms(index, indent));
@@ -790,9 +807,11 @@ impl RukSemicolonInferer {
 }
 
 fn insert_semicolon(raw: &str) -> String {
-    match split_line_comment(raw) {
-        Some((code, comment)) => format!("{}; {comment}", code.trim_end()),
-        None => format!("{raw};"),
+    // Before a trailing comment, as in `let h = g /* in a */`.
+    let (code, comment) = raw.split_at(code_len(raw));
+    match comment.trim_start() {
+        "" => format!("{code};"),
+        comment => format!("{code}; {comment}"),
     }
 }
 
@@ -2358,7 +2377,7 @@ fn with_pipe_patterns(
 }
 
 fn lone_opener_heads(lines: &[&str], in_literal: &[bool], opener: &str) -> Vec<Option<usize>> {
-    let code = |line: &str| without_trailing_line_comment(line).trim().to_string();
+    let code = |line: &str| line.trim()[..code_len(line.trim())].to_string();
     let mut heads = vec![None; lines.len()];
     for (end, line) in lines.iter().enumerate() {
         // An empty body, as in `while step()` / `    && more()` / `{}`, also ends a header.
@@ -2418,7 +2437,19 @@ fn lone_opener_heads(lines: &[&str], in_literal: &[bool], opener: &str) -> Vec<O
                 || (start == end
                     && (starts_control_flow(&head_code)
                         || is_let(&head_code)
-                        || is_assignment(&head_code))))
+                        || is_assignment(&head_code)
+                        // A control header's group closed before the `{` line, as in
+                        // `if o.map(|v| {` / `}) == Some(true)`.
+                        || (head_code.starts_with("})") || head_code.starts_with("}]"))
+                            && lines[..head]
+                                .iter()
+                                .rfind(|line| {
+                                    !line.trim().is_empty() && raw_indent(line) <= indent
+                                })
+                                .is_some_and(|opener| {
+                                    starts_control_flow(&code(opener))
+                                        || has_control_operand(&code(opener))
+                                }))))
             && !head_code.is_empty()
             && !head_code.starts_with(['#', '/'])
             && !head_code.ends_with([';', ',', '{', '}'])
