@@ -173,7 +173,7 @@ fn transpile_lines(source: &str) -> Result<TranspileOutput, TranspileError> {
     let nodes = parse_source_tree(&lines)?;
 
     let mut emitter = Emitter::default();
-    MODULE_VALUES.set(function_names(&nodes));
+    MODULE_VALUES.set(module_value_names(&nodes));
     emit_nodes(&nodes, Context::Root, &mut emitter);
     for (line, comment) in &emitter.comments {
         emitter.lines[*line].push_str(comment);
@@ -2930,10 +2930,16 @@ fn emit_scoped_sequence(
         }
         index
     };
+    // Comments after the tail leave it the tail.
+    let ends_at = |index: usize| {
+        nodes[index + 1..]
+            .iter()
+            .all(|next| is_comment(next.text.trim()))
+    };
     for (index, node) in nodes.iter().enumerate() {
         // One of several tails, each under its own `#[cfg(...)]`, is a tail too.
         let is_last = tail_is_value
-            && (index + 1 == nodes.len()
+            && (ends_at(index)
                 || (is_cfg(index + 1) && chain_head(index) > 0 && is_cfg(chain_head(index) - 1)));
         let head = node.text.trim();
         if chain.is_some() && is_comment(head) {
@@ -2954,8 +2960,7 @@ fn emit_scoped_sequence(
                     .count();
             branch_is_value = !is_control(strip_block_marker(head).0)
                 || (tail_is_value
-                    && (end + 1 == nodes.len()
-                        || (is_cfg(end + 1) && index > 0 && is_cfg(index - 1))));
+                    && (ends_at(end) || (is_cfg(end + 1) && index > 0 && is_cfg(index - 1))));
         }
         let continues = !is_comment(head)
             && nodes[index + 1..]
@@ -3934,9 +3939,15 @@ fn is_multiline_closure_head(text: &str) -> bool {
 /// `let PAT = EXPR` of a `let PAT = EXPR else:` line that owns the diverging block.
 fn let_else_head(text: &str) -> Option<&str> {
     let (head, has_block) = strip_block_marker(text);
+    // The `else` of `let x = if c then a else:` belongs to the `if`.
+    let is_if = |head: &str| {
+        head.split_once(" = ")
+            .is_some_and(|(_, value)| value.trim_start().starts_with("if "))
+    };
     (has_block && is_let(head))
         .then(|| head.strip_suffix(" else"))
         .flatten()
+        .filter(|head| !is_if(head))
 }
 
 fn is_raw_braced_expr_head(text: &str) -> bool {
@@ -4152,13 +4163,15 @@ fn is_closure_start(chars: &[char], bar: usize) -> bool {
         .map_or(0, |at| at + 1);
     let before = &chars[..end];
     before.is_empty()
-        || matches!(before.last(), Some('(' | '[' | '{' | ',' | ';' | '='))
+        || matches!(before.last(), Some('(' | '[' | '{' | ',' | ';' | '=' | ':'))
         || before.ends_with(&['=', '>'])
         || before.last() == Some(&'&')
-        || ["move", "return", "mut"].iter().any(|keyword| {
-            end.checked_sub(keyword.len())
-                .is_some_and(|at| keyword_at(before, at, keyword))
-        })
+        || ["move", "return", "mut", "async", "then", "else"]
+            .iter()
+            .any(|keyword| {
+                end.checked_sub(keyword.len())
+                    .is_some_and(|at| keyword_at(before, at, keyword))
+            })
 }
 
 fn skip_whitespace_chars(chars: &[char], index: &mut usize) {
@@ -4260,6 +4273,14 @@ fn map_std_macro_arguments(text: &str, lower: fn(&str) -> String) -> String {
             }
             if chars[cursor..].starts_with(&[':', ':', '<'])
                 && let Some(close) = matching_bracket(&chars, cursor + 2, '<', '>')
+            {
+                cursor = close + 1;
+                continue;
+            }
+            // The commas between closure parameters, as in `|a: u8, b: u8|`, split nothing.
+            if chars[cursor] == '|'
+                && is_closure_start(&chars, cursor)
+                && let Some(close) = top_level_position(&chars, cursor + 1, |at| chars[at] == '|')
             {
                 cursor = close + 1;
                 continue;
@@ -5443,29 +5464,38 @@ thread_local! {
     static BLOCK_BINDINGS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     /// Const generics of the enclosing `impl` or `trait`, which its functions see.
     static ITEM_GENERICS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
-    /// Free functions of the source, values everywhere, as in `parse_args.parse2(tokens)`.
+    /// Free functions and statics, values everywhere, as in `parse_args.parse2(tokens)`.
     static MODULE_VALUES: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
 }
 
-/// The names of the free functions in `nodes`, outside `impl` and `trait` items.
-fn function_names(nodes: &[Node]) -> Vec<String> {
+/// The functions and statics of a module, which are values wherever no local shadows them.
+fn module_value_names(nodes: &[Node]) -> Vec<String> {
     nodes
         .iter()
         .flat_map(|node| {
             let header = strip_block_marker(node.text.trim()).0;
-            let name = is_function(header).then(|| {
-                let after = &header[header.find("fn ").map_or(0, |at| at + 3)..];
-                after[..after
-                    .find(|c: char| !is_ident_continue(c))
-                    .unwrap_or(after.len())]
-                    .to_string()
+            let keyword = if is_function(header) {
+                Some("fn ")
+            } else {
+                ["static mut ", "static ", "const "]
+                    .into_iter()
+                    .find(|keyword| starts_item(header, keyword.trim_end()))
+            };
+            let name = keyword.and_then(|keyword| {
+                let after = &header[header.find(keyword)? + keyword.len()..];
+                Some(
+                    after[..after
+                        .find(|c: char| !is_ident_continue(c))
+                        .unwrap_or(after.len())]
+                        .to_string(),
+                )
             });
             let nested = if is_impl_or_mod_item(header) && !starts_item(header, "mod")
                 || is_trait_item(header)
             {
                 Vec::new()
             } else {
-                function_names(&node.children)
+                module_value_names(&node.children)
             };
             name.into_iter().chain(nested)
         })
@@ -5519,13 +5549,17 @@ fn node_bindings(text: &str, context: Context, has_block: bool) -> NodeBindings 
     let (text, _) = strip_block_marker(text);
     let chars = text.chars().collect::<Vec<_>>();
     bindings.own = closure_parameter_bindings(&chars);
+    bindings.own.extend(format_placeholder_bindings(&chars));
     bindings.own.extend(matches_pattern_bindings(text));
     bindings.own.extend(inline_arm_bindings(text));
     if context == Context::Match {
-        if let Some((pattern, _)) = split_arrow(text) {
+        if let Some((pattern, body)) = split_arrow(text) {
             let pattern =
                 find_top_level_keyword(pattern, "if").map_or(pattern, |at| &pattern[..at]);
             bindings.own.extend(pattern_bindings(pattern));
+            // The `let`s of a one-line body, as in `Some(s) => { let t = s; t.len() }`.
+            let body = body.chars().collect::<Vec<_>>();
+            bindings.own.extend(let_pattern_bindings(&body, true));
         }
         return bindings;
     }
@@ -5681,6 +5715,28 @@ fn let_pattern_bindings(chars: &[char], all: bool) -> Vec<String> {
             index = end;
         }
         index += 1;
+    }
+    names
+}
+
+/// Parameters of the closures inside format placeholders, as `s` in `"{xs.map(|s| s.len())}"`.
+fn format_placeholder_bindings(chars: &[char]) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut index = 0;
+    while index < chars.len() {
+        let Some(end) = opaque_span_end(chars, index) else {
+            index += 1;
+            continue;
+        };
+        if chars[index] == '"' {
+            let content = chars[index + 1..end].iter().collect::<String>();
+            for expression in lower_format_string(&content, true).map_or(Vec::new(), |(_, e)| e) {
+                names.extend(closure_parameter_bindings(
+                    &expression.chars().collect::<Vec<_>>(),
+                ));
+            }
+        }
+        index = end + 1;
     }
     names
 }
