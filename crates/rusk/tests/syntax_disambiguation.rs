@@ -1011,3 +1011,11 @@ fn inline_macro_arms_before_a_block_comment_keep_the_comment_closed() {
     let output = rust_to_rusk("macro_rules! m {() => {\n    1\n}} /* end */\n").unwrap();
     assert_lines(&output, &["/* end */"]);
 }
+
+#[test]
+fn modules_keep_paths_beside_functions_of_the_same_name() {
+    let output = rust(
+        "use std.env\nmod config:\n    pub fn load() -> u32 = 1\n\npub fn config() -> u32 = 2\n\npub fn g() -> usize:\n    let a = config.load()\n    env.args().count()\nfn env() {}\n",
+    );
+    assert_lines(&output, &["config::load()", "env::args()"]);
+}
