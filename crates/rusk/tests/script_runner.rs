@@ -279,3 +279,44 @@ fn script_warnings_print_only_when_the_script_compiles() {
     assert!(run().contains("unused variable"));
     let _ = fs::remove_dir_all(dir);
 }
+
+#[test]
+fn script_diagnostics_show_script_columns_and_source() {
+    let dir = temp_dir("script-columns");
+    let script = dir.join("columns.rsk");
+    fs::write(
+        &script,
+        "struct P:\n    x: i32\n\nfn main():\n    let p = P{ x: 1 }\n    let v: Vec[String] = Vec.new()\n    println!(\"{p.nope()} {v.len()}\")\n    let s: Vec[u8] = String.nope()\n",
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_rusk"))
+        .arg("script")
+        .arg(&script)
+        .env("XDG_CACHE_HOME", dir.join("cache"))
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_ne!(output.status.code(), Some(0), "{stderr}");
+    for (line, code) in [
+        (7, "    println!(\"{p.nope()} {v.len()}\")"),
+        (8, "    let s: Vec[u8] = String.nope()"),
+    ] {
+        let column = code.find("nope").unwrap();
+        assert!(
+            stderr.contains(&format!("--> {}:{line}:{}", script.display(), column + 1)),
+            "{stderr}"
+        );
+        let lines = stderr.lines().collect::<Vec<_>>();
+        let snippet = lines
+            .iter()
+            .position(|text| text.ends_with(&format!("{line} | {code}")))
+            .unwrap_or_else(|| panic!("no script line {line}\n{stderr}"));
+        let caret = lines[snippet + 1];
+        let code_start = lines[snippet].len() - code.len();
+        assert_eq!(caret.find('^'), Some(code_start + column), "{stderr}");
+    }
+    assert!(stderr.contains("1 | struct P:"), "{stderr}");
+    assert!(!stderr.contains("p.nope(), v.len()"), "{stderr}");
+    assert!(!stderr.contains("String::nope"), "{stderr}");
+    let _ = fs::remove_dir_all(dir);
+}
