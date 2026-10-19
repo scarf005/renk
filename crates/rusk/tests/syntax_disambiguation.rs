@@ -950,3 +950,53 @@ fn closure_return_types_without_bodies_do_not_panic() {
     let _ = transpile("||->let :r#\"\"#");
     let _ = transpile("let f = || -> u8 let x: u8 = 1\n");
 }
+
+#[test]
+fn closure_parameters_bind_after_fields_async_and_branches() {
+    let output = rust(
+        "fn f(c: bool):\n    let p = P{ f: |s: String| s.len() }\n    let g = async |s: String| s.len()\n    let h = if c then |s: String| s.len() else |t: String| t.len()\n    println!(\"{xs.iter().map(|s| s.len()).sum::<usize>()}\")\n",
+    );
+    assert_lines(
+        &output,
+        &[
+            "P{ f: |s: String| s.len() }",
+            "async |s: String| s.len();",
+            "if c { |s: String| s.len() } else { |t: String| t.len() }",
+            "xs.iter().map(|s| s.len()).sum::<usize>()",
+        ],
+    );
+}
+
+#[test]
+fn lets_in_match_arm_bodies_bind_values() {
+    let output = rust(
+        "fn f(o: Option<String>, q: Option<Option<String>>) -> usize:\n    let a = match o:\n        Some(s) => { let t = s; t.len() }\n        None => 0\n    match q:\n        Some(i) => if let Some(v) = i then v.len() else a\n        None => 0\n",
+    );
+    assert_lines(&output, &["let t = s; t.len() }", "{ v.len() }"]);
+}
+
+#[test]
+fn trailing_comments_keep_a_tail_match_the_value() {
+    let output = rust(
+        "fn f(c: Option<u8>) -> u8:\n    match c:\n        Some(x) => x\n        None => 0\n    // end\n",
+    );
+    assert_lines(&output, &["        None => 0,\n    }\n    // end\n}"]);
+}
+
+#[test]
+fn if_then_else_with_an_indented_block_is_not_let_else() {
+    assert!(transpile("fn f(c: bool):\n    let x = if c then 1 else:\n        2\n").is_err());
+}
+
+#[test]
+fn statics_are_values() {
+    let output =
+        rust("static mut counter: u8 = 0\nfn f() -> u32 = unsafe { counter.count_ones() }\n");
+    assert_lines(&output, &["unsafe { counter.count_ones() }"]);
+}
+
+#[test]
+fn closure_parameters_in_std_macros_lower_their_types() {
+    let output = rust("fn f():\n    let v = vec![|a: u8, b: Vec[u8]| b.len()]\n");
+    assert_lines(&output, &["vec![|a: u8, b: Vec<u8>| b.len()]"]);
+}
