@@ -43,6 +43,8 @@ fn scripts_share_one_build_dir_and_each_runs_its_own_binary() {
         Command::new(env!("CARGO_BIN_EXE_rusk"))
             .args(["script", script.to_str().unwrap()])
             .env("XDG_CACHE_HOME", dir.join("cache"))
+            // A target dir of the user's own puts every script's binary in one place.
+            .env("CARGO_TARGET_DIR", dir.join("target"))
             .output()
             .unwrap()
     };
@@ -77,6 +79,39 @@ fn scripts_share_one_build_dir_and_each_runs_its_own_binary() {
         );
     }
     assert!(dir.join("cache/rusk/build").is_dir());
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn scripts_see_the_package_environment_cargo_run_sets() {
+    let dir = temp_dir("script-package-env");
+    let script = dir.join("env.rsk");
+    fs::write(
+        &script,
+        "println!(\"{}\", std::env::var(\"CARGO_PKG_NAME\")?)\nprintln!(\"{}\", std::env::var(\"CARGO_MANIFEST_DIR\")?)\n",
+    )
+    .unwrap();
+    for flags in [&[][..], &["--no-cargo"]] {
+        let output = Command::new(env!("CARGO_BIN_EXE_rusk"))
+            .arg("script")
+            .args(flags)
+            .arg(&script)
+            .env("XDG_CACHE_HOME", dir.join("cache"))
+            // `cargo test` sets these for the test itself.
+            .env_remove("CARGO_PKG_NAME")
+            .env_remove("CARGO_MANIFEST_DIR")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let lines = stdout.lines().collect::<Vec<_>>();
+        assert!(
+            lines.len() == 2
+                && lines[0].starts_with("env-")
+                && PathBuf::from(lines[1]).join("env.rs").is_file(),
+            "{flags:?} stdout: {stdout}\nstderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
     let _ = fs::remove_dir_all(dir);
 }
 
