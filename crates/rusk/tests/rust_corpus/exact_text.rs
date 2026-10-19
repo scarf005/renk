@@ -105,3 +105,21 @@ pub fn aligned_comments(v: &mut Vec<u8>) -> usize {
     n + <Vec<u8>>::with_capacity(1).capacity() // ;
                                                // end
 }
+
+pub fn statement_chains(c: bool, mut n: u8) -> u8 {
+    while n > 0 {
+        if c {
+            n -= 1;
+        } else if n > 3 { // }
+            n -= 3;
+        } else {
+            n -= 2;
+        }
+    }
+    if c {
+        n = 1;
+    } else {
+        n = 2;
+    }
+    n
+}
