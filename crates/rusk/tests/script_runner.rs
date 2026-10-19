@@ -37,6 +37,47 @@ fn script_runs_through_cargo_script_with_args_exit_code_and_source_path() {
 }
 
 #[test]
+fn scripts_share_one_build_dir_and_each_runs_its_own_binary() {
+    let dir = temp_dir("script-shared-build");
+    let run = |script: &PathBuf| {
+        Command::new(env!("CARGO_BIN_EXE_rusk"))
+            .args(["script", script.to_str().unwrap()])
+            .env("XDG_CACHE_HOME", dir.join("cache"))
+            .output()
+            .unwrap()
+    };
+    // Same file stems, and scripts naming the same package, build the same root unit names.
+    let scripts = [
+        ("a", "tool", ""),
+        ("b", "tool", ""),
+        ("c", "named", "name = \"same\"\n"),
+        ("d", "named", "name = \"same\"\n"),
+    ]
+    .map(|(parent, stem, name)| {
+        fs::create_dir_all(dir.join(parent)).unwrap();
+        let script = dir.join(parent).join(format!("{stem}.rsk"));
+        fs::write(
+            &script,
+            format!("---\n[package]\n{name}edition = \"2024\"\n---\nprintln!(\"{parent}\")\n"),
+        )
+        .unwrap();
+        (parent, script)
+    });
+
+    for (parent, script) in scripts.iter().chain(&scripts) {
+        let output = run(script);
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            format!("{parent}\n"),
+            "stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    assert!(dir.join("cache/rusk/build").is_dir());
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
 fn script_reports_transpile_errors_with_the_script_path_and_line() {
     let dir = temp_dir("script-error");
     let script = dir.join("broken.rsk");
