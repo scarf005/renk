@@ -33,6 +33,7 @@ const CORPUS: &[(&str, &str)] = &[
     ("format_args", include_str!("rust_corpus/format_args.rs")),
     ("where_clauses", include_str!("rust_corpus/where_clauses.rs")),
     ("long_conditions", include_str!("rust_corpus/long_conditions.rs")),
+    ("match_arm_blocks", include_str!("rust_corpus/match_arm_blocks.rs")),
 ];
 
 const RUSK_CORPUS: &[(&str, &str)] = &[
