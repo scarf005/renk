@@ -521,13 +521,14 @@ impl RukSemicolonInferer {
         insert_semicolon(raw)
     }
 
-    /// Whether the next code line continues this expression: `.method()`, `?`, `| pattern`, or
-    /// `let ... else`.
+    /// Whether the next code line continues this expression: `.method()`, `?`, `| pattern`,
+    /// `+ operand`, or `let ... else`.
     fn continues_on_next_line(&self, index: usize) -> bool {
         self.next_code_line(index).is_some_and(|next| {
             let next = next.trim_start();
             next.starts_with(['.', '?'])
                 || next.starts_with("| ")
+                || starts_with_binary_operator(next)
                 || is_else_branch(strip_open_brace(next))
         })
     }
@@ -1531,7 +1532,9 @@ fn is_rust_impl_or_mod_item(text: &str) -> bool {
 }
 
 fn is_raw_rust_block_header(header: &str, kind: RustBlockKind) -> bool {
-    kind == RustBlockKind::Raw || header.trim_end().ends_with('|') || header.contains("| {")
+    // The line opening the block decides, not an `a || {` operand on an earlier header line.
+    let last = header.lines().last().unwrap_or_default();
+    kind == RustBlockKind::Raw || last.trim_end().ends_with('|') || last.contains("| {")
 }
 
 fn lower_rust_syntax(text: &str) -> String {
@@ -1918,11 +1921,13 @@ fn source_lines(source: &str) -> Result<Vec<SourceLine>, TranspileError> {
         let without_comment = keep_literal_end(raw, in_literal[index]);
         let trimmed = without_comment.trim();
         let indent = raw_indent(without_comment);
-        if !trimmed.is_empty() && arm_indent.is_some_and(|arm| indent > arm) {
+        if let Some(arm) = arm_indent.filter(|&arm| !trimmed.is_empty() && indent > arm) {
+            // A macro arm body is Rust tokens laid out as written, so its lines are siblings that
+            // keep their indentation past the arm's.
             lines.push(SourceLine {
                 line,
-                indent,
-                text: trimmed.to_string(),
+                indent: arm + 1,
+                text: without_comment[arm + 1..].trim_end().to_string(),
                 raw: true,
                 comment: None,
             });
@@ -2040,6 +2045,10 @@ fn joins_next_line(
         || opens_struct_literal(code)
         || (open.last() == Some(&'{') && is_use_or_extern_crate(code))
         || (code.trim_end().ends_with(',') && matches!(open.first(), Some('(' | '[')))
+        // A block inside brackets, as in `data: [u64; if Self::COMPRESS {`, or an operand block,
+        // as in `+ if c {` or `if (a || {`, rather than a closure body.
+        || (code.trim_end().ends_with('{')
+            && (open.contains(&'[') || opens_operand_block(code, open.contains(&'('))))
         || opens_macro_braces(text)
     {
         *group = open.first().copied();
@@ -2058,6 +2067,26 @@ fn joins_next_line(
                 .iter()
                 .any(|operator| trimmed.ends_with(operator)))
             || next.is_some_and(|next| continues_where_clause(text, next, indent)))
+}
+
+/// Whether the `{` ending `code` opens a block operand: on a line continuing an expression with
+/// a binary operator, as in `+ if c {`, or after `||` / `&&` inside parentheses.
+fn opens_operand_block(code: &str, in_parentheses: bool) -> bool {
+    let line = code.trim();
+    let head = line[..line.len() - 1].trim_end();
+    let chars = head.chars().collect::<Vec<_>>();
+    let after_operator = (head.ends_with("||") && !is_closure_start(&chars, chars.len() - 2))
+        || head.ends_with("&&");
+    starts_with_binary_operator(line) || (in_parentheses && after_operator)
+}
+
+/// Whether `line` continues an expression with a binary operator, as in `+ if a {` or `&& b`.
+fn starts_with_binary_operator(line: &str) -> bool {
+    const OPERATORS: [&str; 17] = [
+        "+ ", "- ", "* ", "/ ", "% ", "&& ", "|| ", "& ", "^ ", "<< ", ">> ", "== ", "!= ", "<= ",
+        ">= ", "< ", "> ",
+    ];
+    OPERATORS.iter().any(|operator| line.starts_with(operator))
 }
 
 /// Whether `text` leaves a macro invocation's delimiter open, as in `quote_spanned! {span=>` or
@@ -2155,17 +2184,19 @@ fn lone_opener_heads(lines: &[&str], in_literal: &[bool], opener: &str) -> Vec<O
             heads[head] = Some(end);
         }
     }
-    // A condition holding a block, as in `if match x {` ... `} {`, ends at its `}` line that
-    // opens the body.
+    // A condition or scrutinee holding a block, as in `if match x {` ... `} {` or
+    // `match f(|w| match w {` ... `}) {`, ends at its `}` line that opens the body.
     for (head, line) in lines.iter().enumerate() {
         let head_code = code(line);
-        let condition = ["if ", "while ", "else if "]
+        let condition = ["if ", "while ", "else if ", "match "]
             .iter()
             .find_map(|keyword| head_code.strip_prefix(keyword));
-        if (head > 0 && in_literal[head - 1])
-            || !condition.is_some_and(|condition| condition.starts_with("match "))
-            || !head_code.ends_with('{')
-        {
+        let holds_block = condition.is_some_and(|condition| {
+            (condition.starts_with("match ") && !head_code.starts_with("match "))
+                || open_delimiters(condition)
+                    .is_some_and(|open| open.contains(&'(') || open.contains(&'['))
+        });
+        if (head > 0 && in_literal[head - 1]) || !holds_block || !head_code.ends_with('{') {
             continue;
         }
         let indent = raw_indent(line);
@@ -2173,9 +2204,12 @@ fn lone_opener_heads(lines: &[&str], in_literal: &[bool], opener: &str) -> Vec<O
             .take_while(|&end| lines[end].trim().is_empty() || raw_indent(lines[end]) >= indent)
             .find(|&end| {
                 let end_code = code(lines[end]);
-                // `} {` or `}:`, unlike `} && match y {`.
+                // `} {`, `}) {`, `}) {}`, or `}:`, unlike `} && match y {`.
                 raw_indent(lines[end]) == indent
-                    && end_code.strip_prefix('}').map(str::trim_start) == Some(opener)
+                    && end_code
+                        .strip_prefix('}')
+                        .map(|rest| rest.trim_start_matches([')', ']']).trim_start())
+                        .is_some_and(|rest| rest == opener || rest == "{}")
             })
             .or(heads[head]);
     }
@@ -3539,7 +3573,7 @@ fn emit_raw_macro_nodes(nodes: &[Node], emitter: &mut Emitter) {
     for node in nodes {
         emitter.push(
             node,
-            format!("{}{}", spaces(node.indent), node.text.trim()),
+            format!("{}{}", spaces(node.indent), node.text.trim_end()),
         );
         emit_raw_macro_nodes(&node.children, emitter);
     }
@@ -4225,10 +4259,17 @@ fn lower_format_invocation(arguments: &str, prefix: usize) -> Option<String> {
     let format_literal = arguments.get(prefix)?.trim();
     let (content_start, content_end) = format_literal_bounds(format_literal)?;
     let content = &format_literal[content_start..content_end];
-    let (content, expressions) = lower_format_string(content)?;
+    let (lowered, expressions) = lower_format_string(content, false)?;
     if expressions.is_empty() {
         return None;
     }
+    // Without explicit arguments, captures such as `{pos}` become arguments too, so
+    // `"{QuotedChar(*ch)} {pos}"` keeps the argument order of `"{} {}", QuotedChar(*ch), pos`.
+    let (content, expressions) = if arguments.len() == prefix + 1 {
+        lower_format_string(content, true)?
+    } else {
+        (lowered, expressions)
+    };
 
     let mut lowered_arguments = arguments[..prefix]
         .iter()
@@ -4261,8 +4302,8 @@ fn lower_format_invocation(arguments: &str, prefix: usize) -> Option<String> {
 }
 
 /// Lowers `{expr}` placeholders to positional markers; plain identifiers other than `self` stay as
-/// Rust's captured or named arguments.
-fn lower_format_string(content: &str) -> Option<(String, Vec<String>)> {
+/// Rust's captured or named arguments unless `captures` lowers them too.
+fn lower_format_string(content: &str, captures: bool) -> Option<(String, Vec<String>)> {
     let mut lowered = String::with_capacity(content.len());
     let mut expressions = Vec::new();
     let mut index = 0usize;
@@ -4279,7 +4320,8 @@ fn lower_format_string(content: &str) -> Option<(String, Vec<String>)> {
             let body = body.trim();
             let expression = split_format_specifier(body).0;
             if is_standard_format_placeholder(body)
-                || (expression != "self"
+                || (!captures
+                    && expression != "self"
                     && expression.starts_with(is_ident_start)
                     && expression.chars().all(is_ident_continue))
             {
@@ -4344,6 +4386,7 @@ fn inline_format_arguments(arguments: &str, prefix: usize) -> Option<String> {
     }
     let content = &literal[start..end];
     let (mut inlined, mut used, mut implicit, mut explicit) = (String::new(), 0, false, false);
+    let mut captured = false;
     let mut index = 0;
     while index < content.len() {
         let character = content[index..].chars().next()?;
@@ -4370,12 +4413,18 @@ fn inline_format_arguments(arguments: &str, prefix: usize) -> Option<String> {
             implicit = true;
         } else if position.chars().all(|c| c.is_ascii_digit()) && position.parse() == Ok(used) {
             explicit = true;
-        } else if position.chars().all(|c| c.is_ascii_digit()) {
+        } else if !position.starts_with(|c: char| c.is_alphabetic() || c == '_') {
             return None;
         } else {
+            // Rust evaluates captures after the arguments, so lowering `{pos}` back keeps their
+            // order only when no argument follows it.
+            captured = true;
             inlined.push_str(&content[index..=close]);
             index = close + 1;
             continue;
+        }
+        if captured {
+            return None;
         }
         inlined.push('{');
         inlined.push_str(values.get(used)?);
@@ -5628,7 +5677,12 @@ fn is_comment(text: &str) -> bool {
 }
 
 fn is_struct_item(text: &str) -> bool {
-    starts_item(text, "struct") || starts_item(text, "union")
+    // `union` is a keyword only before the item's name, unlike `union = merge(union)`.
+    starts_item(text, "struct")
+        || (starts_item(text, "union")
+            && without_visibility(text)
+                .strip_prefix("union")
+                .is_some_and(|rest| rest.trim_start().starts_with(is_ident_start)))
 }
 
 fn is_enum_item(text: &str) -> bool {
@@ -5868,7 +5922,9 @@ fn is_assignment(text: &str) -> bool {
 }
 
 fn looks_like_struct_literal(node: &Node) -> bool {
+    // `TABLE.with(|slot| {` opens a closure body rather than fields.
     !node.children.is_empty()
+        && !node.text.trim_end().ends_with('{')
         && node
             .text
             .trim()
