@@ -56,3 +56,10 @@ pub fn one_line_statements(c: bool, v: &mut Vec<u8>) -> u8 {
     }
     3
 }
+
+pub fn bounded<T>(t: T) -> T
+where
+    T: Clone, // {
+{
+    t.clone()
+}
