@@ -45,3 +45,6 @@ pub fn lookup(k: u8, made: Made) -> u8 {
     };
     picked
 }
+
+mod empty {}
+pub mod one_line { pub fn f() -> u8 { 1 } }
