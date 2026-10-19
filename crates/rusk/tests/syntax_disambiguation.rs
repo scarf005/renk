@@ -884,3 +884,12 @@ fn empty_loop_bodies_stay_empty() {
     assert_lines(&output, &["    while n > 0 {}\n", "    for _ in 0..n {}\n"]);
     assert!(!output.contains("{} {"), "{output}");
 }
+
+#[test]
+fn module_declarations_keep_their_semicolon() {
+    let rusk = rust_to_rusk("#[macro_use]\nmod backtrace;\npub(crate) mod chain;\nmod inline {}\n").unwrap();
+    let output = rust(&rusk);
+    assert_lines(&output, &["mod backtrace;\n", "pub(crate) mod chain;\n"]);
+    assert!(!output.contains("; {"), "{output}");
+    assert_eq!(rust("mod a\nmod b;\n"), "mod a;\nmod b;\n");
+}
