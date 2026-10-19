@@ -250,3 +250,22 @@ pub fn value_bound_names(path: &str, 목록: Vec[u8], pair: (Option[String], u8)
         _ => std.cmp.max(first, args) + size + nested() + inner + usize.from(some) + lens + block + (0..NAMES.len()).len()
 
 fn make_pair() -> (u8, u8) = (1, 2)
+
+pub fn brace_matches(o: Option[u8]) -> u8:
+    let a = match o {
+        Some(x) => x, // y,
+        None => (0, 1).0,
+    }
+    let b = match o {
+        Some(1) => {
+            a
+        },
+        Some(x) => {
+            x
+        }
+        None => 0,
+    }
+    match o {
+        Some(x) => x + b,
+        None => 0 // z,
+    }
