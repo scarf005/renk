@@ -174,9 +174,9 @@ pub fn wrapped_conditions(a: u8, c: char) -> u8 {
 
 pub fn value_scrutinees(a: Option<u8>, b: Option<u8>) -> u8 {
     if let Some(found) = if let Some(x) = a {
-        Some(x)
+        Some(x.min(1))
     } else if let Some(y) = b {
-        Some(y)
+        Some(y.max(2))
     } else {
         None
     } {
