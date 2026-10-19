@@ -179,3 +179,72 @@ pub fn closed_control_blocks(c: bool, o: Option<u8>) -> i32 {
     }
     x + y + z
 }
+
+pub struct Tuple(pub u32)
+
+pub struct Unit
+
+mod declared {} // inline
+
+pub fn assigned_blocks(c: bool) -> u32 {
+    let mut q = 0
+    q +=
+    {
+        2
+    }
+    let mut r = 0
+    r = unsafe
+    {
+        3
+    }
+    let k = const
+    {
+        4
+    }
+    let t = Tuple(1).0 + if c { 0 } else { 1 }
+    let _ = Unit
+    q + r + k + t
+}
+
+pub fn returned_value(c: bool) -> u8 {
+    let x: u8 = return if c
+    {
+        1
+    } else { 2 }
+}
+
+pub struct Bounded<X>(X)
+where
+    X: Copy
+
+pub struct Wrapped(
+    u8,
+)
+
+pub struct Commented // unit
+
+pub fn indented_blocks(c: bool) -> u8 {
+    let constant = 1
+    {
+        bare()
+    }
+    let mut q = 0
+    q =
+        {
+            2
+        }
+    q -= constant // } else {
+    {
+        bare()
+    }
+    let fut = async move
+        {
+            3
+        }
+    drop(fut)
+    let w = if c
+    {
+        1
+    } else { 2 } // { else
+    q + w
+}
