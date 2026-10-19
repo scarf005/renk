@@ -31,6 +31,7 @@ const CORPUS: &[(&str, &str)] = &[
     ("value_blocks", include_str!("rust_corpus/value_blocks.rs")),
     ("idiomatic", include_str!("rust_corpus/idiomatic.rs")),
     ("format_args", include_str!("rust_corpus/format_args.rs")),
+    ("where_clauses", include_str!("rust_corpus/where_clauses.rs")),
 ];
 
 const RUSK_CORPUS: &[(&str, &str)] = &[

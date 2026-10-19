@@ -856,3 +856,15 @@ fn lifetimes_const_generics_and_later_lets_on_a_line_bind_values() {
     let rusk = rust_to_rusk(source).unwrap();
     assert!(rust(&rusk).contains("a.len() + b.len()"), "{rusk}");
 }
+
+#[test]
+fn multi_line_where_clauses_keep_their_lines() {
+    let source = "impl<T> Show for Wrapper<T>\nwhere\n    T: Debug,\n{\n    fn show<F>(&self, f: F) -> String\n    where\n        F: Fn(&str) -> String,\n    {\n        f(\"a\")\n    }\n}\n";
+    let rusk = rust_to_rusk(source).unwrap();
+    assert!(
+        rusk.contains("impl[T] Show for Wrapper[T]\nwhere\n    T: Debug,\n:\n"),
+        "{rusk}"
+    );
+    assert!(rusk.contains("    where\n        F: Fn(&str) -> String,\n    :\n"), "{rusk}");
+    assert_eq!(rust(&rusk), source);
+}
