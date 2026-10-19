@@ -868,3 +868,10 @@ fn multi_line_where_clauses_keep_their_lines() {
     assert!(rusk.contains("    where\n        F: Fn(&str) -> String,\n    :\n"), "{rusk}");
     assert_eq!(rust(&rusk), source);
 }
+
+#[test]
+fn empty_loop_bodies_stay_empty() {
+    let output = rust("fn f(mut n: u8):\n    while n > 0 {}\n    for _ in 0..n {}\n    n = 1\n");
+    assert_lines(&output, &["    while n > 0 {}\n", "    for _ in 0..n {}\n"]);
+    assert!(!output.contains("{} {"), "{output}");
+}

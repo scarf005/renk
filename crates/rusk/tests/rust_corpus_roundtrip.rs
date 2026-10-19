@@ -36,6 +36,7 @@ const CORPUS: &[(&str, &str)] = &[
     ("match_arm_blocks", include_str!("rust_corpus/match_arm_blocks.rs")),
     ("bare_blocks", include_str!("rust_corpus/bare_blocks.rs")),
     ("wrapped_groups", include_str!("rust_corpus/wrapped_groups.rs")),
+    ("item_tails", include_str!("rust_corpus/item_tails.rs")),
 ];
 
 const RUSK_CORPUS: &[(&str, &str)] = &[
