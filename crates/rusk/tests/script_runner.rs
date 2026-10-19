@@ -179,7 +179,7 @@ fn script_compiler_diagnostics_point_at_script_lines() {
             "{stderr}"
         );
         assert!(
-            stderr.contains("\n12 |     let y: i32 = \"nope\";"),
+            stderr.contains("\n12 |     let y: i32 = \"nope\"\n"),
             "{stderr}"
         );
         assert!(!stderr.contains("broken.rs:"), "{stderr}");
@@ -269,7 +269,7 @@ fn script_warnings_print_only_when_the_script_compiles() {
         "fn main():\n    let unused = 1\n    println!(\"1\")\n",
     )
     .unwrap();
-    assert!(run().contains("unused variable"));
+    assert!(run().starts_with("warning: unused variable"));
     assert_eq!(run(), "");
     fs::write(
         &script,

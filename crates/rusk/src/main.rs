@@ -1,3 +1,5 @@
+use annotate_snippets::{Annotation, AnnotationKind, Group, Level, Renderer, Snippet};
+use similar::{DiffTag, TextDiff};
 use std::{
     env, fs,
     io::{self, IsTerminal, Read},
@@ -176,7 +178,15 @@ fn run_script(raw_args: Vec<String>) -> Result<i32, Box<dyn std::error::Error>> 
     let source_path = fs::canonicalize(&script_path)?;
     let rust_path = script_cache_path(&cache_root, &source_path);
     write_script_cache(&rust_path, &script.rust)?;
-    let build = || build_script(&rust_path, &script_path, &script.source_lines);
+    let diagnostic = ScriptDiagnostic {
+        rust_path: &rust_path,
+        script: &script_path.display().to_string(),
+        script_source: &source,
+        rust: &script.rust,
+        source_lines: &script.source_lines,
+        styled: io::stderr().is_terminal(),
+    };
+    let build = || build_script(&rust_path, &diagnostic);
     let binary = if no_cargo {
         let binary = rust_path.with_extension("");
         if !is_newer(&binary, &rust_path) {
@@ -214,12 +224,11 @@ fn is_newer(path: &Path, than: &Path) -> bool {
 /// scripts need a second launcher installed. Compiler diagnostics are printed at script lines.
 fn build_script(
     rust_path: &Path,
-    script_path: &Path,
-    source_lines: &[(usize, bool)],
+    diagnostic: &ScriptDiagnostic,
 ) -> Result<Result<PathBuf, i32>, Box<dyn std::error::Error>> {
     let mut cargo = Command::new("cargo")
         .args(["+nightly", "-Zscript", "build", "--quiet"])
-        .arg(if io::stderr().is_terminal() {
+        .arg(if diagnostic.styled {
             "--message-format=json-diagnostic-rendered-ansi"
         } else {
             "--message-format=json"
@@ -228,12 +237,6 @@ fn build_script(
         .arg(rust_path)
         .stdout(process::Stdio::piped())
         .spawn()?;
-    let rust_file = rust_path.file_name().unwrap_or_default().to_string_lossy();
-    let diagnostic = ScriptDiagnostic {
-        rust_file: &rust_file,
-        script: &script_path.display().to_string(),
-        source_lines,
-    };
     let mut executable = None;
     // Cargo replays the warnings of a fresh package on every build, so a package's warnings wait
     // for its artifact and print only when it was compiled, or before its first error.
@@ -241,7 +244,7 @@ fn build_script(
     let flush = |package: &str, show: bool, warnings: &mut Vec<(String, String)>| {
         for (_, rendered) in warnings.extract_if(.., |(owner, _)| owner == package) {
             if show {
-                eprint!("{}", diagnostic.remap(&rendered));
+                eprint!("{rendered}");
             }
         }
     };
@@ -255,12 +258,13 @@ fn build_script(
             .as_str()
             .unwrap_or_default()
             .to_string();
-        if let Some(rendered) = message["message"]["rendered"].as_str() {
+        if message["reason"] == "compiler-message" {
+            let rendered = diagnostic.render(&message["message"]);
             if message["message"]["level"] == "warning" {
-                warnings.push((package.clone(), rendered.to_string()));
+                warnings.push((package.clone(), rendered));
             } else {
                 flush(&package, true, &mut warnings);
-                eprint!("{}", diagnostic.remap(rendered));
+                eprint!("{rendered}");
             }
         }
         if message["reason"] == "compiler-artifact" {
@@ -271,7 +275,7 @@ fn build_script(
         }
     }
     for (_, rendered) in warnings {
-        eprint!("{}", diagnostic.remap(&rendered));
+        eprint!("{rendered}");
     }
     let status = cargo.wait()?;
     if !status.success() {
@@ -280,127 +284,206 @@ fn build_script(
     Ok(Ok(executable.ok_or("cargo built no script executable")?))
 }
 
-/// Rewrites a rendered rustc diagnostic about the generated Rust file to name the script and its
-/// lines: `--> file.rs:L:C` locations and the snippet's line-number gutter.
+/// Renders rustc's JSON diagnostics about the generated Rust file at the script's lines and
+/// columns over the script's own source. Suggested replacements are Rust, so they show only their
+/// message; diagnostics about other files print as rustc rendered them.
 struct ScriptDiagnostic<'a> {
-    rust_file: &'a str,
+    rust_path: &'a Path,
     script: &'a str,
+    script_source: &'a str,
+    rust: &'a str,
+    /// The script line of each 1-based Rust line and whether rusk synthesized it.
     source_lines: &'a [(usize, bool)],
+    styled: bool,
+}
+
+/// The `message` of a rustc diagnostic or child.
+fn text(value: &serde_json::Value) -> &str {
+    value["message"].as_str().unwrap_or_default()
 }
 
 impl ScriptDiagnostic<'_> {
-    fn remap(&self, rendered: &str) -> String {
-        let lines = rendered.split_inclusive('\n').collect::<Vec<_>>();
-        // Each line's rewritten location or gutter line number; numbers map only in script sections.
-        let mut in_script = false;
-        let remapped = lines
-            .iter()
-            .map(|line| {
-                if let Some(location) = self.location(line) {
-                    in_script = true;
-                    return Remapped::Location(location);
-                }
-                if line.contains("--> ") || line.contains("::: ") {
-                    in_script = false;
-                }
-                let Some((start, end)) = gutter_number(line) else {
-                    return Remapped::Line;
-                };
-                let number = &line[start..end];
-                let number = match number.parse::<usize>() {
-                    Ok(number) if in_script => match self.source_lines.get(number - 1) {
-                        Some((_, true)) => String::new(),
-                        _ => self.source_line(number).to_string(),
-                    },
-                    _ => number.to_string(),
-                };
-                Remapped::Gutter(end, number)
-            })
-            .collect::<Vec<_>>();
-        let width = lines
-            .iter()
-            .zip(&remapped)
-            .filter_map(|(line, remapped)| match remapped {
-                Remapped::Gutter(end, _) => Some(end - ansi_prefix_len(line)),
-                _ => None,
-            })
-            .max()
-            .unwrap_or(0);
-        let new_width = remapped
-            .iter()
-            .filter_map(|remapped| match remapped {
-                Remapped::Gutter(_, number) => Some(number.len()),
-                _ => None,
-            })
-            .fold(width, usize::max);
-        let indent = " ".repeat(new_width - width);
-        let mut output = String::new();
-        for (line, remapped) in lines.into_iter().zip(remapped) {
-            match remapped {
-                Remapped::Location(location) => output.push_str(&(indent.clone() + &location)),
-                Remapped::Gutter(end, number) => {
-                    output.push_str(&line[..ansi_prefix_len(line)]);
-                    output.push_str(&format!("{number:>new_width$}"));
-                    output.push_str(&line[end..]);
-                }
-                Remapped::Line if line[ansi_prefix_len(line)..].starts_with(' ') => {
-                    output.push_str(&(indent.clone() + line));
-                }
-                Remapped::Line => output.push_str(line),
+    fn render(&self, message: &serde_json::Value) -> String {
+        let rendered = message["rendered"].as_str().unwrap_or_default();
+        if !self.mentions_script(message) {
+            return rendered.to_string();
+        }
+        let mut title = level(&message["level"]).primary_title(text(message));
+        // Lints name themselves in a note, as rustc renders them; only error codes title the
+        // diagnostic.
+        if let Some(code) = message["code"]["code"]
+            .as_str()
+            .filter(|code| code.starts_with('E'))
+        {
+            title = title.id(code);
+        }
+        let mut notes = Vec::new();
+        let mut sections = Vec::new();
+        for child in message["children"].as_array().into_iter().flatten() {
+            let level = level(&child["level"]);
+            let quoted = child["spans"].as_array().is_some_and(|spans| {
+                spans
+                    .iter()
+                    .all(|span| span["suggested_replacement"].is_null())
+            });
+            let snippets = if quoted {
+                self.snippets(&child["spans"])
+            } else {
+                Vec::new()
+            };
+            if snippets.is_empty() {
+                notes.push(level.message(text(child)));
+            } else {
+                sections
+                    .push(Group::with_title(level.secondary_title(text(child))).elements(snippets));
             }
         }
-        output
+        let main = Group::with_title(title)
+            .elements(self.snippets(&message["spans"]))
+            .elements(notes);
+        let groups = [main].into_iter().chain(sections).collect::<Vec<_>>();
+        let renderer = if self.styled {
+            Renderer::styled()
+        } else {
+            Renderer::plain()
+        };
+        renderer.render(&groups) + "\n\n"
     }
 
-    fn source_line(&self, line: usize) -> usize {
-        self.source_lines
-            .get(line - 1)
-            .map_or(line, |&(source_line, _)| source_line)
+    fn is_script(&self, span: &serde_json::Value) -> bool {
+        let file = span["file_name"].as_str().unwrap_or_default();
+        self.rust_path
+            .parent()
+            .is_some_and(|dir| dir.join(file) == self.rust_path)
     }
 
-    /// A `--> file.rs:L:C` or `::: file.rs:L:C` line naming the generated file, at the script line.
-    fn location(&self, line: &str) -> Option<String> {
-        let (head, rest) = ["--> ", "::: "].iter().find_map(|arrow| {
-            line.split_once(arrow)
-                .map(|(head, rest)| (&line[..head.len() + arrow.len()], rest))
-        })?;
-        let (style, path) = rest.split_at(ansi_prefix_len(rest));
-        let (number, column) = path
-            .strip_prefix(self.rust_file)?
-            .strip_prefix(':')?
-            .split_once(':')?;
-        let number = self.source_line(number.parse().ok()?);
-        Some(format!("{head}{style}{}:{number}:{column}", self.script))
+    fn mentions_script(&self, message: &serde_json::Value) -> bool {
+        let mut spans = message["spans"].as_array().into_iter().flatten();
+        let mut children = message["children"].as_array().into_iter().flatten();
+        spans.any(|span| self.is_script(span)) || children.any(|child| self.mentions_script(child))
+    }
+
+    /// One snippet over the script for its spans, and one per span in any other file, built from
+    /// the source lines rustc quotes.
+    fn snippets<'s>(&'s self, spans: &'s serde_json::Value) -> Vec<Snippet<'s, Annotation<'s>>> {
+        let spans = spans.as_array().map(Vec::as_slice).unwrap_or_default();
+        let annotation = |span: &'s serde_json::Value, range| {
+            let kind = if span["is_primary"] == true {
+                AnnotationKind::Primary
+            } else {
+                AnnotationKind::Context
+            };
+            kind.span(range).label(span["label"].as_str())
+        };
+        let position = |span: &serde_json::Value, line: &str, column: &str| {
+            let number = |key: &str| span[key].as_u64().unwrap_or(1) as usize;
+            (number(line), number(column).saturating_sub(1))
+        };
+        let script = spans
+            .iter()
+            .filter(|span| self.is_script(span))
+            .map(|span| {
+                let start = self.script_offset(position(span, "line_start", "column_start"));
+                let end = self.script_offset(position(span, "line_end", "column_end"));
+                annotation(span, start..end.max(start))
+            })
+            .collect::<Vec<_>>();
+        let others = spans
+            .iter()
+            .filter(|span| !self.is_script(span))
+            .map(|span| {
+                let lines = span["text"]
+                    .as_array()
+                    .map(Vec::as_slice)
+                    .unwrap_or_default();
+                let quoted = lines
+                    .iter()
+                    .map(|line| line["text"].as_str().unwrap_or_default())
+                    .collect::<Vec<_>>();
+                let offset = |(line, column): (usize, usize)| {
+                    let line = line.saturating_sub(position(span, "line_start", "column_start").0);
+                    let before = quoted[..line.min(quoted.len())]
+                        .iter()
+                        .map(|text| text.len() + 1);
+                    before.sum::<usize>()
+                        + char_offset(quoted.get(line).copied().unwrap_or(""), column)
+                };
+                let start = offset(position(span, "line_start", "column_start"));
+                let end = offset(position(span, "line_end", "column_end"));
+                Snippet::source(quoted.join("\n"))
+                    .line_start(position(span, "line_start", "column_start").0)
+                    .path(span["file_name"].as_str())
+                    .annotation(annotation(span, start..end.max(start)))
+            });
+        let script = (!script.is_empty()).then(|| {
+            Snippet::source(self.script_source)
+                .path(self.script)
+                .annotations(script)
+        });
+        script.into_iter().chain(others).collect()
+    }
+
+    /// The byte offset in the script of a 1-based Rust line and 0-based column: the script column
+    /// whose character the column's character came from, by a character diff of the two lines.
+    fn script_offset(&self, (line, column): (usize, usize)) -> usize {
+        let (script_line, synthesized) = self
+            .source_lines
+            .get(line.saturating_sub(1))
+            .copied()
+            .unwrap_or((line, false));
+        let lines = self.script_source.split_inclusive('\n').collect::<Vec<_>>();
+        let index = script_line
+            .saturating_sub(1)
+            .min(lines.len().saturating_sub(1));
+        let script_text = lines
+            .get(index)
+            .map_or("", |text| text.trim_end_matches(['\n', '\r']));
+        let start = lines[..index].iter().map(|text| text.len()).sum::<usize>();
+        let rust_text = self
+            .rust
+            .lines()
+            .nth(line.saturating_sub(1))
+            .unwrap_or_default();
+        let column = if synthesized {
+            script_text.chars().count()
+        } else {
+            script_column(script_text, rust_text, column)
+        };
+        start + char_offset(script_text, column)
     }
 }
 
-enum Remapped {
-    Location(String),
-    /// The end of the gutter line number and the number to show instead.
-    Gutter(usize, String),
-    Line,
+/// The column of `script` that the character at `column` of `rust` came from: the same character
+/// where the lines match, or where rusk inserted or rewrote text, the script column it replaces.
+fn script_column(script: &str, rust: &str, column: usize) -> usize {
+    TextDiff::from_chars(script, rust)
+        .ops()
+        .iter()
+        .map(similar::DiffOp::as_tag_tuple)
+        .find(|(_, _, generated)| generated.contains(&column))
+        .map_or(
+            script.chars().count(),
+            |(tag, written, generated)| match tag {
+                DiffTag::Equal => written.start + column - generated.start,
+                _ => written.start,
+            },
+        )
 }
 
-/// The byte range of a snippet gutter's line number: `{line:>width} |` (or `+`, `-`, `~` in
-/// suggestions), possibly after ANSI styling.
-fn gutter_number(line: &str) -> Option<(usize, usize)> {
-    let styled = ansi_prefix_len(line);
-    let start = line.len() - line[styled..].trim_start_matches(' ').len();
-    let digits = line[start..].find(|character: char| !character.is_ascii_digit())?;
-    (digits > 0 && line[start + digits..].starts_with([' ', '\x1b']))
-        .then_some((start, start + digits))
+/// The byte offset of the character `column` of `text`, or its end.
+fn char_offset(text: &str, column: usize) -> usize {
+    text.char_indices()
+        .nth(column)
+        .map_or(text.len(), |(offset, _)| offset)
 }
 
-/// The length of the ANSI SGR escapes at the start of `text`.
-fn ansi_prefix_len(text: &str) -> usize {
-    let mut index = 0;
-    while let Some(end) = text[index..]
-        .strip_prefix("\x1b[")
-        .and_then(|rest| rest.find('m'))
-    {
-        index += end + 3;
+fn level(level: &serde_json::Value) -> Level<'static> {
+    match level.as_str() {
+        Some("warning") => Level::WARNING,
+        Some("note" | "failure-note") => Level::NOTE,
+        Some("help") => Level::HELP,
+        _ => Level::ERROR,
     }
-    index
 }
 
 /// A script's generated Rust and, for each 1-based Rust line, the script line it came from and
@@ -840,23 +923,22 @@ mod tests {
     }
 
     #[test]
-    fn script_diagnostics_renumber_script_gutters_and_keep_other_files() {
-        let diagnostic = ScriptDiagnostic {
-            rust_file: "tool.rs",
-            script: "bin/tool.rsk",
-            source_lines: &[(3, false), (9, false), (10, false), (10, true)],
-        };
-        let rendered = "error: oops\n --> tool.rs:2:5\n  |\n2 |     a();\n3 |     b()\n4 | }\n  |\n ::: lib.rs:4:1\n4 | fn a() {}\n  = note: x\n";
+    fn script_columns_follow_the_characters_rusk_wrote_them_from() {
+        let script = "    let s = String.nope()";
+        let rust = "    let s = String::nope();";
+        assert_eq!(script_column(script, rust, 4), 4);
+        assert_eq!(script_column(script, rust, rust.find("nope").unwrap()), 19);
+        assert_eq!(
+            script_column(script, rust, rust.find("::").unwrap() + 1),
+            18
+        );
+        assert_eq!(script_column(script, rust, rust.len() - 1), script.len());
 
-        assert_eq!(
-            diagnostic.remap(rendered),
-            "error: oops\n  --> bin/tool.rsk:9:5\n   |\n 9 |     a();\n10 |     b()\n   | }\n   |\n  ::: lib.rs:4:1\n 4 | fn a() {}\n   = note: x\n"
-        );
-        let styled = "\x1b[1m\x1b[94m--> \x1b[0mtool.rs:1:2\n\x1b[1m\x1b[94m1\x1b[0m \x1b[1m\x1b[94m|\x1b[0m x\n";
-        assert_eq!(
-            diagnostic.remap(styled),
-            "\x1b[1m\x1b[94m--> \x1b[0mbin/tool.rsk:3:2\n\x1b[1m\x1b[94m3\x1b[0m \x1b[1m\x1b[94m|\x1b[0m x\n"
-        );
+        let script = "    println!(\"{p.nope()} {v.len()}\")";
+        let rust = "    println!(\"{} {}\", p.nope(), v.len());";
+        let column = script_column(script, rust, rust.find("nope").unwrap());
+        assert_eq!(column, script.find("nope").unwrap());
+        assert_eq!(script_column("", "}", 0), 0);
     }
 
     #[test]
