@@ -2270,7 +2270,14 @@ fn lone_opener_heads(lines: &[&str], in_literal: &[bool], opener: &str) -> Vec<O
             .iter()
             .find_map(|keyword| head_code.strip_prefix(keyword));
         let holds_block = condition.is_some_and(|condition| {
+            // `if let Some(x) = if let ... {` or `while let Some(x) = match y {`.
+            let value = condition
+                .strip_prefix("let ")
+                .and_then(|binding| binding.split_once(" = "))
+                .map(|(_, value)| value);
             (condition.starts_with("match ") && !head_code.starts_with("match "))
+                || value
+                    .is_some_and(|value| value.starts_with("if ") || value.starts_with("match "))
                 || (head_code.ends_with('{') && opens_operand_block(&head_code, true))
                 || open_delimiters(condition)
                     .is_some_and(|open| open.contains(&'(') || open.contains(&'['))
