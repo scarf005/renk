@@ -440,7 +440,8 @@ impl RukSemicolonInferer {
                 && delimiter_base_brace_depth.is_none_or(|base| brace_depth <= base);
             let closed = self.close_scopes_for_line(text, indent);
             let code = &text[..code_len(text)];
-            let in_header = signature.is_some() || looks_like_item_header_without_body(code);
+            let in_header = signature.is_some()
+                || looks_like_item_header_without_body(without_attributes(code));
             // A header line before its `where` clause or before the `{` line after it.
             let header_continues = in_header
                 && (code == "where"
@@ -480,7 +481,7 @@ impl RukSemicolonInferer {
             output.push(converted);
             let header = match signature.take() {
                 Some(start) => format!("{start} {code}"),
-                None => code.to_string(),
+                None => without_attributes(code).to_string(),
             };
             if heads[index].is_some() {
                 header_closed = closed;
@@ -560,7 +561,9 @@ impl RukSemicolonInferer {
                 && !self.continues_on_next_line(index)
                 && !block_like
                 && !looks_like_item_header_without_body(code)
-                && split_arrow(code).is_none()
+                && !split_arrow(code).is_some_and(|(pattern, _)| {
+                    open_delimiters(pattern).is_some_and(|open| open.is_empty())
+                })
                 && open_delimiters(code).is_some_and(|open| open.is_empty())
             {
                 let (code, comment) = raw.split_at(code_len(raw));
@@ -625,7 +628,8 @@ impl RukSemicolonInferer {
         }
         // A unit or tuple struct, as in `pub struct T(pub u32)`, or a `mod p` declaration has no
         // body.
-        if (is_struct_item(text) || starts_item(text, "mod")) && !text.ends_with(['{', '}']) {
+        let item = without_attributes(text);
+        if (is_struct_item(item) || starts_item(item, "mod")) && !item.ends_with(['{', '}']) {
             return true;
         }
         // An item or a `name! { ... }` invocation, which may also be an item, needs no `;`.
@@ -796,11 +800,11 @@ impl RukSemicolonInferer {
         let let_head = self.lines[..index]
             .iter()
             .rev()
-            .map(|line| split_line_comment(line.trim()).map_or(line.trim(), |(code, _)| code))
+            .map(|line| &line.trim()[..code_len(line.trim())])
             .zip(self.lines[..index].iter().rev())
             .filter(|(code, _)| !code.is_empty())
             .find(|(_, line)| raw_indent(line) <= indent)
-            .map(|(code, _)| code.trim_end())
+            .map(|(code, _)| code)
             .filter(|code| header == "else" && is_let(code) && !code.ends_with('{'));
         let let_else = let_head.is_some_and(|code| !code.ends_with('}'));
         let kind = if is_function(header) {
@@ -958,7 +962,8 @@ fn trim_outer_blank_lines(mut lines: Vec<String>) -> Vec<String> {
 }
 
 fn ruk_line_needs_semicolon(text: &str) -> bool {
-    let text = text.trim();
+    // Attributes before an item on its line, as in `#[derive(Debug)] struct A(u8)`.
+    let text = without_attributes(text.trim());
     !text.is_empty()
         && !is_comment(text)
         && !text.starts_with('#')
@@ -2464,15 +2469,17 @@ fn lone_opener_heads(lines: &[&str], in_literal: &[bool], opener: &str) -> Vec<O
             .map(|line| code(line))
             .collect::<Vec<_>>()
             .join(" ");
+        // An operator ends the header, unlike the type of `let y: Option<u8>`.
+        let ends_with_operator = header
+            .ends_with(['=', '+', '-', '*', '/', '%', '&', '|', '^', '!', ':'])
+            || header.split_whitespace().last().is_some_and(|token| {
+                token.ends_with(['<', '>']) && token.chars().all(|c| "=<>!-".contains(c))
+            });
         let is_statement = (is_let(&head_code) || is_assignment(&head_code))
-            && !header.ends_with([
-                '=', '+', '-', '*', '/', '%', '&', '|', '^', '<', '>', '!', ':',
-            ])
+            && !ends_with_operator
             && !has_control_operand(&header);
         // A block value indented under its header, as in `let fut = async move` / `    {`.
-        let opens_value = header.ends_with([
-            '=', '+', '-', '*', '/', '%', '&', '|', '^', '<', '>', '!', ':',
-        ]) || has_control_operand(&header);
+        let opens_value = ends_with_operator || has_control_operand(&header);
         if (raw_indent(lines[head]) == indent
             || (start == end && raw_indent(lines[head]) < indent && opens_value))
             && !is_statement
@@ -6480,20 +6487,24 @@ fn is_macro_item(text: &str) -> bool {
     text.starts_with("macro_rules!")
 }
 
+/// `text` after the attributes on its line, as `pub fn get(&self)` in
+/// `#[inline] pub fn get(&self)`.
+fn without_attributes(mut text: &str) -> &str {
+    while text.starts_with("#[")
+        && let Some(close) = matching_delimiter(text, 1, '[', ']', false)
+    {
+        text = text[close + 1..].trim_start();
+    }
+    text
+}
+
 /// Whether `text` starts a function item after its qualifiers, as in
 /// `pub(crate) const unsafe extern "C" fn`; `let q = quote! { fn f() {} }` is not one.
 fn is_function(text: &str) -> bool {
-    let mut rest = text;
+    let mut rest = without_attributes(text);
     loop {
         if rest.starts_with("fn ") {
             return true;
-        }
-        // An attribute on the same line, as in `#[inline] pub fn get(&self)`.
-        if rest.starts_with("#[")
-            && let Some(close) = matching_delimiter(rest, 1, '[', ']', false)
-        {
-            rest = rest[close + 1..].trim_start();
-            continue;
         }
         let qualified = match rest.strip_prefix("pub(") {
             Some(scope) => scope.find(')').map(|at| &scope[at + 1..]),
@@ -6705,7 +6716,9 @@ fn is_assignment(text: &str) -> bool {
     let chars = text.chars().collect::<Vec<_>>();
     // At the top level, unlike the `=` of `}, |x| { let y = x; y })`.
     top_level_position(&chars, 0, |at| {
-        [" += ", " -= ", " *= ", " /= ", " %= ", " = "]
+        [
+            " += ", " -= ", " *= ", " /= ", " %= ", " |= ", " &= ", " ^= ", " <<= ", " >>= ", " = ",
+        ]
             .iter()
             .any(|operator| chars[at..].starts_with(&operator.chars().collect::<Vec<_>>()))
     })
