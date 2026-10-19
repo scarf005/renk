@@ -1390,7 +1390,7 @@ fn convert_rust_statement(text: &str, parent: Option<RustBlockKind>) -> Converte
 
 fn classify_rust_block_header(header: &str, parent: Option<RustBlockKind>) -> RustBlockKind {
     let header = header.trim();
-    if is_struct_item(header) || starts_item(header, "union") {
+    if is_struct_item(header) {
         RustBlockKind::StructLike
     } else if is_enum_item(header) {
         RustBlockKind::Enum
@@ -1909,8 +1909,8 @@ fn joins_next_line(
             || next.is_some_and(|next| continues_where_clause(text, next, indent)))
 }
 
-/// Whether the outermost delimiter `text` leaves open is the `{` of a macro invocation, as in
-/// `quote_spanned! {span=>`, whose token tree continues on the next lines.
+/// Whether `text` leaves a macro invocation's delimiter open, as in `quote_spanned! {span=>` or
+/// `Some(quote! {`, whose token tree continues on the next lines.
 fn opens_macro_braces(text: &str) -> bool {
     let chars = text.chars().collect::<Vec<_>>();
     let mut open = Vec::new();
@@ -1929,8 +1929,9 @@ fn opens_macro_braces(text: &str) -> bool {
         }
         index += 1;
     }
-    open.first().is_some_and(|&at| {
-        chars[at] == '{' && chars[..at].iter().rev().find(|c| !c.is_whitespace()) == Some(&'!')
+    open.iter().any(|&at| {
+        let mut before = chars[..at].iter().rev().skip_while(|c| c.is_whitespace());
+        before.next() == Some(&'!') && before.next().is_some_and(|c| is_ident_continue(*c))
     })
 }
 
@@ -1941,7 +1942,8 @@ fn lone_opener_heads(lines: &[&str], in_literal: &[bool], opener: &str) -> Vec<O
     let code = |line: &str| without_trailing_line_comment(line).trim().to_string();
     let mut heads = vec![None; lines.len()];
     for (end, line) in lines.iter().enumerate() {
-        if code(line) != opener || (end > 0 && in_literal[end - 1]) {
+        // An empty body, as in `while step()` / `    && more()` / `{}`, also ends a header.
+        if !matches!(&*code(line), "{}") && code(line) != opener || (end > 0 && in_literal[end - 1]) {
             continue;
         }
         let indent = raw_indent(line);
@@ -2249,7 +2251,10 @@ fn accepts_closing_line(text: &str, siblings: &[Node]) -> bool {
                 .iter()
                 .rev()
                 .find(|node| !is_else_branch(node.text.trim()))
-                .is_some_and(|head| head.text.trim_end().ends_with('{')))
+                .is_some_and(|head| {
+                    let head = head.text.trim();
+                    head.ends_with('{') || is_trailing_if(strip_block_marker(head).0)
+                }))
 }
 
 /// The part after `}` of a closing line that continues the expression, such as `)?` in `})?`.
@@ -2773,6 +2778,9 @@ fn emit_general(node: &Node, context: Context, is_last: bool, emitter: &mut Emit
                     ""
                 }
             ));
+        } else if is_control(block_text) && block_text.ends_with("{}") && node.children.is_empty() {
+            // An empty body, as in `while step() {}`, is already Rust.
+            emitter.push(node, format!("{}{}", spaces(node.indent), lower_expr(block_text)));
         } else if is_control(block_text) {
             // Loop bodies and blocks whose value is unused end with a statement.
             emit_braced_item_statement(
@@ -5071,7 +5079,7 @@ fn read_ident(chars: &[char], mut index: usize) -> usize {
 }
 
 fn is_struct_item(text: &str) -> bool {
-    starts_item(text, "struct")
+    starts_item(text, "struct") || starts_item(text, "union")
 }
 
 fn is_enum_item(text: &str) -> bool {
