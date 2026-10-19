@@ -78,3 +78,17 @@ pub fn closing_comments(c: bool, v: &mut Vec<u8>) -> u8 {
     }; // picked
     n
 } // end
+
+pub struct Attributed(u32);
+
+impl Attributed {
+    #[inline] pub fn get(&self) -> Vec<u32> {
+        let v = vec![self.0];
+        v
+    }
+    #[inline] #[must_use] pub fn n(&self) -> u32 { self.0 }
+    #[allow(clippy::len_without_is_empty)] pub fn len(&self) -> usize {
+        #[allow(unused)] let x = 1;
+        self.0 as usize
+    }
+}
