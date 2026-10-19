@@ -111,3 +111,22 @@ pub fn operand_conditions(a: bool, mut has: bool) -> bool {
     }
     has
 }
+
+pub fn closure_operands(a: bool, kind: u8, items: &[u8]) -> bool {
+    if match kind {
+        0 => {
+            a
+                && items.iter().any(|item| match item {
+                    0 => false,
+                    _ => true,
+                })
+        }
+        _ => true,
+    } {
+        return true;
+    }
+    a
+        || items.iter().all(|item| {
+            *item > 1
+        })
+}
