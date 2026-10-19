@@ -6319,10 +6319,13 @@ fn is_trailing_match(text: &str) -> bool {
         && text.match_indices("match ").any(|(at, _)| {
             let before = text[..at].trim_end();
             !text[..at].ends_with(is_ident_continue)
-                && (before.ends_with(['=', '(', '|', ',', '>'])
-                    || before
-                        .strip_suffix("return")
-                        .is_some_and(|rest| !rest.ends_with(is_ident_continue)))
+                // An operand, as in `= match`, `&mut match`, or `!match`.
+                && (before.ends_with(['=', '(', '|', ',', '>', '&', '*', '!', '-', '+'])
+                    || ["return", "&mut"].iter().any(|keyword| {
+                        before
+                            .strip_suffix(keyword)
+                            .is_some_and(|rest| !rest.ends_with(is_ident_continue))
+                    }))
                 && !has_top_level_brace(&text[at..])
                 && open_delimiters(&text[at..]).is_some_and(|open| open.is_empty())
         })
