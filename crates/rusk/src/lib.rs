@@ -3392,12 +3392,16 @@ fn emit_scoped_sequence(
             context
         };
         let first = emitter.lines.len();
-        emit_node(
-            node,
-            node_context,
-            if is_branch { branch_is_value } else { is_last },
-            emitter,
-        );
+        let is_value = if is_branch { branch_is_value } else { is_last };
+        // An `else` branch stays inside the closures its chain's head opened; a scope of its
+        // own would drop the names it binds for later siblings, but a branch binds none.
+        if chain.is_some() {
+            with_value_scope(chain_closures.clone(), || {
+                emit_node(node, node_context, is_value, emitter)
+            });
+        } else {
+            emit_node(node, node_context, is_value, emitter);
+        }
         // Rust takes attributes only on a statement or a block, so the expression becomes one.
         if is_cfg_expression(index) && emitter.lines.len() > first {
             let line = &mut emitter.lines[first];
