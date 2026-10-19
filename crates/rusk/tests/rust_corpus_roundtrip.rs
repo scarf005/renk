@@ -147,6 +147,40 @@ fn rusk_corpus_transpiles_to_compilable_rust() {
     let _ = fs::remove_dir_all(out_dir);
 }
 
+#[test]
+fn docs_examples_transpile_to_compilable_rust() {
+    let out_dir = env::temp_dir().join(format!("rusk-docs-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&out_dir);
+    fs::create_dir_all(&out_dir).unwrap();
+    let mut pages = vec![Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/src")];
+    let mut examples = 0;
+    while let Some(path) = pages.pop() {
+        if path.is_dir() {
+            pages.extend(
+                fs::read_dir(&path)
+                    .unwrap()
+                    .map(|entry| entry.unwrap().path()),
+            );
+            continue;
+        }
+        let page = fs::read_to_string(&path).unwrap();
+        let name = path.file_stem().unwrap().to_string_lossy().to_string();
+        // Script examples start with a shebang and cargo-script frontmatter.
+        for (index, block) in page.split("```rsk\n").skip(1).enumerate() {
+            let rusk = &block[..block.find("```").unwrap()];
+            if rusk.starts_with("#!") {
+                continue;
+            }
+            let rust = to_rust(rusk, SourceSyntax::Rusk)
+                .unwrap_or_else(|error| panic!("{name} example {index}: {error}\n{rusk}"));
+            compile_rust(&out_dir, &format!("{name}-{index}"), "docs", &rust);
+            examples += 1;
+        }
+    }
+    assert!(examples > 0);
+    let _ = fs::remove_dir_all(out_dir);
+}
+
 /// Multi-line string literals, which every conversion must keep byte for byte.
 fn multiline_literals(source: &str) -> Vec<String> {
     fn collect(tokens: TokenStream, literals: &mut Vec<String>) {
