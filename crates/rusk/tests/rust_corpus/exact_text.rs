@@ -92,3 +92,16 @@ impl Attributed {
         self.0 as usize
     }
 }
+
+pub fn aligned_comments(v: &mut Vec<u8>) -> usize {
+    assert_eq!(
+        v.len(),
+        v.capacity().min(v.len())
+    ); // equal
+       // because min
+    let n = <Vec<(u8, u16)>>::new().len(); // n
+                                           // }
+    v.push(1); // pushed
+    n + <Vec<u8>>::with_capacity(1).capacity() // ;
+                                               // end
+}
