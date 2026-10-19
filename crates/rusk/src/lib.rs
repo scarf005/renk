@@ -293,6 +293,8 @@ enum RukScopeKind {
     Value,
     /// A `macro_rules!` body, which stays Rust tokens.
     Macro,
+    /// A loop body, or an `if`/`match`/`unsafe` block whose value is unused.
+    Statement,
     Item,
 }
 
@@ -339,6 +341,8 @@ impl RukSemicolonInferer {
         let mut delimiter_base_brace_depth = None::<usize>;
         // A function signature continued over several lines, until the line opening its body.
         let mut signature = None::<String>;
+        // The scope the previous line closed, which an `else {` line on its own continues.
+        let mut previous_closed = None::<RukScope>;
         for index in 0..self.lines.len() {
             let raw = self.lines[index].trim_end().to_string();
             let raw = raw.as_str();
@@ -368,7 +372,12 @@ impl RukSemicolonInferer {
             if is_function(&header) && !header.ends_with(['{', ';']) {
                 signature = Some(header);
             } else {
-                self.open_scope_from_line(&header, indent, closed);
+                let continued =
+                    previous_closed.filter(|_| is_else_branch(strip_open_brace(&header)));
+                self.open_scope_from_line(&header, index, indent, closed.or(continued));
+            }
+            if !code.is_empty() {
+                previous_closed = closed;
             }
             let next_brace_depth = brace_depth_after_line(brace_depth, text);
             if delimiter_depth == 0 && next_delimiter_depth > 0 {
@@ -473,12 +482,39 @@ impl RukSemicolonInferer {
         self.scopes.iter().rev().find_map(|scope| match scope.kind {
             RukScopeKind::Function { returns_value } => Some(returns_value),
             RukScopeKind::Value => Some(true),
+            RukScopeKind::Statement => Some(false),
             _ => None,
         }) == Some(true)
     }
 
+    /// The line closing the block chain opened at `index`: the first `}` line at `indent` that no
+    /// `else` continues, on the same or the next line.
+    fn block_chain_end(&self, index: usize, indent: usize) -> Option<usize> {
+        let is_else = |text: &str| is_else_branch(strip_open_brace(text.trim()));
+        (index + 1..self.lines.len())
+            .filter(|&line| {
+                let text = self.lines[line].trim();
+                !text.is_empty()
+                    && !text.starts_with("//")
+                    && raw_indent(&self.lines[line]) <= indent
+            })
+            .find(|&line| {
+                let text = self.lines[line].trim_start();
+                !is_else(text)
+                    && !text.strip_prefix('}').is_some_and(is_else)
+                    && !self.next_code_line(line).is_some_and(is_else)
+            })
+            .filter(|&line| self.lines[line].trim_start().starts_with('}'))
+    }
+
     /// Opens the scope of a line ending with `{`; a `} else {` line continues the closed scope.
-    fn open_scope_from_line(&mut self, text: &str, indent: usize, closed: Option<RukScope>) {
+    fn open_scope_from_line(
+        &mut self,
+        text: &str,
+        index: usize,
+        indent: usize,
+        closed: Option<RukScope>,
+    ) {
         if !text.ends_with('{') {
             return;
         }
@@ -497,11 +533,25 @@ impl RukSemicolonInferer {
             RukScopeKind::Macro
         } else if opens_value_block(header) {
             RukScopeKind::Value
+        } else if is_loop(header) {
+            RukScopeKind::Statement
+        } else if let Some(end) = self
+            .block_chain_end(index, indent)
+            .filter(|_| starts_control_flow(header))
+        {
+            if self.tail_is_value() && self.is_tail_of_current_scope(end) {
+                RukScopeKind::Value
+            } else {
+                RukScopeKind::Statement
+            }
         } else {
             RukScopeKind::Item
         };
-        let ends_statement = !is_function(header) && (is_let(header) || is_assignment(header))
-            && !starts_control_flow(header);
+        // A `match` whose value is unused ends with `;`, so its arms need not be `()`.
+        let ends_statement = (!is_function(header)
+            && (is_let(header) || is_assignment(header))
+            && !starts_control_flow(header))
+            || (kind == RukScopeKind::Statement && header.starts_with("match "));
         self.scopes.push(RukScope {
             indent,
             kind,
@@ -2245,12 +2295,30 @@ fn emit_nodes(nodes: &[Node], context: Context, emitter: &mut Emitter) {
 /// branch of the chain.
 fn emit_sequence(nodes: &[Node], context: Context, tail_is_value: bool, emitter: &mut Emitter) {
     let mut chain: Option<(String, bool)> = None;
+    let mut branch_is_value = false;
     for (index, node) in nodes.iter().enumerate() {
         let is_last = tail_is_value && index + 1 == nodes.len();
-        emit_node(node, context, is_last, emitter);
+        let head = node.text.trim();
+        if !is_else_branch(head) {
+            // A chain's branches are values when the chain is the tail or its head uses them, as
+            // in `let x = if c {`.
+            let (head, _) = strip_explicit_semicolon(head);
+            branch_is_value = !is_control(strip_block_marker(head).0)
+                || (tail_is_value
+                    && nodes[index + 1..]
+                        .iter()
+                        .all(|next| is_else_branch(next.text.trim())));
+        }
         let continues = nodes
             .get(index + 1)
             .is_some_and(|next| is_else_branch(next.text.trim()));
+        let is_branch = chain.is_some() || continues;
+        emit_node(
+            node,
+            context,
+            if is_branch { branch_is_value } else { is_last },
+            emitter,
+        );
         if !continues && chain.is_none() {
             continue;
         }
@@ -2429,7 +2497,8 @@ fn emit_general(node: &Node, context: Context, is_last: bool, emitter: &mut Emit
                 Context::Match,
                 emitter,
                 lower_expr(block_text),
-                has_explicit_semicolon,
+                has_explicit_semicolon || !is_last,
+                true,
             );
         } else if is_trailing_match(block_text)
             || (!node.children.is_empty() && is_trailing_if(block_text))
@@ -2458,12 +2527,14 @@ fn emit_general(node: &Node, context: Context, is_last: bool, emitter: &mut Emit
                 }
             ));
         } else if is_control(block_text) {
+            // Loop bodies and blocks whose value is unused end with a statement.
             emit_braced_item_statement(
                 node,
                 Context::Block,
                 emitter,
                 lower_expr(block_text),
                 has_explicit_semicolon,
+                is_last && !is_loop(block_text),
             );
         } else if looks_like_struct_literal(node) {
             emit_struct_literal_expr(
@@ -2479,7 +2550,7 @@ fn emit_general(node: &Node, context: Context, is_last: bool, emitter: &mut Emit
 }
 
 fn emit_braced_item(node: &Node, child_context: Context, emitter: &mut Emitter, header: String) {
-    emit_braced_item_statement(node, child_context, emitter, header, false);
+    emit_braced_item_statement(node, child_context, emitter, header, false, true);
 }
 
 fn emit_braced_item_statement(
@@ -2488,6 +2559,7 @@ fn emit_braced_item_statement(
     emitter: &mut Emitter,
     header: String,
     has_explicit_semicolon: bool,
+    tail_is_value: bool,
 ) {
     let indent = spaces(node.indent);
     let (header, _) = strip_block_marker(&header);
@@ -2502,7 +2574,7 @@ fn emit_braced_item_statement(
         return;
     }
     emitter.push(node, format!("{}{} {{", indent, header));
-    emit_nodes(&node.children, child_context, emitter);
+    emit_sequence(&node.children, child_context, tail_is_value, emitter);
     emitter.push_generated(format!(
         "{}}}{}",
         indent,
@@ -2605,6 +2677,7 @@ fn emit_statement(node: &Node, _context: Context, is_last: bool, emitter: &mut E
             emitter,
             lower_expr(block_text),
             has_explicit_semicolon,
+            is_last && !is_loop(block_text),
         );
     } else if !node.children.is_empty() && looks_like_struct_literal(node) {
         emit_struct_literal_expr(
@@ -4388,6 +4461,11 @@ fn is_control(text: &str) -> bool {
         || text == "async"
 }
 
+fn is_loop(text: &str) -> bool {
+    let text = strip_control_label(text);
+    text == "loop" || text.starts_with("while ") || text.starts_with("for ")
+}
+
 fn strip_control_label(text: &str) -> &str {
     let text = text.trim_start();
     let Some(rest) = text.strip_prefix('\'') else {
@@ -4664,7 +4742,7 @@ fn log(value: Result<i32, String>) {
             println!("{}", number);
         },
         Err(error) => error,
-    }
+    };
 }
 "#
         );
