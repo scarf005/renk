@@ -71,3 +71,14 @@ pub mod nested {
         where_
     }
 }
+
+pub trait Concat: Iterator {
+    fn concat_all(self) -> Self::Item
+    where
+        Self: Sized,
+        Self::Item:
+            Extend<<Self::Item as IntoIterator>::Item> + IntoIterator + Default,
+    {
+        Default::default()
+    }
+}
