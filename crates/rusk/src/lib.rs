@@ -3996,12 +3996,14 @@ fn type_annotation_spans(chars: &[char]) -> Vec<(usize, usize)> {
         };
         let mut cursor = params_end + 1;
         skip_whitespace_chars(chars, &mut cursor);
+        index = params_end + 1;
         if chars[cursor..].starts_with(&['-', '>']) {
             let return_end =
                 top_level_position(chars, cursor + 2, |at| chars[at] == '{').unwrap_or(chars.len());
             spans.push((cursor + 2, return_end));
+            // Spans stay ordered: the scan resumes after the return type, at its body.
+            index = return_end;
         }
-        index = params_end + 1;
     }
     spans
 }
