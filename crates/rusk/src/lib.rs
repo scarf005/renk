@@ -1995,11 +1995,7 @@ fn split_inline_macro_arms(source: &str) -> String {
                 delimiters.update(&text).is_some_and(<[char]>::is_empty)
             })
         });
-        let closes = |end: usize| {
-            without_trailing_line_comment(lines[end])
-                .trim_end()
-                .ends_with('}')
-        };
+        let closes = |end: usize| lines[end][..code_len(lines[end])].ends_with('}');
         let (Some(open), Some(end)) = (open, end.filter(|&end| end > index && closes(end))) else {
             output.push(line.to_string());
             index += 1;
@@ -2016,7 +2012,7 @@ fn split_inline_macro_arms(source: &str) -> String {
                 format!("    {}", lines[at])
             });
         }
-        let close = without_trailing_line_comment(lines[end]).trim_end();
+        let close = &lines[end][..code_len(lines[end])];
         let head = &close[..close.len() - 1];
         if !head.trim().is_empty() {
             output.push(format!("    {head}"));
@@ -2539,6 +2535,28 @@ fn has_control_operand(text: &str) -> bool {
 fn split_trailing_comment(text: &str) -> (&str, &str) {
     let code_len = without_trailing_line_comment(text).trim_end().len();
     text.split_at(if code_len == 0 { text.len() } else { code_len })
+}
+
+/// The byte length of `text` without the spaces and `//` or `/* */` comments that end it.
+fn code_len(text: &str) -> usize {
+    let chars = text.chars().collect::<Vec<_>>();
+    let (mut end, mut index) = (0, 0);
+    while index < chars.len() {
+        if let Some(span) = opaque_span_end(&chars, index) {
+            if !(chars[index] == '/' && matches!(chars.get(index + 1), Some('/' | '*'))) {
+                end = span + 1;
+            }
+            index = span + 1;
+            continue;
+        }
+        if !chars[index].is_whitespace() {
+            end = index + 1;
+        }
+        index += 1;
+    }
+    text.char_indices()
+        .nth(end)
+        .map_or(text.len(), |(at, _)| at)
 }
 
 /// `text` without a `//` comment that runs to its end.
