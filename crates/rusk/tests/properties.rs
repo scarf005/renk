@@ -150,3 +150,15 @@ proptest! {
         }
     }
 }
+
+#[test]
+fn long_groups_convert_in_linear_time() {
+    let rows = (0..20_000)
+        .map(|n| format!("    ({n}, {n}),\n"))
+        .collect::<String>();
+    let rust = format!("pub static TABLE: &[(u32, u32)] = &[\n{rows}];\n");
+    let start = std::time::Instant::now();
+    transpile(&rust_to_rusk(&rust).unwrap()).unwrap();
+    let elapsed = start.elapsed();
+    assert!(elapsed < std::time::Duration::from_secs(10), "{elapsed:?}");
+}
