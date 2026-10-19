@@ -193,3 +193,29 @@ pub fn value_scrutinees(a: Option<u8>, b: Option<u8>) -> u8 {
     };
     last
 }
+
+pub fn match_operands(a: u8, b: Option<u8>) -> u8 {
+    if a > 1 {
+        return 1;
+    } else if a > 2
+        && a < 9
+        && match b {
+            Some(_) => false,
+            _ => true,
+        }
+    {
+        return 2;
+    }
+    match b {
+        Some(found)
+            if found > 1
+                && match a {
+                    0 => false,
+                    _ => true,
+                } =>
+        {
+            found
+        }
+        _ => 0,
+    }
+}
