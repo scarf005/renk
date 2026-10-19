@@ -2286,10 +2286,18 @@ fn lone_opener_heads(lines: &[&str], in_literal: &[bool], opener: &str) -> Vec<O
         };
         let head_code = code(lines[head]);
         // A `let` or assignment continued on its lines, as in `let x = foo(` / `)` or `let n = v`
-        // / `.count()`, ends before a bare block unless its value is a control expression.
+        // / `.count()`, ends before a bare block unless the block is its value, as in `let x =`
+        // / `{`, or the header holds a control expression, as in `let it: I<Item = u8> = if c`.
+        let header = lines[head..end]
+            .iter()
+            .map(|line| code(line))
+            .collect::<Vec<_>>()
+            .join(" ");
         let is_statement = (is_let(&head_code) || is_assignment(&head_code))
-            && split_once_top_level(&head_code, '=')
-                .is_none_or(|(_, value)| !starts_control_flow(value.trim()));
+            && !header.ends_with([
+                '=', '+', '-', '*', '/', '%', '&', '|', '^', '<', '>', '!', ':',
+            ])
+            && !has_control_operand(&header);
         if raw_indent(lines[head]) == indent
             && !is_statement
             // A control or `let` header right before its `{` line, or a header continued on
@@ -2365,6 +2373,107 @@ fn continues_where_clause(text: &str, next: &str, indent: usize) -> bool {
         return raw_indent(next) == indent && starts_where(&next_code);
     }
     raw_indent(next) > indent || (raw_indent(next) == indent && matches!(&*next_code, ":" | "{"))
+}
+
+/// Whether `text` holds a control expression as an operand or a let-else outside its groups, as
+/// in `= if c`, `&mut match x`, `= 'a: loop`, or `= y else`, unlike `|x| if x` in a closure,
+/// `"if"`, or `dyn for<'a> Fn`.
+fn has_control_operand(text: &str) -> bool {
+    let chars = text.chars().collect::<Vec<_>>();
+    let mut depth = 0usize;
+    let mut index = 0;
+    while index < chars.len() {
+        if let Some(end) = opaque_span_end(&chars, index) {
+            index = end + 1;
+            continue;
+        }
+        match chars[index] {
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth = depth.saturating_sub(1),
+            character
+                if depth == 0
+                    && (index == 0 || !is_ident_continue(chars[index - 1]))
+                    && is_ident_continue(character) =>
+            {
+                let word = chars[index..]
+                    .iter()
+                    .take_while(|c| is_ident_continue(**c))
+                    .collect::<String>();
+                let before = chars[..index].iter().collect::<String>();
+                let before = before.trim_end();
+                // A label, as in `'a: loop`, sits between the operator and the loop.
+                let before = before
+                    .strip_suffix(':')
+                    .and_then(|head| head.trim_end_matches(is_ident_continue).strip_suffix('\''))
+                    .unwrap_or(before)
+                    .trim_end();
+                // An operand follows an operator or a keyword such as `&mut` or `return`, unlike
+                // `dyn for<'a>`.
+                let operand = before.chars().last().is_some_and(|last| {
+                    !is_ident_continue(last) && !matches!(last, ')' | ']' | '}' | '"' | '\'')
+                }) || ["mut", "const", "return", "break", "move"].iter().any(
+                    |keyword| {
+                        before
+                            .strip_suffix(keyword)
+                            .is_some_and(|head| !head.ends_with(is_ident_continue))
+                    },
+                );
+                let end = index + word.chars().count();
+                // The expression stays open to the end of `text` unless a `{` group follows, as
+                // in `unsafe { g() } + 1`; a `for` loop also has its `in`.
+                let (mut inner, mut cursor, mut closed, mut has_in) = (0usize, end, false, false);
+                while cursor < chars.len() {
+                    if let Some(span) = opaque_span_end(&chars, cursor) {
+                        cursor = span + 1;
+                        continue;
+                    }
+                    match chars[cursor] {
+                        '{' => {
+                            closed |= inner == 0;
+                            inner += 1;
+                        }
+                        '(' | '[' => inner += 1,
+                        ')' | ']' | '}' => inner = inner.saturating_sub(1),
+                        'i' if inner == 0
+                            && chars[cursor - 1] == ' '
+                            && chars[cursor..].starts_with(&['i', 'n', ' ']) =>
+                        {
+                            has_in = true
+                        }
+                        _ => {}
+                    }
+                    cursor += 1;
+                }
+                let after = chars[end..].iter().collect::<String>();
+                let after = after.trim_start();
+                let after = after.strip_prefix("move").unwrap_or(after).trim_start();
+                // `unsafe fn()`, `for<'a> fn()`, and `async || 1` are types and closures, and
+                // `r#else` is a name.
+                let opens = !closed
+                    && match &*word {
+                        "unsafe" | "async" => after.is_empty(),
+                        "for" => has_in,
+                        _ => true,
+                    };
+                let raw = before.ends_with("r#");
+                if !raw
+                    && opens
+                    && (word == "else"
+                        || matches!(
+                            &*word,
+                            "if" | "match" | "while" | "for" | "loop" | "unsafe" | "async"
+                        ) && operand)
+                {
+                    return true;
+                }
+                index += word.chars().count();
+                continue;
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+    false
 }
 
 /// `text` split before a `//` comment that ends it, keeping the spaces before the comment with
