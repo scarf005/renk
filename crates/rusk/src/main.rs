@@ -623,9 +623,9 @@ fn script_package(rust_path: &Path) -> String {
         .parent()
         .and_then(Path::file_name)
         .unwrap_or_default();
-    let mut name = stem.replace(|c: char| !c.is_alphanumeric() && c != '-', "_");
-    // Package names cannot start with a digit.
-    if name.starts_with(|c: char| c.is_ascii_digit()) {
+    let mut name = stem.replace(|c: char| !c.is_ascii_alphanumeric() && c != '-', "_");
+    // Package names must start with a letter or `_`.
+    if !name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_') {
         name.insert(0, '_');
     }
     format!("{name}-{}", hash.to_string_lossy())
