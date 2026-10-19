@@ -756,7 +756,7 @@ fn trim_outer_blank_lines(mut lines: Vec<String>) -> Vec<String> {
 fn ruk_line_needs_semicolon(text: &str) -> bool {
     let text = text.trim();
     !text.is_empty()
-        && !text.starts_with("//")
+        && !is_comment(text)
         && !text.starts_with('#')
         && !text.ends_with(';')
         && !text.ends_with(',')
@@ -1327,7 +1327,7 @@ fn is_rust_closing_delimiter_line(text: &str) -> bool {
 
 fn convert_rust_statement(text: &str, parent: Option<RustBlockKind>) -> ConvertedRustStatement {
     let text = text.trim();
-    if text.starts_with("//") {
+    if is_comment(text) {
         return ConvertedRustStatement {
             text: text.to_string(),
             opens: None,
@@ -2332,7 +2332,7 @@ fn validate_nodes(nodes: &[Node], context: Context) -> Result<(), TranspileError
 
 fn validate_node(node: &Node, context: Context) -> Result<(), TranspileError> {
     let text = node.text.trim();
-    if text.starts_with("//") || lower_attribute(text).is_some() {
+    if is_comment(text) || lower_attribute(text).is_some() {
         return reject_children(node, "attributes and comments cannot own indented blocks");
     }
 
@@ -2682,7 +2682,7 @@ fn emit_node(node: &Node, context: Context, is_last: bool, emitter: &mut Emitter
 
 fn emit_node_body(node: &Node, context: Context, is_last: bool, emitter: &mut Emitter) {
     let text = node.text.trim();
-    if text.starts_with("//") {
+    if is_comment(text) {
         emitter.push(node, format!("{}{}", spaces(node.indent), text));
         return;
     }
@@ -2704,7 +2704,7 @@ fn emit_node_body(node: &Node, context: Context, is_last: bool, emitter: &mut Em
 
 fn classify_node(node: &Node, context: Context) -> String {
     let text = node.text.trim();
-    if text.starts_with("//") {
+    if is_comment(text) {
         "comment".to_string()
     } else if lower_attribute(text).is_some() {
         "attribute".to_string()
@@ -2796,6 +2796,13 @@ fn emit_general(node: &Node, context: Context, is_last: bool, emitter: &mut Emit
         emit_braced_item(node, Context::Macro, emitter, lower_signature(block_text));
     } else if is_function(block_text) {
         emit_function(node, emitter);
+    } else if starts_item(strip_explicit_semicolon(text).0, "mod")
+        && node.children.is_empty()
+        && !has_block_marker(text)
+    {
+        // A module declared in its own file.
+        let (text, _) = strip_explicit_semicolon(text);
+        emitter.push(node, format!("{}{};", spaces(node.indent), lower_signature(text)));
     } else if is_impl_or_mod_item(block_text) {
         emit_braced_item(node, Context::Block, emitter, lower_signature(block_text));
     } else {
@@ -5135,6 +5142,13 @@ fn read_ident(chars: &[char], mut index: usize) -> usize {
         index += 1;
     }
     index
+}
+
+/// A `//` line or a text that is one block comment, such as a multi-line `/*! ... */`.
+fn is_comment(text: &str) -> bool {
+    let chars = text.chars().collect::<Vec<_>>();
+    text.starts_with("//")
+        || (text.starts_with("/*") && opaque_span_end(&chars, 0) == Some(chars.len() - 1))
 }
 
 fn is_struct_item(text: &str) -> bool {
