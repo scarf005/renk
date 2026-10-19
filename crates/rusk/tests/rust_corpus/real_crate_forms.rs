@@ -228,3 +228,18 @@ pub fn field(ident: Option<String>, index: usize) -> Field {
         },
     }
 }
+
+pub fn closure_match_operands(xs: Vec<u8>) -> bool {
+    let any = xs.iter().any(|x| match x {
+        0 => true,
+        _ => false,
+    }) && xs.len() > 2;
+    let count = xs.iter().filter(|x| match x {
+        0 => true,
+        _ => false, // }) || false
+    }).count() + 1;
+    any || xs.iter().all(|x| match x {
+        1 => true,
+        _ => false,
+    }) || count > 3
+}
