@@ -24,4 +24,5 @@ toml_edit = "0.25.17"
 
 [dev-dependencies]
 proptest = { version = "1", default-features = false, features = ["std"] }
+ra-ap-rustc_lexer = "0.178.0"
 tower = { version = "0.5", features = ["util"] }
