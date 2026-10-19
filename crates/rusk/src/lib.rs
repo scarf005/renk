@@ -547,9 +547,40 @@ impl RukSemicolonInferer {
             return raw.to_string();
         }
         if !self.should_add_semicolon(code, index) {
+            // Rust takes attributes only on a statement or a block, so a cfg-selected tail such
+            // as `#[cfg(unix)]` / `v.len()` becomes a block.
+            let block_like = code.ends_with('}')
+                && (starts_control_flow(code)
+                    || code.starts_with(['{', '#'])
+                    || code.starts_with("match ")
+                    || is_brace_macro_invocation(code));
+            if self.has_cfg(index)
+                && self.tail_is_value()
+                && (self.is_tail_of_current_scope(index) || self.is_cfg_alternative(index, index))
+                && !self.continues_on_next_line(index)
+                && !block_like
+                && !looks_like_item_header_without_body(code)
+                && split_arrow(code).is_none()
+                && open_delimiters(code).is_some_and(|open| open.is_empty())
+            {
+                let (code, comment) = raw.split_at(code_len(raw));
+                let indent = raw_indent(code);
+                return format!("{}{{ {} }}{comment}", &code[..indent], &code[indent..]);
+            }
             return raw.to_string();
         }
         insert_semicolon(raw)
+    }
+
+    /// Whether the attributes right before line `index` hold a `#[cfg(...)]`.
+    fn has_cfg(&self, index: usize) -> bool {
+        self.lines[..index]
+            .iter()
+            .rev()
+            .map(|line| line.trim())
+            .filter(|line| !line.is_empty() && !is_comment(line))
+            .take_while(|line| line.starts_with("#["))
+            .any(|line| line.starts_with("#[cfg"))
     }
 
     /// Whether the next code line continues this expression: `.method()`, `?`, `| pattern`,
@@ -614,10 +645,22 @@ impl RukSemicolonInferer {
     /// Whether lines `start..=end` are one of several tails, each under its own `#[cfg(...)]`,
     /// which only other alternatives follow.
     fn is_cfg_alternative(&self, start: usize, end: usize) -> bool {
-        let is_cfg = |line: Option<&str>| line.is_some_and(|line| line.trim().starts_with("#[cfg"));
+        // The line starting a statement continued on `start`, as in `{ v.iter()` / `.count() }`.
+        let mut start = start;
+        while let Some(previous) = (0..start).rev().find(|&line| {
+            let text = self.lines[line].trim();
+            !text.is_empty() && !is_comment(text)
+        }) && {
+            let text = self.lines[start].trim_start();
+            text.starts_with(['.', '?']) || starts_with_binary_operator(text)
+        } {
+            start = previous;
+        }
         let indent = raw_indent(&self.lines[start]);
-        is_cfg(self.previous_code_line(start))
-            && is_cfg(self.next_code_line(end))
+        self.has_cfg(start)
+            && self
+                .next_code_line(end)
+                .is_some_and(|line| line.trim().starts_with("#["))
             && (end + 1..self.lines.len())
                 .filter(|&later| {
                     let text = self.lines[later].trim();
@@ -630,7 +673,7 @@ impl RukSemicolonInferer {
                             .trim_start()
                             .starts_with(['#', '}', ')', ']'])
                 })
-                .all(|later| is_cfg(self.previous_code_line(later)))
+                .all(|later| self.has_cfg(later))
     }
 
     fn is_tail_of_current_scope(&self, index: usize) -> bool {
@@ -3249,15 +3292,45 @@ fn emit_scoped_sequence(
     };
     // Nodes `start..=end` are one of several tails, each under its own `#[cfg(...)]`, when only
     // other alternatives follow them.
+    let is_attribute = |index: usize| nodes[index].text.trim().starts_with("#[");
+    // Attributes before `index`, as in `#[cfg(unix)]` / `#[allow(unused)]`, hold a `cfg`.
+    let has_cfg = |index: usize| {
+        (0..index)
+            .rev()
+            .take_while(|&before| is_attribute(before))
+            .any(is_cfg)
+    };
     let is_cfg_tail = |start: usize, end: usize| {
-        start > 0
-            && is_cfg(start - 1)
+        has_cfg(start)
             && end + 1 < nodes.len()
             && is_cfg(end + 1)
             && (end + 1..nodes.len()).all(|later| {
                 let text = nodes[later].text.trim();
-                is_cfg(later) || is_cfg(later - 1) || is_comment(text) || is_else_branch(text)
+                is_attribute(later) || has_cfg(later) || is_comment(text) || is_else_branch(text)
             })
+    };
+    // A cfg-selected tail that is not a block-like expression, as in `#[cfg(unix)]` / `v.len()`.
+    let is_cfg_expression = |index: usize| {
+        let (head, _) = strip_block_marker(nodes[index].text.trim());
+        let head = strip_open_brace(head);
+        tail_is_value
+            && context == Context::Block
+            && !looks_like_item_header_without_body(head)
+            && !["use", "const", "static", "type", "extern"]
+                .iter()
+                .any(|keyword| starts_item(head, keyword))
+            && !is_macro_item(head)
+            && has_cfg(index)
+            && (ends_at(index) || is_cfg_tail(index, index))
+            && !is_attribute(index)
+            && !is_comment(head)
+            && !is_control(head)
+            && !is_match(head)
+            && !head.starts_with(['{', '#'])
+            && !nodes[index + 1..]
+                .iter()
+                .find(|next| !is_comment(next.text.trim()))
+                .is_some_and(|next| is_else_branch(next.text.trim()))
     };
     for (index, node) in nodes.iter().enumerate() {
         let is_last = tail_is_value && (ends_at(index) || is_cfg_tail(chain_head(index), index));
@@ -3293,12 +3366,21 @@ fn emit_scoped_sequence(
         } else {
             context
         };
+        let first = emitter.lines.len();
         emit_node(
             node,
             node_context,
             if is_branch { branch_is_value } else { is_last },
             emitter,
         );
+        // Rust takes attributes only on a statement or a block, so the expression becomes one.
+        if is_cfg_expression(index) && emitter.lines.len() > first {
+            let line = &mut emitter.lines[first];
+            line.insert_str(raw_indent(line), "{ ");
+            if let Some(last) = emitter.lines.last_mut() {
+                last.push_str(" }");
+            }
+        }
         if !continues && chain.is_none() {
             continue;
         }
