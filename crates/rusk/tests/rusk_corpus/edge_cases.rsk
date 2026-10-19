@@ -276,3 +276,20 @@ pub fn closure_scoped_names() -> usize:
     let m = [1u8].iter().map(|env: &u8| *env as usize).sum[usize]() + env.vars().count()
     let k = |env: usize| env + 1
     n + m + k(env.args().len())
+
+pub fn closure_closing_lines(v: Vec[u8]) -> usize:
+    let n = v.iter().map(|env| {
+        env.count_ones() as usize
+    }).sum[usize]() + env.args().count() // sum
+    n
+
+pub fn chain_closing_lines(c: bool):
+    let n = [vec![String.new()]].iter().map(|env| {
+        let r = env.iter().map(|x| if c {
+            x.len()
+        else:
+            2
+        }).count() + env.len()
+        r
+    }).sum[usize]()
+    std.mem.drop(n)

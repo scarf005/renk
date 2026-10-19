@@ -300,3 +300,45 @@ pub fn cfg_macro_tail() -> u8 {
     #[cfg(not(unix))]
     2
 }
+
+#[derive(Debug)] pub(crate) struct Attributed(u8)
+
+pub fn reviewed_forms(c: bool, o: Option<u8>) -> usize {
+    let y: Option<u8>
+        {
+            bare()
+        }
+    y = o
+    let mut q = 0u8
+    q |=
+    {
+        1
+    }
+    q &= match c {
+        true => 3,
+        false => 1,
+    }
+    let w = if c { 1 } /* one */
+    else {
+        2
+    }
+    let a = Attributed(q).0 as usize + w
+    #[cfg(unix)]
+    o.map(|x| match x { _ => a }).unwrap_or(a)
+    #[cfg(not(unix))]
+    a
+}
+
+#[derive(Debug)] pub struct Allman
+{
+    a: u8,
+}
+
+#[cfg(unix)] impl Allman
+{
+    pub fn a(&self) -> u8 { self.a }
+}
+
+#[allow(dead_code)] struct Bound<X>(X)
+where
+    X: Copy

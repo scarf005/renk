@@ -45,3 +45,11 @@ pub mod platform:
 #[allow(unused)]
 pub mod platform:
     pub fn one() -> u8 = 2
+
+pub fn cfg_commented() -> u8:
+    #[cfg(unix)]
+    1 // a
+      // b
+    // between
+    #[cfg(not(unix))]
+    2

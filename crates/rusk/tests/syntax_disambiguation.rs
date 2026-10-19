@@ -1027,3 +1027,14 @@ fn local_imports_of_a_function_keep_it_a_value() {
     );
     assert_lines(&output, &["parse_args.clone()(t)"]);
 }
+
+#[test]
+fn matches_whose_arms_end_with_values_end_with_a_semicolon() {
+    let output = rust(
+        "fn g():\n    ()\nfn f(o: Option[u8], c: bool):\n    match o:\n        Some(_) =>:\n            if c:\n                1\n            else:\n                2\n        None =>:\n            loop:\n                break 5\n    g()\n",
+    );
+    assert_lines(
+        &output,
+        &["            } else {\n                2\n            }\n", "    };\n    g();\n"],
+    );
+}
