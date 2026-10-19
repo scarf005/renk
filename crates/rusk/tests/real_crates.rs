@@ -32,6 +32,14 @@ const CRATES: &[(&str, &str)] = &[
     ("unicode-width", "0.2.2"),
 ];
 
+/// The library builds whose MIR is compared: default features, every feature, and the unit
+/// tests with every feature.
+const MIR_CONFIGS: &[(&str, &[&str])] = &[
+    ("default", &[]),
+    ("all-features", &["--all-features"]),
+    ("tests", &["--all-features", "--profile", "test"]),
+];
+
 #[test]
 #[ignore = "downloads crates from crates.io"]
 fn real_crates_roundtrip_with_their_comments_and_mir() {
@@ -76,31 +84,44 @@ fn real_crates_roundtrip_with_their_comments_and_mir() {
             }
             continue;
         }
-        let mir_dir = |variant: &str| root.join("mir").join(format!("{name}-{version}-{variant}"));
-        let before = mir(&baseline, &mir_dir("original"))
-            .unwrap_or_else(|errors| panic!("{name}-{version} has no MIR unconverted:\n{errors}"));
-        match mir(&converted, &mir_dir("converted")) {
-            Ok(after) => {
-                let (before, after) = (mir_items(&before), mir_items(&after));
-                let (before, after): (Vec<_>, Vec<_>) = (
-                    before.iter().map(String::as_str).collect(),
-                    after.iter().map(String::as_str).collect(),
+        for (config, args) in MIR_CONFIGS {
+            let mir_dir = |variant: &str| {
+                root.join("mir")
+                    .join(format!("{name}-{version}-{config}-{variant}"))
+            };
+            // Features or tests some crates leave for other toolchains or platforms.
+            let Ok(before) = mir(&baseline, &mir_dir("original"), args) else {
+                assert!(
+                    *config != "default",
+                    "{name}-{version} has no MIR unconverted"
                 );
-                if let Some(index) = first_difference(&before, &after) {
-                    let (old, new): (Vec<_>, Vec<_>) = (
-                        before.get(index).map_or("", |item| item).lines().collect(),
-                        after.get(index).map_or("", |item| item).lines().collect(),
+                continue;
+            };
+            match mir(&converted, &mir_dir("converted"), args) {
+                Ok(after) => {
+                    let (before, after) = (mir_items(&before), mir_items(&after));
+                    let (before, after): (Vec<_>, Vec<_>) = (
+                        before.iter().map(String::as_str).collect(),
+                        after.iter().map(String::as_str).collect(),
                     );
-                    let line = first_difference(&old, &new).unwrap_or_default();
-                    failures.push(format!(
-                        "{name}-{version} MIR of {:?} changed: {:?} -> {:?}",
-                        old.first(),
-                        old.get(line),
-                        new.get(line)
-                    ));
+                    if let Some(index) = first_difference(&before, &after) {
+                        let (old, new): (Vec<_>, Vec<_>) = (
+                            before.get(index).map_or("", |item| item).lines().collect(),
+                            after.get(index).map_or("", |item| item).lines().collect(),
+                        );
+                        let line = first_difference(&old, &new).unwrap_or_default();
+                        failures.push(format!(
+                            "{name}-{version} {config} MIR of {:?} changed: {:?} -> {:?}",
+                            old.first(),
+                            old.get(line),
+                            new.get(line)
+                        ));
+                    }
+                }
+                Err(errors) => {
+                    failures.push(format!("{name}-{version} has no {config} MIR:\n{errors}"))
                 }
             }
-            Err(errors) => failures.push(format!("{name}-{version} has no MIR:\n{errors}")),
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
@@ -143,6 +164,33 @@ fn mir_items_ignore_layout_but_not_code() {
         "",
     );
     assert_eq!(mir_items(&unit)[0], mir_items(&mir(entry, ""))[0]);
+    let never = |binding: &str| mir(&format!("    let {binding}_5: !;\n{entry}"), "");
+    assert_eq!(mir_items(&never("mut "))[0], mir_items(&never(""))[0]);
+    let test = |line: u32, value: u8| {
+        mir(
+            &entry.replace(
+                "        switchInt",
+                &format!(
+                    "        _1 = TestDesc {{ start_line: const {line}_usize, start_col: const 4_usize, end_line: const {line}_usize, end_col: const 9_usize, value: const {value}_u8 }};\n        switchInt"
+                ),
+            ),
+            "",
+        )
+    };
+    assert_eq!(mir_items(&test(3, 1))[0], mir_items(&test(4, 1))[0]);
+    let dump = |name: &str, padding: &str| {
+        mir(
+            entry,
+            &format!(
+                "{name} (size: 8, align: 8) {{\n    ╾──{name}<imm>{padding}╼ │ ╾──────╼\n}}\n"
+            ),
+        )
+    };
+    assert_eq!(
+        mir_items(&dump("alloc12", "──")),
+        mir_items(&dump("alloc3", "───"))
+    );
+    assert_ne!(mir_items(&test(3, 1))[0], mir_items(&test(3, 2))[0]);
     let swapped = mir(
         &format!(
             "{entry}{}{}",
@@ -236,7 +284,7 @@ fn cargo_check(crate_dir: &Path, root: &Path) -> Result<(), String> {
 }
 
 /// The MIR of a crate's library, built with nightly into `target`.
-fn mir(crate_dir: &Path, target: &Path) -> Result<String, String> {
+fn mir(crate_dir: &Path, target: &Path, args: &[&str]) -> Result<String, String> {
     let output = Command::new("cargo")
         .args([
             "+nightly",
@@ -244,8 +292,9 @@ fn mir(crate_dir: &Path, target: &Path) -> Result<String, String> {
             "--lib",
             "--quiet",
             "--message-format=short",
-            "--",
         ])
+        .args(args)
+        .arg("--")
         .args(["--emit=mir", "-Cdebuginfo=0", "-Zlocation-detail=none"])
         .arg("-Zmir-include-spans=off")
         .current_dir(crate_dir)
@@ -270,7 +319,13 @@ fn mir(crate_dir: &Path, target: &Path) -> Result<String, String> {
 /// temporaries, the numbering of locals, basic blocks, and allocations, and the order basic
 /// blocks and allocations print in.
 fn mir_items(mir: &str) -> Vec<String> {
-    let mir = without_locations(mir);
+    // A pointer in an allocation's dump, as in `╾──alloc3<imm>──╼`, pads to its width, which
+    // depends on the allocation's number.
+    let mir = without_locations(mir)
+        .split('─')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("─");
     // Top-level definitions: a function, an allocation, or a promoted constant.
     let mut definitions = Vec::<Vec<&str>>::new();
     for line in mir.lines() {
@@ -338,6 +393,7 @@ fn canonical_body(lines: &[&str]) -> String {
             local.strip_suffix(": ();")
         })
         .collect::<Vec<_>>();
+    // A `;` after a diverging expression, as in `panic!();`, leaves its `!` local immutable.
     let lines = lines
         .iter()
         .filter(|line| {
@@ -348,8 +404,12 @@ fn canonical_body(lines: &[&str]) -> String {
                     || line == format!("{unit} = const ();")
             })
         })
-        .copied()
+        .map(|line| match line.strip_prefix("    let mut ") {
+            Some(local) if local.ends_with(": !;") => format!("    let {local}"),
+            _ => line.to_string(),
+        })
         .collect::<Vec<_>>();
+    let lines = lines.iter().map(String::as_str).collect::<Vec<_>>();
     let is_block = |line: &&str| line.starts_with("    bb") && line.ends_with(": {");
     let start = lines.iter().position(is_block).unwrap_or(lines.len());
     let end = lines
@@ -473,6 +533,19 @@ fn without_locations(mir: &str) -> String {
         }
     }
     output.push_str(rest);
+    // A test's `TestDesc` holds its source lines and columns as constants.
+    for key in ["start_line", "start_col", "end_line", "end_col"] {
+        let marker = format!("{key}: const ");
+        let mut rest = output.as_str();
+        let mut normalized = String::new();
+        while let Some(at) = rest.find(&marker) {
+            let (head, tail) = rest.split_at(at + marker.len());
+            normalized.push_str(head);
+            rest = tail.trim_start_matches(|c: char| c.is_ascii_digit());
+        }
+        normalized.push_str(rest);
+        output = normalized;
+    }
     output
 }
 
