@@ -992,7 +992,13 @@ fn convert_rust_lines(source: &str, aggressive: bool) -> Result<String, Transpil
         {
             text.push('\n');
             text.push_str(keep_literal_end(next, in_literal[index]));
+            // The `{` ending a header opens its body, even after an operand block such as
+            // `&& match x {` that left a group open.
+            let ends_header = header_end == Some(index);
             header_end = header_end.filter(|&end| end > index).or(heads[index]);
+            if ends_header && header_end.is_none() {
+                break;
+            }
         }
         let (text, comment) = split_trailing_comment(&text);
         let converted = convert_rust_statement(text, stack.last().map(|block| block.kind));
