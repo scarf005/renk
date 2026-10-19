@@ -2947,6 +2947,7 @@ fn parse_nodes(
             index = parsed.1;
         }
         let mut closing = None;
+        let mut closing_comment = line.closing_comment.clone();
         if let Some(next) = lines.get(index)
             && next.indent == indent
             && !next.raw
@@ -2959,6 +2960,7 @@ fn parse_nodes(
                 });
             }
             closing = Some(tail.to_string());
+            closing_comment = closing_comment.or_else(|| next.comment.clone());
             index += 1;
         }
         // Comments indented under a statement, as in `f(x); // a` / `       // b`, follow it.
@@ -2979,7 +2981,7 @@ fn parse_nodes(
             children,
             closing,
             comment: line.comment.clone(),
-            closing_comment: line.closing_comment.clone(),
+            closing_comment,
         });
         nodes.extend(comments);
     }
