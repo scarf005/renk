@@ -2242,7 +2242,9 @@ fn lone_opener_heads(lines: &[&str], in_literal: &[bool], opener: &str) -> Vec<O
         if lines[start..end]
             .iter()
             .rfind(|line| !line.trim().is_empty())
-            .is_some_and(|last| code(last).ends_with([';', ',', '{', '}']))
+            .is_some_and(|last| {
+                last.trim_start().starts_with([')', ']']) && code(last).ends_with([';', ','])
+            })
         {
             continue;
         }
