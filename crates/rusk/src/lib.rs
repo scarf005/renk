@@ -129,6 +129,8 @@ struct SourceLine {
     raw: bool,
     /// Trailing `//` comment with its leading spaces, moved after the generated line.
     comment: Option<String>,
+    /// Comment of the `}` line closing this line's block, as in `} // end`.
+    closing_comment: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -140,6 +142,7 @@ struct Node {
     /// Source closing line of a `{` head after its `}`, such as `)?` in `})?`.
     closing: Option<String>,
     comment: Option<String>,
+    closing_comment: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1007,14 +1010,23 @@ fn convert_rust_lines(source: &str, aggressive: bool) -> Result<String, Transpil
             output.push(format!("{indent}{}{comment}", lower_rust_syntax(text)));
             continue;
         }
+        let mut closed = false;
         while let Some(rest) = text.strip_prefix('}') {
             stack.pop();
+            closed = true;
             text = rest.trim_start_matches(|character| matches!(character, ',' | ';' | ' '));
         }
+        // A block comment after the braces, as in `} /* end */`, is the line's comment too.
+        let comment = if closed && !text.is_empty() && code_len(text) == 0 {
+            format!(" {}{comment}", std::mem::take(&mut text))
+        } else {
+            comment.to_string()
+        };
         if text.is_empty() || is_rust_closing_delimiter_line(text) {
-            // Rusk drops closing lines, so their comment becomes its own line.
+            // Rusk drops closing lines, so a `}` line keeps only its comment, as in `} // end`.
             if !comment.is_empty() {
-                output.push(format!("{indent}{}", comment.trim_start()));
+                let brace = if closed { "} " } else { "" };
+                output.push(format!("{indent}{brace}{}", comment.trim_start()));
             }
             continue;
         }
@@ -2077,6 +2089,7 @@ fn source_lines(source: &str) -> Result<Vec<SourceLine>, TranspileError> {
                 text: without_comment[arm + 1..].trim_end().to_string(),
                 raw: true,
                 comment: None,
+                closing_comment: None,
             });
             continue;
         }
@@ -2087,9 +2100,20 @@ fn source_lines(source: &str) -> Result<Vec<SourceLine>, TranspileError> {
                 .rev()
                 .find(|opener: &&SourceLine| opener.indent <= indent)
                 .is_some_and(|opener| opener.indent == indent && opener.text.starts_with('.'));
+        let code = &trimmed[..code_len(trimmed)];
         if trimmed.is_empty()
-            || (is_closing_delimiter_line(trimmed) && closing_tail(trimmed).is_none() && !chained)
+            || (is_closing_delimiter_line(code) && closing_tail(code).is_none() && !chained)
         {
+            // The comment of a closing line, as in `} // end`, follows the generated `}`.
+            if code.len() < trimmed.len()
+                && let Some(owner) = lines
+                    .iter_mut()
+                    .rev()
+                    .find(|owner: &&mut SourceLine| owner.indent <= indent)
+                    .filter(|owner| owner.indent == indent)
+            {
+                owner.closing_comment = Some(format!(" {}", trimmed[code.len()..].trim()));
+            }
             continue;
         }
         arm_indent = None;
@@ -2148,6 +2172,7 @@ fn source_lines(source: &str) -> Result<Vec<SourceLine>, TranspileError> {
             text: code.to_string(),
             raw: false,
             comment: (!comment.is_empty()).then(|| comment.to_string()),
+            closing_comment: None,
         });
     }
     Ok(lines)
@@ -2823,6 +2848,7 @@ fn parse_nodes(
             children,
             closing,
             comment: line.comment.clone(),
+            closing_comment: line.closing_comment.clone(),
         });
     }
     Ok((nodes, index))
@@ -2968,6 +2994,7 @@ fn inline_block_body(node: &Node) -> Option<Node> {
             .collect(),
         closing: node.closing.clone(),
         comment: None,
+        closing_comment: None,
     })
 }
 
@@ -3283,6 +3310,12 @@ fn emit_node(node: &Node, context: Context, is_last: bool, emitter: &mut Emitter
         // The comment follows the last physical line of the node's own head.
         let line = (head + node.text.matches('\n').count()).min(last);
         emitter.comments.push((line, comment.clone()));
+    }
+    if let Some(comment) = &node.closing_comment
+        && let Some(last) = emitter.lines.len().checked_sub(1)
+        && emitter.lines[last].trim_start().starts_with('}')
+    {
+        emitter.comments.push((last, comment.clone()));
     }
     emitter.end_node();
 }
@@ -3776,6 +3809,7 @@ fn offset_node_indent(node: &Node, offset: usize) -> Node {
         text: node.text.clone(),
         closing: node.closing.clone(),
         comment: node.comment.clone(),
+        closing_comment: node.closing_comment.clone(),
         children: node
             .children
             .iter()
