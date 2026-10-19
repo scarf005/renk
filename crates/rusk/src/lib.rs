@@ -3295,6 +3295,7 @@ fn emit_scoped_sequence(
     emitter: &mut Emitter,
 ) {
     let mut chain: Option<(String, bool)> = None;
+    let mut chain_closures = Vec::new();
     let mut branch_is_value = false;
     let is_cfg = |index: usize| nodes[index].text.trim().starts_with("#[cfg");
     // The head of the `else` chain ending at `index`.
@@ -3423,10 +3424,17 @@ fn emit_scoped_sequence(
                 let head = node.text.trim();
                 let (suffix, _) = strip_explicit_semicolon(&suffix);
                 chain = Some((suffix.to_string(), is_let(head) || is_assignment(head)));
+                chain_closures = open_closure_parameters(strip_block_marker(head).0);
             }
         } else if let Some((suffix, is_statement)) = chain.take() {
             let (suffix, has_explicit_semicolon) = match &node.closing {
-                Some(tail) => closing_suffix(tail),
+                // The tail closes the closures the chain's head opened.
+                Some(tail) => {
+                    let outer = OPEN_CLOSURES.replace(std::mem::take(&mut chain_closures));
+                    let suffix = closing_suffix(tail);
+                    OPEN_CLOSURES.set(outer);
+                    suffix
+                }
                 None => (suffix, false),
             };
             closing.truncate(end);
@@ -3462,11 +3470,13 @@ fn emit_node(node: &Node, context: Context, is_last: bool, emitter: &mut Emitter
     });
     let outer_generics = (is_impl_or_mod_item(header) || is_trait_item(header))
         .then(|| ITEM_GENERICS.replace(bindings.own.clone()));
+    let outer_closures = OPEN_CLOSURES.replace(open_closure_parameters(header));
     with_value_scope(bindings.own, || {
         BLOCK_BINDINGS.set(bindings.block);
         emit_node_body(node, context, is_last, emitter);
         BLOCK_BINDINGS.take();
     });
+    OPEN_CLOSURES.set(outer_closures);
     if let Some(generics) = outer_generics {
         ITEM_GENERICS.set(generics);
     }
@@ -3951,14 +3961,40 @@ fn emit_raw_braced_expr(node: &Node, head: &str, is_last: bool, emitter: &mut Em
 }
 
 /// The lowered suffix of a `})?` closing line and whether it ends with an explicit `;`.
+/// Parameters of the closures whose bodies `header` leaves open, as `env` in `.map(|env| {`.
+fn open_closure_parameters(header: &str) -> Vec<String> {
+    let chars = header.chars().collect::<Vec<_>>();
+    closures(&chars)
+        .into_iter()
+        .filter(|closure| closure.body.end == chars.len())
+        .flat_map(|closure| closure.parameters)
+        .collect()
+}
+
 fn closing_suffix(tail: &str) -> (String, bool) {
     let (tail, has_explicit_semicolon) = strip_explicit_semicolon(tail);
     // The tail binds its own names, as `x` in `}, |x| x.len())`.
     let bindings = node_bindings(tail, Context::Block, false).own;
-    (
-        with_value_scope(bindings, || lower_expr(tail)),
-        has_explicit_semicolon,
-    )
+    // The closures the head opened end here, so their parameters no longer bind.
+    let closed = OPEN_CLOSURES.with_borrow(|names| {
+        VALUE_SCOPES.with_borrow_mut(|scopes| {
+            names
+                .iter()
+                .filter_map(|name| {
+                    let scope = scopes.iter().rposition(|scope| scope.contains(name))?;
+                    let at = scopes[scope].iter().position(|bound| bound == name)?;
+                    Some((scope, scopes[scope].remove(at)))
+                })
+                .collect::<Vec<_>>()
+        })
+    });
+    let lowered = with_value_scope(bindings, || lower_expr(tail));
+    VALUE_SCOPES.with_borrow_mut(|scopes| {
+        for (scope, name) in closed {
+            scopes[scope].push(name);
+        }
+    });
+    (lowered, has_explicit_semicolon)
 }
 
 fn emit_continuations(
@@ -6021,6 +6057,9 @@ thread_local! {
     static VALUE_SCOPES: RefCell<Vec<Vec<String>>> = const { RefCell::new(Vec::new()) };
     /// Names the node being emitted binds for its block only, such as `x` in `for x in xs:`.
     static BLOCK_BINDINGS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    /// Parameters of the closures whose bodies the node being emitted opens, which its closing
+    /// line ends, as `env` in `.map(|env| {` / `}) + env.args()`.
+    static OPEN_CLOSURES: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     /// Const generics of the enclosing `impl` or `trait`, which its functions see.
     static ITEM_GENERICS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     /// Free functions and statics, values everywhere, as in `parse_args.parse2(tokens)`.
