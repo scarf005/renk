@@ -50,6 +50,7 @@ fn scripts_share_one_build_dir_and_each_runs_its_own_binary() {
     let scripts = [
         ("a", "tool", ""),
         ("b", "tool", ""),
+        ("e", "1st.io", ""),
         ("c", "named", "name = \"same\"\n"),
         ("d", "named", "name = \"same\"\n"),
     ]

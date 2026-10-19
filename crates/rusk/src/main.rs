@@ -168,16 +168,22 @@ fn run_script(raw_args: Vec<String>) -> Result<i32, Box<dyn std::error::Error>> 
         return Err("script requires an input path".into());
     };
     let source = fs::read_to_string(&script_path)?;
-    let script = script_rust(&source, source_syntax(Some(&script_path)))
-        .map_err(|error| format!("{}: {error}", script_path.display()))?;
     let cache_root = env::var_os("XDG_CACHE_HOME")
         .map(PathBuf::from)
         .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache")))
         .ok_or("script requires XDG_CACHE_HOME or HOME")?
-        .join("rusk/scripts");
+        .join("rusk");
     let source_path = fs::canonicalize(&script_path)?;
-    let rust_path = script_cache_path(&cache_root, &source_path);
+    let rust_path = script_cache_path(&cache_root.join("scripts"), &source_path);
+    let script = script_rust(
+        &source,
+        source_syntax(Some(&script_path)),
+        &script_package(&rust_path),
+    )
+    .map_err(|error| format!("{}: {error}", script_path.display()))?;
     write_script_cache(&rust_path, &script.rust)?;
+    let build_dir = cache_root.join("build");
+    let build_dir = script.named_package.then_some(build_dir.as_path());
     let diagnostic = ScriptDiagnostic {
         rust_path: &rust_path,
         script: &script_path.display().to_string(),
@@ -186,7 +192,7 @@ fn run_script(raw_args: Vec<String>) -> Result<i32, Box<dyn std::error::Error>> 
         source_lines: &script.source_lines,
         styled: io::stderr().is_terminal(),
     };
-    let build = || build_script(&rust_path, &diagnostic);
+    let build = || build_script(&rust_path, build_dir, &diagnostic);
     let binary = if no_cargo {
         let binary = rust_path.with_extension("");
         if !is_newer(&binary, &rust_path) {
@@ -222,8 +228,10 @@ fn is_newer(path: &Path, than: &Path) -> bool {
 /// `--no-cargo` runs copy the executable next to the cached Rust and exec it without cargo until
 /// the Rust changes; scriptr does the same but ships only as a binary, which would make rusk
 /// scripts need a second launcher installed. Compiler diagnostics are printed at script lines.
+/// Scripts that `build_dir` is given for share it, so a dependency compiles once for all of them.
 fn build_script(
     rust_path: &Path,
+    build_dir: Option<&Path>,
     diagnostic: &ScriptDiagnostic,
 ) -> Result<Result<PathBuf, i32>, Box<dyn std::error::Error>> {
     let mut cargo = Command::new("cargo")
@@ -235,6 +243,7 @@ fn build_script(
         })
         .arg("--manifest-path")
         .arg(rust_path)
+        .envs(build_dir.map(|dir| ("CARGO_BUILD_BUILD_DIR", dir)))
         .stdout(process::Stdio::piped())
         .spawn()?;
     let mut executable = None;
@@ -492,6 +501,8 @@ fn level(level: &serde_json::Value) -> Level<'static> {
 struct ScriptRust {
     rust: String,
     source_lines: Vec<(usize, bool)>,
+    /// Whether rusk named the package, which keeps it apart from other scripts' packages.
+    named_package: bool,
 }
 
 /// Transpiles a single-file script, keeping the cargo-script frontmatter in front of the generated
@@ -499,6 +510,7 @@ struct ScriptRust {
 fn script_rust(
     source: &str,
     syntax: SourceSyntax,
+    package: &str,
 ) -> Result<ScriptRust, Box<dyn std::error::Error>> {
     let lines = source.split_inclusive('\n').collect::<Vec<_>>();
     let mut body_start = usize::from(
@@ -506,7 +518,8 @@ fn script_rust(
             .first()
             .is_some_and(|line| line.starts_with("#!") && !line.starts_with("#![")),
     );
-    let mut frontmatter = format!("---\n{}---\n", with_edition(""));
+    let (manifest, mut named_package) = with_package_defaults("", package);
+    let mut frontmatter = format!("---\n{manifest}---\n");
     let mut frontmatter_line = 1;
     let fence_start = (body_start..lines.len()).find(|&index| !lines[index].trim().is_empty());
     if let Some(start) = fence_start.filter(|&index| lines[index].starts_with("---")) {
@@ -515,7 +528,9 @@ fn script_rust(
         else {
             return Err(format!("line {}: unclosed frontmatter", start + 1).into());
         };
-        frontmatter = lines[start].to_string() + &with_edition(&lines[start + 1..end].concat());
+        let manifest;
+        (manifest, named_package) = with_package_defaults(&lines[start + 1..end].concat(), package);
+        frontmatter = lines[start].to_string() + &manifest;
         frontmatter += lines[end].trim_end();
         frontmatter.push('\n');
         frontmatter_line = start + 1;
@@ -571,6 +586,7 @@ fn script_rust(
     Ok(ScriptRust {
         rust: frontmatter + &rust,
         source_lines,
+        named_package,
     })
 }
 
@@ -578,19 +594,41 @@ fn script_rust(
 /// cargo does not warn about defaulting to the latest edition on every run.
 const SCRIPT_EDITION: &str = "2024";
 
-/// Adds `package.edition` to a cargo-script manifest that lacks it; cargo reports invalid TOML.
-fn with_edition(manifest: &str) -> String {
+/// Adds `package.edition` and `package.name` to a cargo-script manifest that lacks them, and says
+/// whether it added the name; cargo reports invalid TOML.
+fn with_package_defaults(manifest: &str, name: &str) -> (String, bool) {
     let Ok(mut document) = manifest.parse::<toml_edit::DocumentMut>() else {
-        return manifest.to_string();
+        return (manifest.to_string(), false);
     };
     let package = document.entry("package").or_insert(toml_edit::table());
-    match package.as_table_like_mut() {
-        Some(package) if !package.contains_key("edition") => {
-            package.insert("edition", toml_edit::value(SCRIPT_EDITION));
-            document.to_string()
-        }
-        _ => manifest.to_string(),
+    let Some(package) = package.as_table_like_mut() else {
+        return (manifest.to_string(), false);
+    };
+    if !package.contains_key("edition") {
+        package.insert("edition", toml_edit::value(SCRIPT_EDITION));
     }
+    let named = !package.contains_key("name");
+    if named {
+        package.insert("name", toml_edit::value(name));
+    }
+    (document.to_string(), named)
+}
+
+/// A package name unique to the script's cache entry. Cargo keys a root package's artifacts by
+/// its name and its path inside the workspace, which is the same for scripts with the same file
+/// stem, so scripts sharing a build directory without it would run each other's binaries.
+fn script_package(rust_path: &Path) -> String {
+    let stem = rust_path.file_stem().unwrap_or_default().to_string_lossy();
+    let hash = rust_path
+        .parent()
+        .and_then(Path::file_name)
+        .unwrap_or_default();
+    let mut name = stem.replace(|c: char| !c.is_alphanumeric() && c != '-', "_");
+    // Package names cannot start with a digit.
+    if name.starts_with(|c: char| c.is_ascii_digit()) {
+        name.insert(0, '_');
+    }
+    format!("{name}-{}", hash.to_string_lossy())
 }
 
 fn script_cache_path(cache_root: &Path, source_path: &Path) -> PathBuf {
@@ -805,7 +843,7 @@ fn ensure_cli_trailing_newline(source: &str) -> String {
 
 fn print_help() {
     println!(
-        "rusk - indentation-based Rust syntax transpiler\n\nUSAGE:\n    rusk [transpile] [INPUT.rsk|INPUT.rk] [-o OUTPUT.rs] [--source-map SOURCE_MAP]\n    rusk from-rust [INPUT.rs] [-o OUTPUT.rsk] [--aggressive]\n    rusk to-ruk [INPUT.rs|INPUT.rsk] [-o OUTPUT.rk]\n    rusk fmt [INPUT.rsk|INPUT.rk] [-o INPUT] [--line-width N]\n    rusk [cargo] <CARGO_COMMAND> [CARGO_ARGS...]\n    rusk script [--no-cargo] <SCRIPT.rsk|SCRIPT.rk> [ARGS...]\n\nScripts keep their cargo-script frontmatter (defaulting package.edition to 2024), are transpiled to $XDG_CACHE_HOME/rusk/scripts, built with cargo +nightly -Zscript, and run with RUSK_SCRIPT set to the script path; scripts without a top-level fn main run their lines in a fn main returning Result, so they can use ?; compiler diagnostics point at script lines; use #!/usr/bin/env -S rusk script as the shebang. --no-cargo execs the binary cached next to the generated Rust, building it with cargo only when the Rust changed; dependency and toolchain updates then need an edit to the script.\n\nCargo wrapper commands transpile Cargo source roots (*.rsk and *.rk under src, examples, tests, benches, plus build.rsk/build.rk) to cached generated .rs files, then run cargo.\n\nExamples:\n    rusk from-rust src/main.rs -o src/main.rsk\n    rusk to-ruk src/main.rs -o src/main.rk\n    rusk fmt src/main.rsk -o src/main.rsk\n    rusk run\n    rusk cargo fmt\n    rusk cargo test\n\nIf INPUT is omitted, rusk reads source from stdin when stdin is piped; otherwise it prints this help."
+        "rusk - indentation-based Rust syntax transpiler\n\nUSAGE:\n    rusk [transpile] [INPUT.rsk|INPUT.rk] [-o OUTPUT.rs] [--source-map SOURCE_MAP]\n    rusk from-rust [INPUT.rs] [-o OUTPUT.rsk] [--aggressive]\n    rusk to-ruk [INPUT.rs|INPUT.rsk] [-o OUTPUT.rk]\n    rusk fmt [INPUT.rsk|INPUT.rk] [-o INPUT] [--line-width N]\n    rusk [cargo] <CARGO_COMMAND> [CARGO_ARGS...]\n    rusk script [--no-cargo] <SCRIPT.rsk|SCRIPT.rk> [ARGS...]\n\nScripts keep their cargo-script frontmatter (defaulting package.edition to 2024), are transpiled to $XDG_CACHE_HOME/rusk/scripts, built with cargo +nightly -Zscript in the shared $XDG_CACHE_HOME/rusk/build (scripts that set package.name build apart), and run with RUSK_SCRIPT set to the script path; scripts without a top-level fn main run their lines in a fn main returning Result, so they can use ?; compiler diagnostics point at script lines; use #!/usr/bin/env -S rusk script as the shebang. --no-cargo execs the binary cached next to the generated Rust, building it with cargo only when the Rust changed; dependency and toolchain updates then need an edit to the script.\n\nCargo wrapper commands transpile Cargo source roots (*.rsk and *.rk under src, examples, tests, benches, plus build.rsk/build.rk) to cached generated .rs files, then run cargo.\n\nExamples:\n    rusk from-rust src/main.rs -o src/main.rsk\n    rusk to-ruk src/main.rs -o src/main.rk\n    rusk fmt src/main.rsk -o src/main.rsk\n    rusk run\n    rusk cargo fmt\n    rusk cargo test\n\nIf INPUT is omitted, rusk reads source from stdin when stdin is piped; otherwise it prints this help."
     );
 }
 
@@ -880,9 +918,11 @@ mod tests {
     fn script_rust_keeps_frontmatter_first_and_drops_the_shebang() {
         let source = "#!/usr/bin/env -S rusk script\n---\n[dependencies]\nregex = \"1\"\n---\n\nfn main():\n    println!(\"hi\")\n";
 
-        let rust = script_rust(source, SourceSyntax::Rusk).unwrap().rust;
+        let rust = script_rust(source, SourceSyntax::Rusk, "tool")
+            .unwrap()
+            .rust;
         assert!(rust.starts_with(
-            "---\n[dependencies]\nregex = \"1\"\n\n[package]\nedition = \"2024\"\n---\n"
+            "---\n[dependencies]\nregex = \"1\"\n\n[package]\nedition = \"2024\"\nname = \"tool\"\n---\n"
         ));
         assert!(!rust.contains("#!/usr/bin/env"));
         assert!(rust.contains("println!(\"hi\");"));
@@ -892,8 +932,12 @@ mod tests {
     fn script_rust_treats_inner_attributes_and_later_dashes_as_body() {
         let source = "#![allow(unused)]\nfn main():\n    let s = \"\n---\n\"\n    print!(\"{s}\")\n";
 
-        let rust = script_rust(source, SourceSyntax::Rusk).unwrap().rust;
-        assert!(rust.starts_with("---\n[package]\nedition = \"2024\"\n---\n#![allow(unused)]"));
+        let rust = script_rust(source, SourceSyntax::Rusk, "tool")
+            .unwrap()
+            .rust;
+        assert!(rust.starts_with(
+            "---\n[package]\nedition = \"2024\"\nname = \"tool\"\n---\n#![allow(unused)]"
+        ));
         assert!(rust.contains("\n---\n"));
     }
 
@@ -901,16 +945,22 @@ mod tests {
     fn script_rust_accepts_infostrings_and_longer_fences() {
         let source = "#!/usr/bin/env -S rusk script\n----cargo\n[package]\nedition = \"2024\"\n---\n----\nfn main() = ()\n";
 
-        let rust = script_rust(source, SourceSyntax::Rusk).unwrap().rust;
+        let rust = script_rust(source, SourceSyntax::Rusk, "tool")
+            .unwrap()
+            .rust;
         assert!(rust.starts_with("----cargo\n[package]\nedition = \"2024\"\n---\n----\n"));
         assert!(rust.contains("fn main()"));
     }
 
     #[test]
     fn script_rust_rejects_unclosed_frontmatter() {
-        let error = script_rust("---\n[dependencies]\nfn main() = ()\n", SourceSyntax::Rusk)
-            .unwrap_err()
-            .to_string();
+        let error = script_rust(
+            "---\n[dependencies]\nfn main() = ()\n",
+            SourceSyntax::Rusk,
+            "tool",
+        )
+        .unwrap_err()
+        .to_string();
         assert!(error.contains("unclosed frontmatter"), "{error}");
     }
 
@@ -918,7 +968,9 @@ mod tests {
     fn script_errors_report_the_physical_script_line() {
         let source = "#!/usr/bin/env -S rusk script\n---\n[package]\n---\nfn main():\n\tprintln!(\"tab\")\n";
 
-        let error = script_rust(source, SourceSyntax::Rusk).unwrap_err().to_string();
+        let error = script_rust(source, SourceSyntax::Rusk, "tool")
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("line 6"), "{error}");
     }
 
