@@ -3017,7 +3017,7 @@ fn validate_general_node(node: &Node) -> Result<(), TranspileError> {
     } else if is_impl_or_mod_item(block_text) {
         require_block_opener(node)?;
         validate_nodes(&node.children, Context::Block)
-    } else if is_match(block_text) || is_trailing_match(block_text) {
+    } else if is_match(block_text) || is_trailing_match(strip_open_brace(block_text)) {
         require_block_opener(node)?;
         validate_nodes(&node.children, Context::Match)
     } else if is_control(block_text) || is_trailing_if(block_text) {
@@ -3535,9 +3535,11 @@ fn emit_general(node: &Node, context: Context, is_last: bool, emitter: &mut Emit
                 true,
             );
         } else if is_match(block_text)
-            || is_trailing_match(block_text)
+            // A brace `match`, as in `let a = match o {`, too.
+            || is_trailing_match(strip_open_brace(block_text))
             || (!node.children.is_empty() && is_trailing_if(block_text))
         {
+            let block_text = strip_open_brace(block_text);
             let indent = spaces(node.indent);
             emitter.push(node, format!("{}{} {{", indent, lower_expr(block_text)));
             // The `}` lines up with the head's last line, as in `let x =` / `    if c {`.
@@ -3941,6 +3943,8 @@ fn emit_match_arm(node: &Node, emitter: &mut Emitter) {
         let pattern = lower_expr(pattern.trim());
         let expr = expr.trim();
         let (expr, has_explicit_semicolon) = strip_explicit_semicolon(expr);
+        // The Rust `,` of an arm inside a brace `match`, as in `Some(x) => x,`.
+        let expr = expr.strip_suffix(',').map_or(expr, str::trim_end);
         if expr.is_empty() {
             emitter.push(node, format!("{}{} => {{", indent, pattern));
             emit_nodes(&node.children, Context::Block, emitter);
@@ -3948,8 +3952,15 @@ fn emit_match_arm(node: &Node, emitter: &mut Emitter) {
         } else if has_explicit_block_opener(node.text.trim()) {
             // A body opening a block, as `x => match y:`, `x => unsafe:`, or `x => f(|v| {`.
             let expr = strip_open_brace(expr).trim_end();
-            let space = if expr.ends_with(['(', '[']) { "" } else { " " };
-            emitter.push(node, format!("{indent}{pattern} => {}{space}{{", lower_expr(expr)));
+            let space = if expr.is_empty() || expr.ends_with(['(', '[']) {
+                ""
+            } else {
+                " "
+            };
+            emitter.push(
+                node,
+                format!("{indent}{pattern} => {}{space}{{", lower_expr(expr)),
+            );
             emit_nodes(&node.children, arm_block_context(expr), emitter);
             let (closing, _) = node
                 .closing
