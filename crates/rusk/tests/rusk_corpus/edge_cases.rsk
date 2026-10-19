@@ -1,5 +1,6 @@
 #[allow(unused_imports)]
 use std.collections.*
+use std.env
 #[allow(unused_imports)]
 pub use std.{fmt, io.{self, Read as _}}
 const RANGE: std.ops.Range[usize] = 0..2 // a range, not a path: 0..*
@@ -269,3 +270,9 @@ pub fn brace_matches(o: Option[u8]) -> u8:
         Some(x) => x + b,
         None => 0 // z,
     }
+
+pub fn closure_scoped_names() -> usize:
+    let n = [1u8].iter().map(|env| *env as usize).sum[usize]() + env.args().count()
+    let m = [1u8].iter().map(|env: &u8| *env as usize).sum[usize]() + env.vars().count()
+    let k = |env: usize| env + 1
+    n + m + k(env.args().len())
