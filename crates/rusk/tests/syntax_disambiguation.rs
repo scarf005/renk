@@ -918,3 +918,9 @@ fn comments_keep_format_arguments() {
         ],
     );
 }
+
+#[test]
+fn macro_rules_comments_keep_their_semicolons() {
+    let rusk = rust_to_rusk("macro_rules! m {\n    // m!(a);\n    ($a:expr) => { $a };\n}\n").unwrap();
+    assert_lines(&rusk, &["    // m!(a);\n"]);
+}

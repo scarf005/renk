@@ -134,3 +134,97 @@ pub fn gated() -> u8 {
     }
     0
 }
+
+macro_rules! twice {
+    // twice!(x);
+    ($x:expr) => { $x * 2 };
+}
+pub fn four() -> u8 {
+    twice!(2)
+}
+
+pub fn is_small(n: u8) -> bool {
+    #[cfg(not(feature = "big"))]
+    match n {
+        0 => true,
+        _ => false,
+    }
+    #[cfg(feature = "big")]
+    n.is_power_of_two()
+}
+pub fn kind(n: u8) -> u8 {
+    #[cfg(unix)]
+    if n > 1 {
+        1
+    } else {
+        0
+    }
+    #[cfg(not(unix))]
+    n
+}
+
+pub fn both(x: Option<u8>, y: u8) -> bool {
+    if match x {
+        Some(v) => {
+            v > 1
+        }
+        None => false,
+    } && match y {
+        0 => true,
+        _ => false,
+    } {
+        return true;
+    }
+    false
+}
+
+pub fn step(x: Option<u8>) -> Result<bool, ()> {
+    Ok(match x {
+        Some(v) => run_once(|k| match k {
+            1 => Ok(v > 0),
+            _ => Ok(false),
+        })?,
+        None => false,
+    })
+}
+fn run_once(f: impl Fn(u8) -> Result<bool, ()>) -> Result<bool, ()> {
+    f(1)
+}
+
+pub fn parse_all(input: &str) -> usize {
+    counter.call_once(input)
+}
+fn counter(input: &str) -> usize {
+    input.len()
+}
+trait CallOnce {
+    fn call_once(self, input: &str) -> usize;
+}
+impl<F: Fn(&str) -> usize> CallOnce for F {
+    fn call_once(self, input: &str) -> usize {
+        self(input)
+    }
+}
+
+pub fn show(items: &[u8]) -> String {
+    let mut out = String::new();
+    visit(items, &mut |item: &dyn std::fmt::Display| out.push_str(&item.to_string()));
+    out
+}
+fn visit(items: &[u8], f: &mut dyn FnMut(&dyn std::fmt::Display)) {
+    for item in items {
+        f(item);
+    }
+}
+
+pub struct Field {
+    pub member: String,
+}
+pub fn field(ident: Option<String>, index: usize) -> Field {
+    Field {
+        member: match &ident {
+            Some(name) => name.clone(),
+            None => index.to_string(),
+        },
+    }
+}
