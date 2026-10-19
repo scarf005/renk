@@ -514,11 +514,14 @@ impl RukSemicolonInferer {
         insert_semicolon(raw)
     }
 
-    /// Whether the next code line continues this expression: `.method()`, `?`, or `let ... else`.
+    /// Whether the next code line continues this expression: `.method()`, `?`, `| pattern`, or
+    /// `let ... else`.
     fn continues_on_next_line(&self, index: usize) -> bool {
         self.next_code_line(index).is_some_and(|next| {
             let next = next.trim_start();
-            next.starts_with(['.', '?']) || is_else_branch(strip_open_brace(next))
+            next.starts_with(['.', '?'])
+                || next.starts_with("| ")
+                || is_else_branch(strip_open_brace(next))
         })
     }
 
@@ -557,7 +560,7 @@ impl RukSemicolonInferer {
     fn next_code_line(&self, index: usize) -> Option<&str> {
         self.lines.iter().skip(index + 1).map(String::as_str).find(|line| {
             let text = line.trim();
-            !text.is_empty() && !text.starts_with("//")
+            !text.is_empty() && !is_comment(text)
         })
     }
 
@@ -586,7 +589,7 @@ impl RukSemicolonInferer {
             .filter(|&line| {
                 let text = self.lines[line].trim();
                 !text.is_empty()
-                    && !text.starts_with("//")
+                    && !is_comment(text)
                     && raw_indent(&self.lines[line]) <= indent
             })
             .find(|&line| {
@@ -799,6 +802,8 @@ enum RustBlockKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct RustBlock {
     kind: RustBlockKind,
+    /// Opened by a `.method(|x| {` chain line, whose closing `})` Rusk writes itself.
+    chained: bool,
 }
 
 pub fn rust_to_rusk(source: &str) -> Result<String, TranspileError> {
@@ -856,7 +861,14 @@ fn convert_rust_lines(source: &str, aggressive: bool) -> Result<String, Transpil
         let indent = spaces(raw_indent(raw));
         let comment;
         (text, comment) = split_trailing_comment(text);
-        if closing_tail(text).is_some() {
+        if closing_tail(text).is_some()
+            || (stack.last().is_some_and(|block| !block.chained)
+                && closes_before_chain(
+                    text,
+                    raw_lines.peek().map(|(_, next)| *next),
+                    raw_indent(raw),
+                ))
+        {
             stack.pop();
             output.push(format!("{indent}{}{comment}", lower_rust_syntax(text)));
             continue;
@@ -928,7 +940,10 @@ fn convert_rust_lines(source: &str, aggressive: bool) -> Result<String, Transpil
         }
         output.push(format!("{indent}{}{comment}", converted.text));
         if let Some(kind) = converted.opens {
-            stack.push(RustBlock { kind });
+            stack.push(RustBlock {
+                kind,
+                chained: text.starts_with('.'),
+            });
         }
     }
 
@@ -1841,8 +1856,15 @@ fn source_lines(source: &str) -> Result<Vec<SourceLine>, TranspileError> {
             });
             continue;
         }
+        // The emitter closes a `.method(|x|:` chain line itself, before its sibling `.method()`.
+        let chained = closes_before_chain(trimmed, raw_lines.peek().map(|(_, next)| *next), indent)
+            && !lines
+                .iter()
+                .rev()
+                .find(|opener: &&SourceLine| opener.indent <= indent)
+                .is_some_and(|opener| opener.indent == indent && opener.text.starts_with('.'));
         if trimmed.is_empty()
-            || (is_closing_delimiter_line(trimmed) && closing_tail(trimmed).is_none())
+            || (is_closing_delimiter_line(trimmed) && closing_tail(trimmed).is_none() && !chained)
         {
             continue;
         }
@@ -1859,7 +1881,8 @@ fn source_lines(source: &str) -> Result<Vec<SourceLine>, TranspileError> {
         {
             text = branch.to_string();
         }
-        let mut group = None;
+        // A `})` line before `.method()` lines takes them as its closing tail.
+        let mut group = chained.then_some('}');
         let mut open = OpenDelimiters::default();
         let mut header_end = heads[index];
         while joins_next_line(
@@ -1901,7 +1924,7 @@ fn source_lines(source: &str) -> Result<Vec<SourceLine>, TranspileError> {
 }
 
 /// Whether the logical line `text` continues on the `next` physical line: inside a literal or
-/// block comment, after a trailing `=`, or in a group opened by a line ending with `(`/`[` (or a
+/// block comment, after a trailing `=`, before a same-indent `| pattern` line, or in a group opened by a line ending with `(`/`[` (or a
 /// struct literal or `use` tree `{`). A group lasts until its outer delimiter closes, so blocks
 /// inside it stay Rust syntax, and then extends over following `.method` / `?` lines at the same
 /// `indent`; any other line ending with `{` or `:` owns an indented block.
@@ -1937,11 +1960,7 @@ fn joins_next_line(
                     || (matches!(first, '(' | '[') && !code.trim_end().ends_with(':'))
             }
             None => next.is_some_and(|next| {
-                let chained = next.trim_start();
-                (raw_indent(next) == indent
-                    && (chained.starts_with('?')
-                        || (chained.starts_with('.') && !chained.starts_with(".."))))
-                    || continues_where_clause(text, next, indent)
+                continues_chain(next, indent) || continues_where_clause(text, next, indent)
             }),
         };
     }
@@ -1966,7 +1985,11 @@ fn joins_next_line(
             && !["==", "!=", "<=", ">="]
                 .iter()
                 .any(|operator| trimmed.ends_with(operator)))
-            || next.is_some_and(|next| continues_where_clause(text, next, indent)))
+            || next.is_some_and(|next| {
+                continues_where_clause(text, next, indent)
+                    // A pattern such as `A | B` continued with `| C` at the same indent.
+                    || (raw_indent(next) == indent && next.trim_start().starts_with("| "))
+            }))
 }
 
 /// Whether `text` leaves a macro invocation's delimiter open, as in `quote_spanned! {span=>` or
@@ -2010,7 +2033,10 @@ fn lone_opener_heads(lines: &[&str], in_literal: &[bool], opener: &str) -> Vec<O
         let mut start = end;
         while start > 0
             && !in_literal[start - 1]
-            && (lines[start - 1].trim().is_empty() || raw_indent(lines[start - 1]) > indent)
+            && (lines[start - 1].trim().is_empty()
+                || raw_indent(lines[start - 1]) > indent
+                // An or-pattern continued at the head's indent, as in `if let A` / `| B = c`.
+                || lines[start - 1].trim_start().starts_with("| "))
         {
             start -= 1;
         }
@@ -2335,12 +2361,28 @@ fn accepts_closing_line(text: &str, siblings: &[Node]) -> bool {
                 }))
 }
 
-/// The part after `}` of a closing line that continues the expression, such as `)?` in `})?`.
+/// The part after `}` of a closing line that continues the expression, such as `)?` in `})?`
+/// or `)` and the `.method()` lines after `})`.
 fn closing_tail(text: &str) -> Option<&str> {
     let tail = text.trim().strip_prefix('}')?;
     tail.trim_start_matches([')', ']'])
+        .trim_start()
         .starts_with(['?', '.'])
         .then_some(tail)
+}
+
+/// Whether `text` is a closing line such as `})` that the `next` line continues with a chain.
+fn closes_before_chain(text: &str, next: Option<&str>, indent: usize) -> bool {
+    text.strip_prefix('}')
+        .is_some_and(|tail| tail.chars().all(|character| matches!(character, ')' | ']')))
+        && next.is_some_and(|next| continues_chain(next, indent))
+}
+
+/// Whether the `next` line continues a chain at `indent` with `.method()` or `?`.
+fn continues_chain(next: &str, indent: usize) -> bool {
+    let chained = next.trim_start();
+    raw_indent(next) == indent
+        && (chained.starts_with('?') || (chained.starts_with('.') && !chained.starts_with("..")))
 }
 
 fn validate_nodes(nodes: &[Node], context: Context) -> Result<(), TranspileError> {
@@ -2602,19 +2644,26 @@ fn emit_scoped_sequence(
     for (index, node) in nodes.iter().enumerate() {
         let is_last = tail_is_value && index + 1 == nodes.len();
         let head = node.text.trim();
+        if chain.is_some() && is_comment(head) {
+            // A comment between `}` and `else` stays inside the chain.
+            emit_node(node, context, false, emitter);
+            continue;
+        }
         if !is_else_branch(head) {
             // A chain's branches are values when the chain is the tail or its head uses them, as
             // in `let x = if c {`.
             let (head, _) = strip_explicit_semicolon(head);
             branch_is_value = !is_control(strip_block_marker(head).0)
                 || (tail_is_value
-                    && nodes[index + 1..]
-                        .iter()
-                        .all(|next| is_else_branch(next.text.trim())));
+                    && nodes[index + 1..].iter().all(|next| {
+                        is_else_branch(next.text.trim()) || is_comment(next.text.trim())
+                    }));
         }
-        let continues = nodes
-            .get(index + 1)
-            .is_some_and(|next| is_else_branch(next.text.trim()));
+        let continues = !is_comment(head)
+            && nodes[index + 1..]
+                .iter()
+                .find(|next| !is_comment(next.text.trim()))
+                .is_some_and(|next| is_else_branch(next.text.trim()));
         let is_branch = chain.is_some() || continues;
         emit_node(
             node,
