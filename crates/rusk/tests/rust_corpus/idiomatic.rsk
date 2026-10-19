@@ -64,7 +64,7 @@ fn last_call(counter: &mut Counter):
 fn main():
     let mut counter = Counter.new()
     for word in (WORDS).iter():
-        counter.add(word);
+        counter.add(word)
     last_call(&mut counter)
     counter.log()
     println!("{counter} {kind_name(&Kind::Pair(1, 2))}")

@@ -155,3 +155,34 @@ pub fn explicit_path_receivers() -> usize:
     )
     let nested = std::cmp::max(std::vec::Vec[u8].new().len(), built.len())
     if order.is_gt() then command.get_args().len() + bits + size + nested else 0
+
+pub fn statement_blocks(c: bool) -> usize:
+    let mut seen = std::collections::HashMap.new()
+    'outer: for i in 0..3:
+        seen.insert(i, i)
+        while c:
+            seen.insert(9, 9) // insert:
+            break 'outer
+    if c:
+        seen.insert(1, 1) // ends in {
+    match c:
+        true => seen.insert(2, 2)
+        false => None
+    loop:
+        seen.insert(3, 3)
+        break
+    let kept = if c:
+        seen.insert(4, 4)
+    else:
+        None
+    drop(kept)
+    seen.len()
+
+pub fn unit_tail(c: bool):
+    let mut values = vec![1]
+    if c:
+        values.pop()
+    else if values.is_empty():
+        values.pop()
+    else:
+        values.first().copied()

@@ -573,3 +573,35 @@ fn rust_conversion_writes_trailing_if_blocks_with_a_colon() {
         "{output}"
     );
 }
+
+#[test]
+fn unused_block_values_end_with_statements() {
+    let output = rust(
+        "fn f(c: bool) -> i32:\n    for i in 0..3:\n        m.insert(i, i)\n    'outer: while c:\n        m.insert(0, 0)\n    if c:\n        m.insert(1, 1)\n    match c:\n        true => m.insert(2, 2)\n        false => None\n    if c:\n        1\n    else:\n        2\nfn g():\n    if c:\n        m.insert(3, 3)\n    else:\n        m.insert(4, 4)\n",
+    );
+    for expected in [
+        "        m.insert(i, i);\n",
+        "        m.insert(0, 0);\n",
+        "        m.insert(1, 1);\n",
+        "        false => None,\n    };\n",
+        "    if c {\n        1\n    }\n    else {\n        2\n    }\n}\n",
+        "        m.insert(3, 3);\n",
+        "        m.insert(4, 4);\n",
+    ] {
+        assert!(output.contains(expected), "missing {expected:?}\n{output}");
+    }
+
+    let output = ruk_to_rust(
+        "fn f(c: bool) -> i32 {\n    for i in 0..3 {\n        m.insert(i, i)\n    }\n    if c {\n        m.insert(1, 1)\n    }\n    match c {\n        true => m.insert(2, 2),\n        false => None,\n    }\n    let x = if c {\n        1\n    }\n    else {\n        2\n    }\n    if c {\n        x\n    } else {\n        2\n    }\n}\n",
+    )
+    .unwrap();
+    for expected in [
+        "        m.insert(i, i);\n",
+        "        m.insert(1, 1);\n",
+        "        false => None,\n    };\n",
+        "    let x = if c {\n        1\n    }\n    else {\n        2\n    };\n",
+        "    if c {\n        x\n    } else {\n        2\n    }\n}\n",
+    ] {
+        assert!(output.contains(expected), "missing {expected:?}\n{output}");
+    }
+}
