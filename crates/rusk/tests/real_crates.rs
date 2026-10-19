@@ -291,19 +291,38 @@ fn mir_items(mir: &str) -> Vec<String> {
     }
     items
         .into_iter()
-        .map(|(function, mut attached)| {
-            // Allocations print in interning order, so they compare as a set after the function.
-            for definition in &mut attached {
-                if let Some(header) = definition.strip_prefix("alloc") {
-                    *definition = format!(
-                        "alloc{}",
-                        header.trim_start_matches(|c: char| c.is_ascii_digit())
-                    );
+        .map(|(function, attached)| {
+            // Allocations print in interning order, so they follow in the order the function,
+            // its promoted constants, and earlier allocations first name them.
+            let (allocations, mut promoted) = attached
+                .into_iter()
+                .partition::<Vec<_>, _>(|definition| definition.starts_with("alloc"));
+            promoted.sort_by_cached_key(|definition| renumber(definition, "alloc", &[]));
+            let mut texts = vec![function];
+            texts.extend(promoted);
+            let mut named = Vec::<String>::new();
+            let mut scanned = 0;
+            while scanned < texts.len() {
+                for name in renumber_with_names(&texts[scanned], "alloc", &[]).1 {
+                    if !named.contains(&name) {
+                        named.push(name.clone());
+                        texts.extend(
+                            allocations
+                                .iter()
+                                .find(|definition| definition.split(' ').next() == Some(&name))
+                                .cloned(),
+                        );
+                    }
                 }
+                scanned += 1;
             }
-            attached.sort_by_cached_key(|definition| renumber(definition, "alloc", &[]));
-            attached.insert(0, function);
-            renumber(&attached.join("\n"), "alloc", &[])
+            let mut unnamed = allocations
+                .into_iter()
+                .filter(|definition| !texts.contains(definition))
+                .collect::<Vec<_>>();
+            unnamed.sort_by_cached_key(|definition| renumber(definition, "alloc", &[]));
+            texts.extend(unnamed);
+            renumber(&texts.join("\n"), "alloc", &[])
         })
         .collect()
 }
@@ -382,6 +401,11 @@ fn canonical_body(lines: &[&str]) -> String {
 
 /// `text` with each `{prefix}N` numbered by first appearance, and the `units` as `_unit`.
 fn renumber(text: &str, prefix: &str, units: &[&str]) -> String {
+    renumber_with_names(text, prefix, units).0
+}
+
+/// [`renumber`]'s output, and the original names in order of first appearance.
+fn renumber_with_names(text: &str, prefix: &str, units: &[&str]) -> (String, Vec<String>) {
     let mut names = Vec::<String>::new();
     let mut output = String::new();
     let mut rest = text;
@@ -415,7 +439,7 @@ fn renumber(text: &str, prefix: &str, units: &[&str]) -> String {
         rest = &tail[name.len()..];
     }
     output.push_str(rest);
-    output
+    (output, names)
 }
 
 /// `mir` without the lines and columns that name impls and closures, as in
@@ -433,8 +457,19 @@ fn without_locations(mir: &str) -> String {
         let path_end = tail.find([':', '>', '}']).unwrap_or(tail.len());
         output.push_str(&tail[..path_end]);
         rest = &tail[path_end..];
-        if rest.starts_with(':') && rest[1..].starts_with(|c: char| c.is_ascii_digit()) {
-            rest = &rest[rest.find(['>', '}']).unwrap_or(rest.len())..];
+        // Only `:line:column: line:column` before the `>` or `}`, unlike `"x@a.rs:1 one}"`.
+        if let Some(location) = rest.strip_prefix(':')
+            && let Some(end) = location.find(['>', '}'])
+            && location[..end]
+                .split([':', ' '])
+                .filter(|part| !part.is_empty())
+                .count()
+                == 4
+            && location[..end]
+                .chars()
+                .all(|c| c.is_ascii_digit() || matches!(c, ':' | ' '))
+        {
+            rest = &location[end..];
         }
     }
     output.push_str(rest);
