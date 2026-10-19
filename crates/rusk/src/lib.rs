@@ -2719,7 +2719,8 @@ fn emit_statement(node: &Node, _context: Context, is_last: bool, emitter: &mut E
     {
         emit_multiline_closure_assignment(node, lhs.trim(), rhs.trim(), emitter);
     } else if !node.children.is_empty() && is_raw_braced_expr_head(text) {
-        emit_raw_braced_expr(node, text, is_last && !has_explicit_semicolon, emitter);
+        let is_value = is_last && !has_explicit_semicolon && !is_let(text);
+        emit_raw_braced_expr(node, text, is_value, emitter);
     } else if !node.children.is_empty()
         && let Some(head) = let_else_head(text)
     {
@@ -2758,7 +2759,7 @@ fn emit_multiline_closure_expr(node: &Node, head: &str, is_last: bool, emitter: 
     let indent = spaces(node.indent);
     emitter.push(
         node,
-        format!("{}{} {{", indent, lower_expr(strip_open_brace(head))),
+        format!("{}{} {{", indent, lower_expr(strip_block_opener(head))),
     );
     emit_nodes(&node.children, Context::Block, emitter);
     emitter.push_generated(format!("{}}}{}", indent, if is_last { "" } else { ";" }));
@@ -2772,7 +2773,7 @@ fn emit_multiline_closure_assignment(node: &Node, lhs: &str, rhs: &str, emitter:
             "{}{} = {} {{",
             indent,
             lower_expr(lhs),
-            lower_expr(strip_open_brace(rhs))
+            lower_expr(strip_block_opener(rhs))
         ),
     );
     emit_nodes(&node.children, Context::Block, emitter);
@@ -2781,7 +2782,7 @@ fn emit_multiline_closure_assignment(node: &Node, lhs: &str, rhs: &str, emitter:
 
 fn emit_raw_braced_expr(node: &Node, head: &str, is_last: bool, emitter: &mut Emitter) {
     let indent = spaces(node.indent);
-    let head = strip_open_brace(head);
+    let head = strip_block_opener(head);
     emitter.push(node, format!("{}{} {{", indent, lower_expr(head)));
     emit_nodes(&node.children, Context::Block, emitter);
     let (closing, has_explicit_semicolon) = node
@@ -3170,6 +3171,7 @@ fn lower_expr_head(text: &str) -> String {
 }
 
 fn is_multiline_closure_head(text: &str) -> bool {
+    let text = strip_block_marker(text).0;
     let closure = text.trim().strip_prefix("move ").unwrap_or(text.trim());
     let Some(rest) = closure.strip_prefix('|') else {
         return false;
@@ -3190,7 +3192,23 @@ fn let_else_head(text: &str) -> Option<&str> {
 }
 
 fn is_raw_braced_expr_head(text: &str) -> bool {
-    text.trim().ends_with('{')
+    text.trim().ends_with('{') || ends_with_closure_block(text)
+}
+
+/// Whether `text` ends with a closure head that owns the indented block after `:`, as in
+/// `xs.sort_by(|a, b|:` or `spawn(move || -> u8:`.
+fn ends_with_closure_block(text: &str) -> bool {
+    let (head, has_block) = strip_block_marker(text);
+    let params = match head.rsplit_once("->") {
+        Some((params, output)) if !output.contains('|') => params,
+        _ => head,
+    };
+    has_block && params.trim_end().ends_with('|')
+}
+
+/// The head of a block-owning expression line without its `{` or `:`.
+fn strip_block_opener(text: &str) -> &str {
+    strip_open_brace(strip_block_marker(text).0)
 }
 
 fn strip_open_brace(text: &str) -> &str {

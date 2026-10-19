@@ -67,6 +67,7 @@ just web # open web editor
 - optional opening braces on `:`-marked indented blocks, plus Rust `{` blocks as an escape hatch
 - single-expression function shorthand with `=`, e.g. `fn id(value: i32) -> i32 = value`, including a block head such as `fn name(n: i32) -> &str = match n:` followed by its indented arms
 - `if condition then expr else expr` expressions
+- closure heads own `:` blocks, e.g. `let f = |n: u8| -> String:`, `move ||:`, and `xs.sort_by(|a, b|:` with the call's closing delimiters inferred
 - `let PAT = expr else:` with an indented diverging block
 - `let x = if c:`, `x += if c:`, and `return if c:` with indented branches and `else if d:` / `else:` siblings
 - Rust-style inline struct literals, e.g. `Self{ id, name }`
