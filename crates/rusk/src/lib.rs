@@ -758,7 +758,8 @@ fn ruk_line_needs_semicolon(text: &str) -> bool {
         && !text.ends_with(';')
         && !text.ends_with(',')
         && !text.ends_with('{')
-        && !text.ends_with(['=', '+', '-', '/', '%', '&', '|', '^'])
+        && !text.ends_with(['=', '+', '-', '/', '%', '&', '|', '^', '<'])
+        && !text.ends_with("=>")
         && !text
             .chars()
             .all(|character| matches!(character, '}' | ',' | ';'))
@@ -1856,10 +1857,27 @@ fn joins_next_line(
     let Some(open) = open_delimiters(text) else {
         return true;
     };
+    // The line that decides is the last non-blank one, so a blank line after `= // note` waits too.
+    let last = text.lines().rev().find(|line| !line.trim().is_empty());
+    let code = without_trailing_line_comment(last.unwrap_or_default());
+    if *group == Some('<') {
+        // Generic parameters over several lines, closed by a `>` line at the head's indent.
+        if !code.trim_start().starts_with('>') {
+            return next.is_some_and(|next| {
+                raw_indent(next) > indent
+                    || (raw_indent(next) == indent && next.trim_start().starts_with('>'))
+            });
+        }
+        *group = None;
+    }
     if let Some(outer) = *group {
-        // Once the group's outer delimiter closes, a trailing `{` opens an indented block.
+        // Once the group's outer delimiter closes, a trailing `{` or `:` opens an indented block,
+        // while a `(` or `[` the closing line opens continues the group.
         return match open.first() {
-            Some(first) => *first == outer,
+            Some(first) => {
+                *first == outer
+                    || (matches!(first, '(' | '[') && !code.trim_end().ends_with(':'))
+            }
             None => next.is_some_and(|next| {
                 let chained = next.trim_start();
                 (raw_indent(next) == indent
@@ -1869,14 +1887,17 @@ fn joins_next_line(
             }),
         };
     }
-    // The line that decides is the last non-blank one, so a blank line after `= // note` waits too.
-    let last = text.lines().rev().find(|line| !line.trim().is_empty());
-    let code = without_trailing_line_comment(last.unwrap_or_default());
     if code.trim_end().ends_with(['(', '['])
         || opens_struct_literal(code)
         || (open.last() == Some(&'{') && is_use_or_extern_crate(code))
+        || (code.trim_end().ends_with(',') && matches!(open.first(), Some('(' | '[')))
+        || opens_macro_braces(text)
     {
         *group = open.first().copied();
+        return true;
+    }
+    if code.trim_end().ends_with('<') && next.is_some_and(|next| raw_indent(next) > indent) {
+        *group = Some('<');
         return true;
     }
     let trimmed = code.trim_end();
@@ -1886,6 +1907,31 @@ fn joins_next_line(
                 .iter()
                 .any(|operator| trimmed.ends_with(operator)))
             || next.is_some_and(|next| continues_where_clause(text, next, indent)))
+}
+
+/// Whether the outermost delimiter `text` leaves open is the `{` of a macro invocation, as in
+/// `quote_spanned! {span=>`, whose token tree continues on the next lines.
+fn opens_macro_braces(text: &str) -> bool {
+    let chars = text.chars().collect::<Vec<_>>();
+    let mut open = Vec::new();
+    let mut index = 0;
+    while index < chars.len() {
+        if let Some(end) = opaque_span_end(&chars, index) {
+            index = end + 1;
+            continue;
+        }
+        match chars[index] {
+            '(' | '[' | '{' => open.push(index),
+            ')' | ']' | '}' => {
+                open.pop();
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+    open.first().is_some_and(|&at| {
+        chars[at] == '{' && chars[..at].iter().rev().find(|c| !c.is_whitespace()) == Some(&'!')
+    })
 }
 
 /// For each line heading a multi-line header, such as a long `if` condition, the index of the line
@@ -2195,6 +2241,7 @@ fn parse_nodes(
 fn accepts_closing_line(text: &str, siblings: &[Node]) -> bool {
     let text = text.trim();
     text.ends_with('{')
+        || is_match(strip_block_marker(text).0)
         || is_trailing_match(strip_block_marker(text).0)
         || is_trailing_if(strip_block_marker(text).0)
         || (is_else_branch(text)
@@ -2398,7 +2445,7 @@ fn validate_match_arm(node: &Node) -> Result<(), TranspileError> {
             validate_nodes(&node.children, Context::Block)
         } else if node.children.is_empty() {
             Ok(())
-        } else if has_block_marker(node.text.trim()) {
+        } else if has_explicit_block_opener(node.text.trim()) {
             validate_nodes(&node.children, arm_block_context(expr))
         } else if are_continuations(&node.children) {
             validate_nodes(&node.children, Context::Block)
@@ -2690,7 +2737,7 @@ fn emit_general(node: &Node, context: Context, is_last: bool, emitter: &mut Emit
     } else {
         let (text, has_explicit_semicolon) = strip_explicit_semicolon(text);
         let (block_text, _) = strip_block_marker(text);
-        if is_match(block_text) {
+        if is_match(block_text) && node.closing.is_none() {
             emit_braced_item_statement(
                 node,
                 Context::Match,
@@ -2699,12 +2746,13 @@ fn emit_general(node: &Node, context: Context, is_last: bool, emitter: &mut Emit
                 has_explicit_semicolon || !is_last,
                 true,
             );
-        } else if is_trailing_match(block_text)
+        } else if is_match(block_text)
+            || is_trailing_match(block_text)
             || (!node.children.is_empty() && is_trailing_if(block_text))
         {
             let indent = spaces(node.indent);
             emitter.push(node, format!("{}{} {{", indent, lower_expr(block_text)));
-            let context = if is_trailing_match(block_text) {
+            let context = if is_match(block_text) || is_trailing_match(block_text) {
                 Context::Match
             } else {
                 Context::Block
@@ -3041,8 +3089,9 @@ fn emit_match_arm(node: &Node, emitter: &mut Emitter) {
             emitter.push(node, format!("{}{} => {{", indent, pattern));
             emit_nodes(&node.children, Context::Block, emitter);
             emitter.push_generated(format!("{}}},", indent));
-        } else if has_block_marker(node.text.trim()) {
-            // A body opening a block, as `x => match y:`, `x => unsafe:`, or `x => f(:`.
+        } else if has_explicit_block_opener(node.text.trim()) {
+            // A body opening a block, as `x => match y:`, `x => unsafe:`, or `x => f(|v| {`.
+            let expr = strip_open_brace(expr).trim_end();
             let space = if expr.ends_with(['(', '[']) { "" } else { " " };
             emitter.push(node, format!("{indent}{pattern} => {}{space}{{", lower_expr(expr)));
             emit_nodes(&node.children, arm_block_context(expr), emitter);
@@ -3083,6 +3132,7 @@ fn emit_match_arm(node: &Node, emitter: &mut Emitter) {
 
 /// The context of the block a match arm body such as `match y:` or `unsafe:` opens.
 fn arm_block_context(expr: &str) -> Context {
+    let expr = strip_open_brace(expr.trim());
     if is_match(expr) || is_trailing_match(expr) {
         Context::Match
     } else {
@@ -3149,8 +3199,18 @@ fn emit_struct_literal_field(node: &Node, emitter: &mut Emitter) {
     }
 }
 
+/// `text` split at its first top-level `=>`, so a macro arm pattern such as `($a:expr => $b:expr)`
+/// keeps its inner arrow.
 fn split_arrow(text: &str) -> Option<(&str, &str)> {
-    text.split_once("=>")
+    let chars = text.chars().collect::<Vec<_>>();
+    let at = top_level_position(&chars, 0, |at| chars[at..].starts_with(&['=', '>']));
+    match at {
+        Some(at) => {
+            let at = text.char_indices().nth(at).map_or(text.len(), |(byte, _)| byte);
+            Some((&text[..at], &text[at + 2..]))
+        }
+        None => text.split_once("=>"),
+    }
 }
 
 fn split_once_top_level(text: &str, needle: char) -> Option<(&str, &str)> {
@@ -5019,11 +5079,11 @@ fn is_enum_item(text: &str) -> bool {
 }
 
 fn is_trait_item(text: &str) -> bool {
-    starts_item(text, "trait")
+    starts_item(text, "trait") || starts_item(text, "unsafe trait")
 }
 
 fn is_impl_or_mod_item(text: &str) -> bool {
-    starts_item(text, "impl") || starts_item(text, "mod")
+    starts_item(text, "impl") || starts_item(text, "unsafe impl") || starts_item(text, "mod")
 }
 
 fn is_macro_item(text: &str) -> bool {
