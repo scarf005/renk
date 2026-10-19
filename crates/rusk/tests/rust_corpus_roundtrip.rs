@@ -45,6 +45,7 @@ const CORPUS: &[(&str, &str)] = &[
     ("macro_matchers", include_str!("rust_corpus/macro_matchers.rs")),
     ("casts", include_str!("rust_corpus/casts.rs")),
     ("one_line_control", include_str!("rust_corpus/one_line_control.rs")),
+    ("exact_text", include_str!("rust_corpus/exact_text.rs")),
 ];
 
 const RUSK_CORPUS: &[(&str, &str)] = &[
@@ -124,6 +125,15 @@ fn rust_conversion_emits_idiomatic_rusk() {
         rust_to_rusk_aggressive(rust).unwrap(),
         include_str!("rust_corpus/idiomatic.aggressive.rsk")
     );
+}
+
+#[test]
+fn rust_conversions_keep_the_text_of_rustfmt_shaped_rust() {
+    let rust = include_str!("rust_corpus/exact_text.rs");
+    let rusk = rust_to_rusk(rust).unwrap();
+    assert_eq!(to_rust(&rusk, SourceSyntax::Rusk).unwrap(), rust, "via Rusk:\n{rusk}");
+    let ruk = rust_to_ruk(rust).unwrap();
+    assert_eq!(ruk_to_rust(&ruk).unwrap(), rust, "via Ruk:\n{ruk}");
 }
 
 fn tokens(rust: &str) -> String {
