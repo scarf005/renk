@@ -944,3 +944,9 @@ fn macro_rules_comments_keep_their_semicolons() {
     let rusk = rust_to_rusk("macro_rules! m {\n    // m!(a);\n    ($a:expr) => { $a };\n}\n").unwrap();
     assert_lines(&rusk, &["    // m!(a);\n"]);
 }
+
+#[test]
+fn closure_return_types_without_bodies_do_not_panic() {
+    let _ = transpile("||->let :r#\"\"#");
+    let _ = transpile("let f = || -> u8 let x: u8 = 1\n");
+}
