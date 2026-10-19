@@ -244,8 +244,17 @@ fn uppercase_operand_before_block_opener_is_not_a_struct_literal() {
 fn tab_errors_report_the_physical_line() {
     let error = transpile("fn f() -> i32:\n    g(\n        1,\n\t2,\n    )\n").unwrap_err();
     assert_eq!(error.line, 4);
-    let error = rust_to_rusk("fn f() -> i32 {\n    g(\n        1,\n\t2,\n    )\n}\n").unwrap_err();
-    assert_eq!(error.line, 4);
+}
+
+#[test]
+fn only_indentation_tabs_are_rejected_and_rust_indentation_tabs_expand() {
+    let output = rust("fn f() -> &'static str:\n    // a\tb\n    let s = \"x\ty\"\n    \"\n\tz\"\n");
+    assert!(output.contains("// a\tb"), "{output}");
+    assert!(output.contains("\"x\ty\""), "{output}");
+    assert!(output.contains("\"\n\tz\""), "{output}");
+    let rusk = rust_to_rusk("fn f() -> i32 {\n\tlet x = 1;\t// a\tb\n\tx\n}\n").unwrap();
+    assert!(rusk.contains("    let x = 1\t// a\tb\n"), "{rusk}");
+    assert!(rust(&rusk).contains("    let x = 1;"), "{rusk}");
 }
 
 #[test]
