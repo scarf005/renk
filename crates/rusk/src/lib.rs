@@ -1344,7 +1344,9 @@ fn convert_rust_statement(text: &str, parent: Option<RustBlockKind>) -> Converte
         };
         let header = header.trim_end();
         let kind = classify_rust_block_header(header, parent);
-        let text = if is_raw_rust_block_header(header, kind) {
+        let text = if header.is_empty() {
+            "{".to_string()
+        } else if is_raw_rust_block_header(header, kind) {
             format!("{} {{", lower_rust_syntax(header))
         } else {
             format!("{}{separator}:", lower_rust_syntax(header))
@@ -2922,7 +2924,10 @@ fn emit_multiline_closure_assignment(node: &Node, lhs: &str, rhs: &str, emitter:
 fn emit_raw_braced_expr(node: &Node, head: &str, is_last: bool, emitter: &mut Emitter) {
     let indent = spaces(node.indent);
     let head = strip_block_opener(head);
-    emitter.push(node, format!("{}{} {{", indent, lower_expr(head)));
+    let lowered = lower_expr(head);
+    // A bare block is a `{` line.
+    let space = if lowered.is_empty() { "" } else { " " };
+    emitter.push(node, format!("{indent}{lowered}{space}{{"));
     emit_nodes(&node.children, Context::Block, emitter);
     let (closing, has_explicit_semicolon) = node
         .closing
@@ -2932,7 +2937,8 @@ fn emit_raw_braced_expr(node: &Node, head: &str, is_last: bool, emitter: &mut Em
         "{}}}{}{}",
         indent,
         closing,
-        if is_last && !has_explicit_semicolon {
+        // A bare block is a statement without `;`.
+        if (is_last || lowered.is_empty()) && !has_explicit_semicolon {
             ""
         } else {
             ";"
