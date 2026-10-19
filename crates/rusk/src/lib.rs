@@ -395,7 +395,14 @@ impl RukSemicolonInferer {
         let mut signature = None::<String>;
         // The scope the previous line closed, which an `else {` line on its own continues.
         let mut previous_closed = None::<RukScope>;
+        let lines = self.lines.iter().map(String::as_str).collect::<Vec<_>>();
+        let heads = lone_opener_heads(&lines, &vec![false; lines.len()], "{");
+        // The lone `{` line ending a multi-line header, and the scope its first line closed.
+        let mut header_end = None::<usize>;
+        let mut header_closed = None::<RukScope>;
         for index in 0..self.lines.len() {
+            header_end = header_end.filter(|&end| end >= index).or(heads[index]);
+            let in_long_header = header_end.is_some_and(|end| end > index);
             let raw = self.lines[index].trim_end().to_string();
             let raw = raw.as_str();
             let text = raw.trim_start();
@@ -415,7 +422,7 @@ impl RukSemicolonInferer {
                         let next = next.trim();
                         next == "{" || next == "where" || next.starts_with("where ")
                     }));
-            let converted = if self.in_macro() || header_continues {
+            let converted = if self.in_macro() || header_continues || in_long_header {
                 raw.to_string()
             } else if closed.is_some_and(|scope| scope.ends_statement)
                 && split_line_comment(text).map_or(text, |(code, _)| code).trim_end() == "}"
@@ -434,9 +441,18 @@ impl RukSemicolonInferer {
                 Some(start) => format!("{start} {code}"),
                 None => code.to_string(),
             };
-            if looks_like_item_header_without_body(&header)
-                && !header.ends_with(['{', ';'])
-                && !terminated
+            if heads[index].is_some() {
+                header_closed = closed;
+            }
+            let closed = if header_end == Some(index) {
+                header_closed.take()
+            } else {
+                closed
+            };
+            if in_long_header
+                || (looks_like_item_header_without_body(&header)
+                    && !header.ends_with(['{', ';'])
+                    && !terminated)
             {
                 signature = Some(header);
             } else {
@@ -444,7 +460,7 @@ impl RukSemicolonInferer {
                     previous_closed.filter(|_| is_else_branch(strip_open_brace(&header)));
                 self.open_scope_from_line(&header, index, indent, closed.or(continued));
             }
-            if !code.is_empty() {
+            if !code.is_empty() && !in_long_header {
                 previous_closed = closed;
             }
             let next_brace_depth = brace_depth_after_line(brace_depth, text);
@@ -798,6 +814,7 @@ fn convert_rust_lines(source: &str, aggressive: bool) -> Result<String, Transpil
     let mut arm_depth = None;
 
     let in_literal = lines_ending_in_literal(source);
+    let heads = lone_opener_heads(&source.lines().collect::<Vec<_>>(), &in_literal, "{");
     let mut raw_lines = source.lines().enumerate().peekable();
     while let Some((index, raw)) = raw_lines.next() {
         reject_tabs(raw, index + 1)?;
@@ -866,16 +883,19 @@ fn convert_rust_lines(source: &str, aggressive: bool) -> Result<String, Transpil
         }
         let mut text = format!("{text}{comment}");
         let mut group = None;
-        while joins_next_line(
+        let mut header_end = heads[index];
+        while (joins_next_line(
             &text,
             raw_lines.peek().map(|(_, next)| *next),
             raw_indent(raw),
             &mut group,
-        ) && let Some((index, next)) = raw_lines.next()
+        ) || header_end.is_some())
+            && let Some((index, next)) = raw_lines.next()
         {
             reject_tabs(next, index + 1)?;
             text.push('\n');
             text.push_str(keep_literal_end(next, in_literal[index]));
+            header_end = header_end.filter(|&end| end > index).or(heads[index]);
         }
         let (text, comment) = split_trailing_comment(&text);
         let converted = convert_rust_statement(text, stack.last().map(|block| block.kind));
@@ -1315,9 +1335,13 @@ fn convert_rust_statement(text: &str, parent: Option<RustBlockKind>) -> Converte
         };
     }
     if let Some(header) = text.strip_suffix('{') {
-        // A `{` on its own line, after a multi-line `where` clause, becomes a `:` line.
+        // A `{` on its own line, after a multi-line header, becomes a `:` line.
         let separator = &header[header.trim_end().len()..];
-        let separator = if separator.contains('\n') { separator } else { "" };
+        let separator = if separator.contains('\n') {
+            separator
+        } else {
+            ""
+        };
         let header = header.trim_end();
         let kind = classify_rust_block_header(header, parent);
         let text = if is_raw_rust_block_header(header, kind) {
@@ -1740,6 +1764,7 @@ fn source_lines(source: &str) -> Result<Vec<SourceLine>, TranspileError> {
     let mut macro_indent = None;
     let mut arm_indent = None;
     let in_literal = lines_ending_in_literal(source);
+    let heads = lone_opener_heads(&source.lines().collect::<Vec<_>>(), &in_literal, ":");
     while let Some((index, raw)) = raw_lines.next() {
         let line = index + 1;
         let without_comment = keep_literal_end(raw, in_literal[index]);
@@ -1776,12 +1801,14 @@ fn source_lines(source: &str) -> Result<Vec<SourceLine>, TranspileError> {
             text = branch.to_string();
         }
         let mut group = None;
+        let mut header_end = heads[index];
         while joins_next_line(
             &text,
             raw_lines.peek().map(|(_, next)| *next),
             raw_indent(without_comment),
             &mut group,
-        ) {
+        ) || header_end.is_some()
+        {
             let Some((index, next)) = raw_lines.next() else {
                 return Err(TranspileError {
                     line,
@@ -1792,6 +1819,7 @@ fn source_lines(source: &str) -> Result<Vec<SourceLine>, TranspileError> {
             reject_tabs(next, index + 1)?;
             text.push('\n');
             text.push_str(keep_literal_end(next, in_literal[index]));
+            header_end = header_end.filter(|&end| end > index).or(heads[index]);
         }
         if is_macro_item(&text) {
             macro_indent = Some(indent);
@@ -1856,6 +1884,40 @@ fn joins_next_line(
                 .iter()
                 .any(|operator| trimmed.ends_with(operator)))
             || next.is_some_and(|next| continues_where_clause(text, next, indent)))
+}
+
+/// For each line heading a multi-line header, such as a long `if` condition, the index of the line
+/// holding only `opener` (`{` in Rust, `:` in Rusk) at the head's indent after its more indented
+/// continuation lines, as rustfmt lays them out.
+fn lone_opener_heads(lines: &[&str], in_literal: &[bool], opener: &str) -> Vec<Option<usize>> {
+    let code = |line: &str| without_trailing_line_comment(line).trim().to_string();
+    let mut heads = vec![None; lines.len()];
+    for (end, line) in lines.iter().enumerate() {
+        if code(line) != opener || (end > 0 && in_literal[end - 1]) {
+            continue;
+        }
+        let indent = raw_indent(line);
+        let mut start = end;
+        while start > 0
+            && !in_literal[start - 1]
+            && (lines[start - 1].trim().is_empty() || raw_indent(lines[start - 1]) > indent)
+        {
+            start -= 1;
+        }
+        let Some(head) = start.checked_sub(1) else {
+            continue;
+        };
+        let head_code = code(lines[head]);
+        if raw_indent(lines[head]) == indent
+            && (start..end).any(|between| !lines[between].trim().is_empty())
+            && !head_code.is_empty()
+            && !head_code.starts_with(['#', '/'])
+            && !head_code.ends_with([';', ',', '{', '}'])
+        {
+            heads[head] = Some(end);
+        }
+    }
+    heads
 }
 
 /// Whether `next` continues the multi-line `where` clause of the item header `text`: a `where`
@@ -5156,11 +5218,14 @@ impl Emitter {
     }
 
     /// Pushes a possibly multi-line logical line, mapping each physical line to its source line.
-    /// A header whose `:` stands on its own line, after a multi-line `where` clause, opens its
-    /// `{` on its own line too.
+    /// A multi-line header whose `:` stands on its own line opens its `{` on its own line too.
     fn push(&mut self, node: &Node, mut line: String) {
         let own_line_marker = node.text.lines().count() > 1
-            && node.text.lines().last().is_some_and(|last| last.trim() == ":");
+            && node
+                .text
+                .lines()
+                .last()
+                .is_some_and(|last| last.trim() == ":");
         if own_line_marker
             && line.split('\n').count() + 1 == node.text.lines().count()
             && line.ends_with(" {")
