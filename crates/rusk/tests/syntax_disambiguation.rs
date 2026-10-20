@@ -1351,3 +1351,16 @@ fn rust_conversion_keeps_the_brace_of_called_closures() {
     let rusk = rust_to_rusk(source).unwrap();
     assert_eq!(rust(&rusk), source, "{rusk}");
 }
+
+#[test]
+fn rust_conversion_reads_let_values_with_blocks_in_their_headers() {
+    for source in [
+        "fn f(x: u8) -> u8 {\n    let v = if match x {\n        0 => true,\n        _ => false,\n    } {\n        1\n    } else {\n        2\n    };\n    v\n}\n",
+        "fn f(s: S) -> u8 {\n    let r = match s(|t| {\n        t\n    }) {\n        _ => 1,\n    };\n    r\n}\n",
+        // A statement `if let` whose value holds blocks stays a statement.
+        "fn f(a: Option<u8>) -> u8 {\n    if let Some(found) = if let Some(x) = a {\n        Some(x)\n    } else {\n        None\n    } {\n        return found;\n    }\n    0\n}\n",
+    ] {
+        let rusk = rust_to_rusk(source).unwrap();
+        assert_eq!(rust(&rusk), source, "{rusk}");
+    }
+}

@@ -57,3 +57,24 @@ pub fn empty_value_blocks(A: u8) -> u8 {
     let _ = (unit, commented);
     A
 }
+
+pub fn let_values_with_blocks_in_headers(x: u8, items: &[u8]) -> u8 {
+    let v = if match x {
+        0 => true, // {
+        A_MAX => false,
+        _ => false,
+    } {
+        1
+    } else {
+        2
+    };
+    let r = match items.iter().position(|t| {
+        *t == x // }) {
+    }) {
+        Some(at) => at as u8,
+        None => 0,
+    };
+    v + r
+}
+
+const A_MAX: u8 = 9;
