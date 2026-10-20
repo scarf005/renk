@@ -57,6 +57,10 @@ pub(crate) struct RustLayout {
     first_tokens: RefCell<HashMap<SyntaxNode, Option<SyntaxToken>>>,
     /// The attributes, in source order.
     attributes: Vec<SyntaxNode>,
+    /// The tree's nodes from the root down, dropped after the fields above and in this order, so
+    /// each drop frees one node rather than recursing through a deep chain such as `x` /
+    /// `.a(|y| {` ... on a small WebAssembly stack.
+    _green: Vec<rowan::GreenNode>,
 }
 
 /// The delimiters open after the scanned tokens, and whether a line break falls inside them;
@@ -91,6 +95,10 @@ impl RustLayout {
             attributes: root
                 .descendants()
                 .filter(|node| node.kind() == ATTR)
+                .collect(),
+            _green: root
+                .descendants()
+                .map(|node| node.green().to_owned())
                 .collect(),
             containers: HashSet::from([root]),
             depth: Vec::new(),
@@ -439,11 +447,16 @@ impl RustLayout {
         found
     }
 
+    /// The first token of `element`, found without recursing down a deep chain.
     fn first_token(&self, element: &SyntaxNode) -> Option<SyntaxToken> {
         self.first_tokens
             .borrow_mut()
             .entry(element.clone())
-            .or_insert_with(|| element.first_token())
+            .or_insert_with(|| {
+                element
+                    .descendants_with_tokens()
+                    .find_map(NodeOrToken::into_token)
+            })
             .clone()
     }
 
