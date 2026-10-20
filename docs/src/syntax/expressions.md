@@ -9,7 +9,8 @@ pub fn clamp(total: i32) -> i32 = if total < 0 then 0 else total
 ```
 
 An `if` that opens blocks can stand where a value goes, as in `let x = if c:`, `x += if c:`,
-or `return if c:`, with `else if d:` and `else:` lines at the `if`'s indent.
+`return if c:`, `max(if c:`, or `.map(|x| if c:`, with `else if d:` and `else:` lines at the
+`if`'s indent. A `match` can stand there too, as in `[match x:`.
 
 ```rsk
 pub fn sign(value: i32) -> i32:
@@ -49,7 +50,17 @@ pub fn total(values: &[i32]) -> i32:
     ).sum()
 ```
 
-A `{` head closes the same way with `})`. A closing line can open the next block argument:
+A `{` head closes the same way with `})`. A last `else` on one line ends the chain with what
+closes the group, as in `else { floor })`:
+
+```rsk
+pub fn raised(values: &[i32], floor: i32) -> i32:
+    values.iter().map(|value| if *value > floor:
+        *value
+    else { floor }).sum()
+```
+
+A closing line can open the next block argument:
 
 ```rsk
 pub fn size(value: Option[usize]) -> usize:
