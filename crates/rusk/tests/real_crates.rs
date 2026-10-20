@@ -299,19 +299,22 @@ fn mir(crate_dir: &Path, target: &Path, args: &[&str]) -> Result<String, String>
         .arg("-Zmir-include-spans=off")
         .current_dir(crate_dir)
         .env("CARGO_TARGET_DIR", target)
+        // Incremental state from an earlier conversion renumbers allocations.
+        .env("CARGO_INCREMENTAL", "0")
         .output()
         .unwrap();
     if !output.status.success() {
         return Err(String::from_utf8_lossy(&output.stderr).into_owned());
     }
-    let mut files = fs::read_dir(target.join("debug/deps"))
+    // A build with other flags, which cargo keeps beside this one, writes its MIR under another
+    // hash, and a fresh build writes none.
+    fs::read_dir(target.join("debug/deps"))
         .unwrap()
         .map(|entry| entry.unwrap().path())
-        .filter(|path| path.extension().is_some_and(|extension| extension == "mir"));
-    match (files.next(), files.next()) {
-        (Some(file), None) => Ok(fs::read_to_string(file).unwrap()),
-        _ => Err(format!("expected one .mir file in {}", target.display())),
-    }
+        .filter(|path| path.extension().is_some_and(|extension| extension == "mir"))
+        .max_by_key(|path| fs::metadata(path).unwrap().modified().unwrap())
+        .map(|file| fs::read_to_string(file).unwrap())
+        .ok_or_else(|| format!("no .mir file in {}", target.display()))
 }
 
 /// The items of `mir`, each a function with the allocations and promoted constants after it,
