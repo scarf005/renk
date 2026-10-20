@@ -1267,3 +1267,15 @@ fn one_line_else_branches_close_what_their_chain_head_opened() {
         "fn f(c: bool) -> u8 {\n    let v = g(if c {\n        1\n    } else if C { 3 } else { 2 }).min(X);\n    v\n}\n"
     );
 }
+
+#[test]
+fn closure_bodies_take_if_heads_and_inline_ifs() {
+    assert_eq!(
+        rust("fn f(xs: &[u8]) -> Vec[u8]:\n    xs.iter().map(|x| if *x > 0:\n        1\n    else { 2 }).collect()\n"),
+        "fn f(xs: &[u8]) -> Vec<u8> {\n    xs.iter().map(|x| if *x > 0 {\n        1\n    } else { 2 }).collect()\n}\n"
+    );
+    assert_eq!(
+        rust("fn f(xs: &[u8]) -> Vec[u8]:\n    xs.iter().map(|X| if X > &0 then 1 else 2).collect()\n"),
+        "fn f(xs: &[u8]) -> Vec<u8> {\n    xs.iter().map(|X| if X > &0 { 1 } else { 2 }).collect()\n}\n"
+    );
+}

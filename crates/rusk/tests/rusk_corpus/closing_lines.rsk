@@ -179,3 +179,15 @@ pub fn one_line_else(c: bool, xs: &[usize]) -> usize:
     else if C_ON:
         b[0]
     else { 0 }).max(A_MAX as usize)
+
+pub fn closure_ifs(xs: &[usize]) -> Vec[usize]:
+    let ys = xs.iter().map(|X| if *X > LIMIT then 1 else 2).collect[Vec[usize]]()
+    let any = xs.is_empty() || if C_ON:
+        true // |
+    else:
+        false
+    xs.iter().map(move |x| if *x > ys.len():
+        "|)".len()
+    else:
+        0
+    ).filter(|_| any).collect()
