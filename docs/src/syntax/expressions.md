@@ -33,13 +33,31 @@ pub fn first(values: &[i32]) -> i32:
 
 ## Closures
 
-A closure head can open a block. Rusk closes the call around it.
+A closure head can open a block. A block whose head leaves `(` or `[` open ends with a line
+at the head's indent that closes them, and the rest of that line continues the expression:
 
 ```rsk
 pub fn sorted(mut values: Vec[i32]) -> Vec[i32]:
     values.sort_by(|a, b|:
         b.cmp(a)
+    )
     values
+
+pub fn total(values: &[i32]) -> i32:
+    values.iter().map(|value|:
+        value * 2
+    ).sum()
+```
+
+A `{` head closes the same way with `})`. A closing line can open the next block argument:
+
+```rsk
+pub fn size(value: Option[usize]) -> usize:
+    value.map_or_else(||:
+        0
+    , |n|:
+        n * 2
+    )
 ```
 
 ## Match arms

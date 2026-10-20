@@ -68,7 +68,7 @@ just web # open web editor
 - single-expression function shorthand with `=`, e.g. `fn id(value: i32) -> i32 = value`, including a block head such as `fn name(n: i32) -> &str = match n:` followed by its indented arms
 - match arm bodies that open a block own the indented lines after them, e.g. `Some(x) => match x:`, `Ok(v) => unsafe:`, and `None => Ok(unsafe:`
 - `if condition then expr else expr` expressions
-- closure heads own `:` blocks, e.g. `let f = |n: u8| -> String:`, `move ||:`, and `xs.sort_by(|a, b|:` with the call's closing delimiters inferred
+- closure heads own `:` blocks, e.g. `let f = |n: u8| -> String:`, `move ||:`, and `xs.sort_by(|a, b|:`; a block whose head leaves `(` or `[` open ends with a closing line at the head's indent, such as `)`, `).sum()`, or `})`
 - `let PAT = expr else:` with an indented diverging block
 - `let x = if c:`, `x += if c:`, and `return if c:` with indented branches and `else if d:` / `else:` siblings
 - Rust-style inline struct literals, e.g. `Self{ id, name }`

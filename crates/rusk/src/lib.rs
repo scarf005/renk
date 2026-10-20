@@ -110,6 +110,8 @@ struct SourceLine {
     comment: Option<String>,
     /// Comment of the `}` line closing this line's block, as in `} // end`.
     closing_comment: Option<String>,
+    /// Whether a closing line without a tail, such as `})` or `)`, ended this line's block.
+    closed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -150,6 +152,9 @@ struct Emitter {
     last_node_line: usize,
     /// The source line of the attribute just pushed.
     attribute_line: Option<usize>,
+    /// Generated lines, numbered from 0, split from a neighbour: a block argument, which joins
+    /// the `}` before it, as in `}, |y| {`.
+    joining_lines: Vec<usize>,
 }
 
 pub fn transpile(source: &str) -> Result<TranspileOutput, TranspileError> {
@@ -392,6 +397,8 @@ struct RustBlock {
     kind: RustBlockKind,
     /// Opened by a `.method(|x| {` chain line, whose closing `})` Rusk writes itself.
     chained: bool,
+    /// Opened by a line that leaves a `(` or `[` open, as `f(|x| {`, whose closing line Rusk keeps.
+    in_group: bool,
 }
 
 pub fn rust_to_rusk(source: &str) -> Result<String, TranspileError> {
@@ -453,7 +460,12 @@ fn convert_rust_lines(source: &str, aggressive: bool) -> Result<String, Transpil
         let indent = spaces(raw_indent(raw));
         let comment;
         (text, comment) = split_trailing_comment(text);
-        if closing_tail(text).is_some()
+        // `}, |y| {` closes a block argument and opens the next one.
+        let argument = text
+            .strip_prefix('}')
+            .map(str::trim_start)
+            .filter(|rest| rest.starts_with(',') && rest.ends_with('{'));
+        if (closing_tail(text).is_some() && argument.is_none())
             || (stack.last().is_some_and(|block| !block.chained)
                 && closes_before_chain(
                     text,
@@ -473,10 +485,14 @@ fn convert_rust_lines(source: &str, aggressive: bool) -> Result<String, Transpil
             continue;
         }
         let mut closed = false;
+        let mut closes_group = false;
         while let Some(rest) = text.strip_prefix('}') {
-            stack.pop();
+            closes_group |= !closed && stack.pop().is_some_and(|block| block.in_group);
             closed = true;
             text = rest.trim_start_matches(|character| matches!(character, ',' | ';' | ' '));
+        }
+        if closes_group && let Some(argument) = argument {
+            text = argument;
         }
         // A block comment after the braces, as in `} /* end */`, is the line's comment too.
         let comment = if closed && !text.is_empty() && code_len(text) == 0 {
@@ -484,6 +500,30 @@ fn convert_rust_lines(source: &str, aggressive: bool) -> Result<String, Transpil
         } else {
             comment.to_string()
         };
+        if closes_group && is_rust_closing_delimiter_line(text) {
+            let closers = text.trim_end_matches([';', ',']);
+            output.push(format!("{indent}}}{closers}{comment}"));
+            continue;
+        }
+        // A one-line last `else` that also closes the group, as in `} else { 3 });`, ends with a
+        // closing line of its own.
+        if closes_group
+            && is_else_branch(text)
+            && !text.ends_with('{')
+            && let chars = text.chars().collect::<Vec<_>>()
+            && let at = argument_end(&chars, 0)
+            && at < chars.len()
+        {
+            let (branch, closers) = text.split_at(text.char_indices().nth(at).unwrap().0);
+            let converted =
+                convert_rust_statement(branch.trim_end(), stack.last().map(|block| block.kind));
+            output.push(format!("{indent}{}", converted.text));
+            output.push(format!(
+                "{indent}{}{comment}",
+                closers.trim_end_matches([';', ','])
+            ));
+            continue;
+        }
         if text.is_empty() || is_rust_closing_delimiter_line(text) {
             // Rusk drops closing lines, so a `}` line keeps only its comment, as in `} // end`.
             if !comment.is_empty() {
@@ -564,6 +604,11 @@ fn convert_rust_lines(source: &str, aggressive: bool) -> Result<String, Transpil
             stack.push(RustBlock {
                 kind,
                 chained: text.starts_with('.'),
+                // A branch continues the chain its `}` closed, as in `} else {` or `}, |y| {`.
+                in_group: (closes_group && is_branch(text))
+                    || open_delimiters(text).is_some_and(|open| {
+                        open.iter().any(|delimiter| matches!(delimiter, '(' | '['))
+                    }),
             });
         }
     }
@@ -1554,9 +1599,51 @@ fn source_lines(source: &str) -> Result<Vec<SourceLine>, TranspileError> {
                 raw: true,
                 comment: None,
                 closing_comment: None,
+                closed: false,
             });
             continue;
         }
+        // Comment lines at a closing line's indent, as in `    *x` / `// c` / `)`, belong inside the
+        // block it ends.
+        if trimmed.starts_with([')', ']', ',', '}']) {
+            let comments = lines
+                .iter()
+                .rev()
+                .take_while(|line| line.indent == indent && !line.raw && is_comment(&line.text))
+                .count();
+            let start = lines.len() - comments;
+            let body = lines[..start]
+                .iter()
+                .rposition(|owner| owner.indent <= indent)
+                .filter(|&owner| lines[owner].indent == indent)
+                .and_then(|owner| lines.get(owner + 1))
+                .map(|first| first.indent)
+                .filter(|&body| body > indent);
+            if let Some(body) = body {
+                lines[start..]
+                    .iter_mut()
+                    .for_each(|comment| comment.indent = body);
+            }
+        }
+        // A line closing the group a `:` block's head left open, as `)` after `xs.map(|x|:`, ends
+        // the block as a `})` line ends a `{` block.
+        let closes_group_block = trimmed.starts_with([')', ']', ','])
+            && lines
+                .iter()
+                .rev()
+                .find(|owner: &&SourceLine| owner.indent <= indent)
+                .is_some_and(|owner| {
+                    owner.indent == indent
+                        && (has_block_marker(&owner.text) || is_branch(owner.text.trim()))
+                        && opens_group_block(&lines, owner)
+                });
+        let braced;
+        let (without_comment, trimmed) = if closes_group_block {
+            braced = format!("{}}}{trimmed}", spaces(indent));
+            (braced.as_str(), braced.trim())
+        } else {
+            (without_comment, trimmed)
+        };
         // The emitter closes a `.method(|x|:` chain line itself, before its sibling `.method()`.
         let chained = closes_before_chain(trimmed, raw_lines.peek().map(|(_, next)| *next), indent)
             && !lines
@@ -1568,15 +1655,43 @@ fn source_lines(source: &str) -> Result<Vec<SourceLine>, TranspileError> {
         if trimmed.is_empty()
             || (is_closing_delimiter_line(code) && closing_tail(code).is_none() && !chained)
         {
-            // The comment of a closing line, as in `} // end`, follows the generated `}`.
-            if code.len() < trimmed.len()
-                && let Some(owner) = lines
-                    .iter_mut()
-                    .rev()
-                    .find(|owner: &&mut SourceLine| owner.indent <= indent)
-                    .filter(|owner| owner.indent == indent)
+            if let Some(owner) = lines
+                .iter()
+                .rposition(|owner| owner.indent <= indent)
+                .filter(|&owner| lines[owner].indent == indent && !trimmed.is_empty())
             {
-                owner.closing_comment = Some(format!(" {}", trimmed[code.len()..].trim()));
+                // The line closes what its block's head left open, as `})` after `f(|x| {`.
+                let head = &lines[owner];
+                if has_block_marker(&head.text)
+                    || head.text.ends_with('{')
+                    || is_branch(head.text.trim())
+                {
+                    let expected =
+                        block_chain_head(&lines, head).map_or_else(String::new, |head| {
+                            format!(
+                                "}}{}",
+                                closing_delimiters(strip_block_marker(head.text.trim()).0)
+                            )
+                        });
+                    if code.trim_end_matches([';', ',']).replace(' ', "") != expected {
+                        return Err(TranspileError {
+                            line,
+                            message: format!(
+                                "the line closing this block closes what its head left open, `{}`",
+                                // A `:` head closing a group leaves out the `}`, as in `)`.
+                                &expected[usize::from(
+                                    !head.text.ends_with('{') && expected.len() > 1
+                                )..]
+                            ),
+                        });
+                    }
+                }
+                let owner = &mut lines[owner];
+                owner.closed = true;
+                // The comment of a closing line, as in `} // end`, follows the generated `}`.
+                if code.len() < trimmed.len() {
+                    owner.closing_comment = Some(format!(" {}", trimmed[code.len()..].trim()));
+                }
             }
             continue;
         }
@@ -1589,7 +1704,7 @@ fn source_lines(source: &str) -> Result<Vec<SourceLine>, TranspileError> {
         if let Some(branch) = text
             .strip_prefix('}')
             .map(str::trim_start)
-            .filter(|branch| is_else_branch(branch))
+            .filter(|branch| is_branch(branch))
         {
             text = branch.to_string();
         }
@@ -1644,6 +1759,7 @@ fn source_lines(source: &str) -> Result<Vec<SourceLine>, TranspileError> {
                 raw: false,
                 comment: None,
                 closing_comment: None,
+                closed: false,
             });
             code = code[close + 1..].trim_start();
         }
@@ -1654,6 +1770,7 @@ fn source_lines(source: &str) -> Result<Vec<SourceLine>, TranspileError> {
             raw: false,
             comment: (!comment.is_empty()).then(|| comment.to_string()),
             closing_comment: None,
+            closed: false,
         });
     }
     Ok(lines)
@@ -2276,6 +2393,30 @@ fn is_closing_delimiter_line(text: &str) -> bool {
             .all(|character| matches!(character, '}' | ')' | ']' | ';' | ','))
 }
 
+/// Whether the block head `owner`, one of `lines`, leaves a `(` or `[` open, as `xs.map(|x|:`
+/// or `f(|x| {`, or is an `else` branch of a chain whose head does, as in `max(if c:`.
+fn opens_group_block(lines: &[SourceLine], owner: &SourceLine) -> bool {
+    block_chain_head(lines, owner).is_some_and(|head| {
+        open_delimiters(strip_block_marker(head.text.trim()).0)
+            .is_some_and(|open| open.iter().any(|delimiter| matches!(delimiter, '(' | '[')))
+    })
+}
+
+/// The head of the chain of blocks that `owner`, one of `lines`, ends: `owner` itself, or the
+/// line before its branches, as `max(if c:` before `else:`.
+fn block_chain_head<'a>(lines: &'a [SourceLine], owner: &'a SourceLine) -> Option<&'a SourceLine> {
+    if !is_branch(owner.text.trim()) {
+        return Some(owner);
+    }
+    lines
+        .iter()
+        .rev()
+        .skip_while(|line| !std::ptr::eq(*line, owner))
+        .take_while(|line| line.indent >= owner.indent)
+        .filter(|line| line.indent == owner.indent)
+        .find(|line| !is_branch(line.text.trim()))
+}
+
 fn format_line(raw: &str) -> String {
     if raw.trim().is_empty() {
         String::new()
@@ -2303,11 +2444,11 @@ fn parse_nodes(
         }
         // An `else` continues the `if` head of `let x =` / `    if c:` at that head's indent.
         if line.indent > indent
-            && !(is_else_branch(line.text.trim())
+            && !(is_branch(line.text.trim())
                 && nodes
                     .iter()
                     .rev()
-                    .find(|node| !is_else_branch(node.text.trim()))
+                    .find(|node| !is_branch(node.text.trim()))
                     .is_some_and(|head| {
                         let last = head.text.lines().last().unwrap_or_default();
                         head.text.contains('\n')
@@ -2330,6 +2471,23 @@ fn parse_nodes(
             children = parsed.0;
             index = parsed.1;
         }
+        // A block argument such as `, |y|:` continues a chain whose head leaves a group open.
+        let argument = is_branch(line.text.trim())
+            && nodes
+                .iter()
+                .rev()
+                .find(|node| !is_branch(node.text.trim()) && !is_comment(node.text.trim()))
+                .is_some_and(|head| {
+                    open_delimiters(strip_block_marker(head.text.trim()).0).is_some_and(|open| {
+                        open.iter().any(|delimiter| matches!(delimiter, '(' | '['))
+                    })
+                });
+        if !line.raw && line.text.starts_with([')', ']', ',']) && !argument {
+            return Err(TranspileError {
+                line: line.line,
+                message: "a closing line must follow a block whose head leaves `(` or `[` open, at the head's indent".to_string(),
+            });
+        }
         let mut closing = None;
         let mut closing_comment = line.closing_comment.clone();
         if let Some(next) = lines.get(index)
@@ -2337,7 +2495,7 @@ fn parse_nodes(
             && !next.raw
             && let Some(tail) = closing_tail(&next.text)
         {
-            if !accepts_closing_line(&line.text, &nodes) {
+            if !accepts_closing_line(&line.text, &nodes) && !opens_group_block(lines, line) {
                 return Err(TranspileError {
                     line: next.line,
                     message: "a `}` closing line must follow a line ending with `{`, a trailing `match` head, or the last `else` of a `{` chain".to_string(),
@@ -2346,6 +2504,21 @@ fn parse_nodes(
             closing = Some(tail.to_string());
             closing_comment = closing_comment.or_else(|| next.comment.clone());
             index += 1;
+        }
+        let continues_chain = lines
+            .get(index)
+            .is_some_and(|next| next.indent == indent && is_branch(next.text.trim()));
+        if !line.raw
+            && (has_explicit_block_opener(&line.text) || is_branch(line.text.trim()))
+            && opens_group_block(lines, line)
+            && closing.is_none()
+            && !line.closed
+            && !continues_chain
+        {
+            return Err(TranspileError {
+                line: line.line,
+                message: "a block whose head leaves `(` or `[` open ends with a line closing them at the head's indent, such as `)` or `})`".to_string(),
+            });
         }
         // Comments indented under a statement, as in `f(x); // a` / `       // b`, follow it.
         let comments = if !has_explicit_block_opener(&line.text)
@@ -2380,11 +2553,11 @@ fn accepts_closing_line(text: &str, siblings: &[Node]) -> bool {
         || is_match(strip_block_marker(text).0)
         || is_trailing_match(strip_block_marker(text).0)
         || is_trailing_if(strip_block_marker(text).0)
-        || (is_else_branch(text)
+        || (is_branch(text)
             && siblings
                 .iter()
                 .rev()
-                .find(|node| !is_else_branch(node.text.trim()))
+                .find(|node| !is_branch(node.text.trim()))
                 .is_some_and(|head| {
                     let head = strip_block_marker(head.text.trim()).0;
                     head.ends_with('{')
@@ -2686,7 +2859,7 @@ fn emit_scoped_sequence(
     let chain_head = |mut index: usize| {
         while index > 0 && {
             let text = nodes[index].text.trim();
-            is_else_branch(text) || is_comment(text)
+            is_branch(text) || is_comment(text)
         } {
             index -= 1;
         }
@@ -2715,7 +2888,7 @@ fn emit_scoped_sequence(
                 .is_some_and(is_cfg)
             && (end + 1..nodes.len()).all(|later| {
                 let text = nodes[later].text.trim();
-                is_attribute(later) || has_cfg(later) || is_comment(text) || is_else_branch(text)
+                is_attribute(later) || has_cfg(later) || is_comment(text) || is_branch(text)
             })
     };
     // A cfg-selected tail that is not a block-like expression, as in `#[cfg(unix)]` / `v.len()`.
@@ -2739,7 +2912,7 @@ fn emit_scoped_sequence(
             && !nodes[index + 1..]
                 .iter()
                 .find(|next| !is_comment(next.text.trim()))
-                .is_some_and(|next| is_else_branch(next.text.trim()))
+                .is_some_and(|next| is_branch(next.text.trim()))
     };
     for (index, node) in nodes.iter().enumerate() {
         let is_last = tail_is_value && (ends_at(index) || is_cfg_tail(chain_head(index), index));
@@ -2749,16 +2922,14 @@ fn emit_scoped_sequence(
             emit_node(node, context, false, emitter);
             continue;
         }
-        if !is_else_branch(head) {
+        if !is_branch(head) {
             // A chain's branches are values when the chain is the tail or its head uses them, as
             // in `let x = if c {`.
             let (head, _) = strip_explicit_semicolon(head);
             let end = index
                 + nodes[index + 1..]
                     .iter()
-                    .take_while(|next| {
-                        is_else_branch(next.text.trim()) || is_comment(next.text.trim())
-                    })
+                    .take_while(|next| is_branch(next.text.trim()) || is_comment(next.text.trim()))
                     .count();
             branch_is_value = !is_control(strip_block_marker(head).0)
                 || (tail_is_value && (ends_at(end) || is_cfg_tail(index, end)));
@@ -2767,16 +2938,16 @@ fn emit_scoped_sequence(
             && nodes[index + 1..]
                 .iter()
                 .find(|next| !is_comment(next.text.trim()))
-                .is_some_and(|next| is_else_branch(next.text.trim()));
-        let is_branch = chain.is_some() || continues;
+                .is_some_and(|next| is_branch(next.text.trim()));
+        let in_chain = chain.is_some() || continues;
         // The `else` of an arm such as `p => if c:` is a block branch, not an arm.
-        let node_context = if context == Context::Match && is_else_branch(head) {
+        let node_context = if context == Context::Match && is_branch(head) {
             Context::Block
         } else {
             context
         };
         let first = emitter.lines.len();
-        let is_value = if is_branch { branch_is_value } else { is_last };
+        let is_value = if in_chain { branch_is_value } else { is_last };
         // An `else` branch stays inside the closures its chain's head opened; a scope of its
         // own would drop the names it binds for later siblings, but a branch binds none.
         if chain.is_some() {
@@ -2845,6 +3016,14 @@ fn is_else_branch(text: &str) -> bool {
     text == "else" || text.starts_with("else:") || text.starts_with("else ")
 }
 
+/// Whether `text` continues the chain of blocks before it: an `else` branch, or the next block
+/// argument after a block argument's closing line, as in `, |y|:` after `f(|x|:`.
+fn is_branch(text: &str) -> bool {
+    let code = without_trailing_line_comment(text).trim_end();
+    is_else_branch(text)
+        || (code.starts_with(',') && (has_block_marker(code) || code.ends_with('{')))
+}
+
 fn emit_node(node: &Node, context: Context, is_last: bool, emitter: &mut Emitter) {
     emitter.begin_node(node, classify_node(node, context));
     let head = emitter.lines.len();
@@ -2884,9 +3063,10 @@ fn emit_node(node: &Node, context: Context, is_last: bool, emitter: &mut Emitter
         let line = (head + node.text.matches('\n').count()).min(last);
         emitter.comments.push((line, comment.clone()));
     }
+    // The comment of the line closing the node, after the node's last line even when that line
+    // closes a single-line `else` rather than a `}` block.
     if let Some(comment) = &node.closing_comment
         && let Some(last) = emitter.lines.len().checked_sub(1)
-        && emitter.lines[last].trim_start().starts_with('}')
     {
         emitter.comments.push((last, comment.clone()));
     }
@@ -3945,19 +4125,20 @@ fn strip_open_brace(text: &str) -> &str {
     text.trim_end_matches('{').trim_end()
 }
 
+/// The closers, innermost first, of the groups `text` leaves open before the block it opens, as
+/// `)` for `xs.map(|x|` or `})` for `S { a: g(|x|`.
 fn closing_delimiters(text: &str) -> String {
-    let mut round = 0usize;
-    let mut square = 0usize;
-    for character in text.chars() {
-        match character {
-            '(' => round += 1,
-            ')' => round = round.saturating_sub(1),
-            '[' => square += 1,
-            ']' => square = square.saturating_sub(1),
-            _ => {}
-        }
-    }
-    format!("{}{}", ")".repeat(round), "]".repeat(square))
+    let text = text.trim_end();
+    open_delimiters(text.strip_suffix('{').unwrap_or(text))
+        .unwrap_or_default()
+        .iter()
+        .rev()
+        .map(|open| match open {
+            '(' => ')',
+            '[' => ']',
+            _ => '}',
+        })
+        .collect()
 }
 
 fn lower_basic_expr(text: &str) -> String {
@@ -6267,6 +6448,9 @@ impl Emitter {
             line.truncate(line.len() - 2);
             line.push_str(&format!("\n{}{{", spaces(node.indent)));
         }
+        if !is_else_branch(node.text.trim()) && is_branch(node.text.trim()) {
+            self.joining_lines.push(self.lines.len());
+        }
         for (offset, part) in line.split('\n').enumerate() {
             self.source_map.push(SourceMapEntry {
                 source_line: node.line + offset,
@@ -6286,11 +6470,14 @@ impl Emitter {
             }
             let (before, after) = self.lines.split_at_mut(index);
             let (close, branch) = (&mut before[index - 1], &after[0]);
+            let joins = self.joining_lines.contains(&index);
             if close.trim() == "}"
                 && raw_indent(close) == raw_indent(branch)
-                && is_else_branch(branch.trim())
+                && (is_else_branch(branch.trim()) || joins)
             {
-                close.push(' ');
+                if is_else_branch(branch.trim()) {
+                    close.push(' ');
+                }
                 close.push_str(branch.trim_start());
                 self.lines.remove(index);
                 joined.push(index);

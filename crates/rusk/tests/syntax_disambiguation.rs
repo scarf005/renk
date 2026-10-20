@@ -635,7 +635,7 @@ fn rust_conversion_keeps_bound_receivers_and_dots_paths() {
 #[test]
 fn closure_heads_own_colon_blocks() {
     let output = rust(
-        "fn demo(xs: &mut Vec[i32], a: bool, b: bool) -> usize:\n    let describe = |n: usize| -> String:\n        if n > 1:\n            format!(\"long {n}\")\n        else:\n            \"short\".to_string()\n    let shout = move |s: &str|:\n        let upper = s.to_uppercase()\n        upper + \"!\"\n    xs.sort_by(|a, b|:\n        b.cmp(a)\n    let handle = std.thread.spawn(move ||:\n        1 + 1\n    if a || b:\n        xs.clear()\n    describe(2).len() + shout(\"a\").len()\n",
+        "fn demo(xs: &mut Vec[i32], a: bool, b: bool) -> usize:\n    let describe = |n: usize| -> String:\n        if n > 1:\n            format!(\"long {n}\")\n        else:\n            \"short\".to_string()\n    let shout = move |s: &str|:\n        let upper = s.to_uppercase()\n        upper + \"!\"\n    xs.sort_by(|a, b|:\n        b.cmp(a)\n    )\n    let handle = std.thread.spawn(move ||:\n        1 + 1\n    )\n    if a || b:\n        xs.clear()\n    describe(2).len() + shout(\"a\").len()\n",
     );
     for expected in [
         "    let describe = |n: usize| -> String {\n        if n > 1 {\n",
@@ -965,9 +965,9 @@ fn blocks_opened_inside_groups_end_with_a_closing_line() {
     );
     assert_eq!(
         rust(
-            "fn f(a: Option[u8], c: bool) -> u8:\n    let m = max(match a:\n        Some(x) => x\n        None => 0\n    , 1)\n    max(if c:\n        1\n    else:\n        2\n    , m)\n"
+            "fn f(a: Option[u8], c: bool) -> u8:\n    let m = max(match a:\n        Some(x) => x\n        None => 0\n    , 1)\n    match a:\n        Some(p) => max(if c:\n            1\n        else:\n            2\n        , p)\n        None => m\n"
         ),
-        "fn f(a: Option<u8>, c: bool) -> u8 {\n    let m = max(match a {\n        Some(x) => x,\n        None => 0,\n    }, 1);\n    max(if c {\n        1\n    } else {\n        2\n    }, m)\n}\n"
+        "fn f(a: Option<u8>, c: bool) -> u8 {\n    let m = max(match a {\n        Some(x) => x,\n        None => 0,\n    }, 1);\n    match a {\n        Some(p) => max(if c {\n            1\n        } else {\n            2\n        }, p),\n        None => m,\n    }\n}\n"
     );
     assert_eq!(
         rust(
@@ -1012,8 +1012,8 @@ fn blocks_opened_inside_groups_without_a_closing_line_are_errors() {
             2,
         ),
         (
-            "fn f(c: bool) -> u8:\n    max(if c:\n        1\n    else:\n        2\n",
-            4,
+            "fn f(a: Option[u8], c: bool) -> u8:\n    match a:\n        Some(p) => max(if c:\n            1\n        else:\n            2\n        None => 0\n",
+            5,
         ),
         (
             "fn f(xs: &[i32]) -> usize:\n    xs\n        .iter()\n        .filter(|x|:\n            **x > 0\n        .count()\n",

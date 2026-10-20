@@ -46,6 +46,7 @@ fn units(values: &[i32]) -> Vec[()] = values
     .iter()
     .map(|value| {
         drop(*value);
+    })
     .collect[Vec[()]]()
 
 fn checked(value: i32) -> Result[(), String]:

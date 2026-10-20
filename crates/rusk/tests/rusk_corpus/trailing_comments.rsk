@@ -17,6 +17,7 @@ pub fn comments_in_chains(c: bool, d: bool, o: Option[i32]) -> i32:
     let x = pass(if c { // head
         1 // one
     else if d then 2 else 3 // last branch
+    ) // call
     let y = match o: // scrutinee
         Some(v) => v // arm
         None => 0
