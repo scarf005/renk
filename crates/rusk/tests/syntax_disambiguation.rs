@@ -801,10 +801,13 @@ fn multi_line_where_clauses_keep_their_lines() {
     let source = "impl<T> Show for Wrapper<T>\nwhere\n    T: Debug,\n{\n    fn show<F>(&self, f: F) -> String\n    where\n        F: Fn(&str) -> String,\n    {\n        f(\"a\")\n    }\n}\n";
     let rusk = rust_to_rusk(source).unwrap();
     assert!(
-        rusk.contains("impl[T] Show for Wrapper[T]\nwhere\n    T: Debug,\n:\n"),
+        rusk.contains("impl[T] Show for Wrapper[T]\nwhere\n    T: Debug:\n"),
         "{rusk}"
     );
-    assert!(rusk.contains("    where\n        F: Fn(&str) -> String,\n    :\n"), "{rusk}");
+    assert!(
+        rusk.contains("    where\n        F: Fn(&str) -> String:\n"),
+        "{rusk}"
+    );
     assert_eq!(rust(&rusk), source);
 }
 
@@ -1116,9 +1119,9 @@ fn a_colon_line_alone_does_not_end_a_header() {
     for (source, line) in [
         (
             "fn f(a: bool, b: bool):\n    if a\n        && b\n    :\n        g()\n",
-            2,
+            4,
         ),
-        ("fn f[T](x: T)\nwhere\n    T: Copy,\n:\n    g()\n", 1),
+        ("fn f[T](x: T)\nwhere\n    T: Copy,\n:\n    g()\n", 4),
     ] {
         let error = transpile(source).expect_err(source);
         assert_eq!(error.line, line, "{source:?}: {error}");

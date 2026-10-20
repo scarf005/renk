@@ -152,8 +152,9 @@ struct Emitter {
     last_node_line: usize,
     /// The source line of the attribute just pushed.
     attribute_line: Option<usize>,
-    /// Generated lines, numbered from 0, split from a neighbour: a block argument, which joins
-    /// the `}` before it, as in `}, |y| {`.
+    /// Generated lines, numbered from 0, split from a neighbour: a control header's `{` on a line
+    /// of its own, which an empty body's `}` joins, as in `{}`, and a block argument, which joins the
+    /// `}` before it, as in `}, |y| {`.
     joining_lines: Vec<usize>,
 }
 
@@ -182,7 +183,7 @@ fn transpile_lines(source: &str) -> Result<TranspileOutput, TranspileError> {
     for (line, comment) in &emitter.comments {
         emitter.lines[*line].push_str(comment);
     }
-    emitter.join_else_lines();
+    emitter.join_split_lines();
     Ok(TranspileOutput {
         rust: ensure_trailing_newline(&emitter.lines.join("\n")),
         source_map: emitter.source_map,
@@ -424,7 +425,7 @@ fn convert_rust_lines(source: &str, aggressive: bool) -> Result<String, Transpil
     let source = &split_inline_macro_arms(&expand_indent_tabs(source));
     let in_literal = lines_ending_in_literal(source);
     let heads = with_pipe_patterns(
-        lone_opener_heads(&source.lines().collect::<Vec<_>>(), &in_literal, "{"),
+        lone_opener_heads(&source.lines().collect::<Vec<_>>(), &in_literal),
         &source.lines().collect::<Vec<_>>(),
         &in_literal,
     );
@@ -1024,6 +1025,46 @@ struct ConvertedRustStatement {
     opens: Option<RustBlockKind>,
 }
 
+/// `header` with a `:` ending the code of its last line, before that line's comment; a `where`
+/// clause drops the `,` after its last bound, as in `where` / `    T: Debug:`.
+fn colon_after_last_line(header: &str) -> String {
+    // Supertraits continued after `trait A:` join it, since a `:` line opens the body.
+    let first = header.lines().next().unwrap_or_default();
+    if first.trim_end().ends_with(':') && !header.lines().any(|line| code_len(line) < line.len()) {
+        let joined = header.lines().map(str::trim).collect::<Vec<_>>().join(" ");
+        return format!("{}{joined}:", spaces(raw_indent(first)));
+    }
+    // Comment lines after the last code line, as rustfmt lays out `&& b // c` / `{`, follow it.
+    let lines = header.lines().collect::<Vec<_>>();
+    let last_code = lines
+        .iter()
+        .rposition(|line| !is_comment(line.trim()))
+        .unwrap_or(0);
+    let header = lines[..=last_code].join("\n");
+    let moved = lines[last_code + 1..]
+        .iter()
+        .map(|line| format!(" {}", line.trim()))
+        .collect::<String>();
+    let start = header.rfind('\n').map_or(0, |newline| newline + 1);
+    let last = &header[start..];
+    let code = without_trailing_line_comment(last).trim_end();
+    let comment = format!("{}{moved}", &last[code.len()..]);
+    let code = if has_where_line(&header) {
+        code.strip_suffix(',').unwrap_or(code)
+    } else {
+        code
+    };
+    format!("{}{code}:{comment}", &header[..start])
+}
+
+/// Whether a line of the multi-line header `text` starts a `where` clause.
+fn has_where_line(text: &str) -> bool {
+    text.lines().any(|line| {
+        let line = line.trim();
+        line == "where" || line.starts_with("where ")
+    })
+}
+
 fn is_rust_closing_delimiter_line(text: &str) -> bool {
     text.chars()
         .all(|character| matches!(character, '}' | ')' | ']' | ';' | ','))
@@ -1037,6 +1078,16 @@ fn convert_rust_statement(text: &str, parent: Option<RustBlockKind>) -> Converte
     if is_comment(text) || (is_macro_item(text) && !text.ends_with('{')) {
         return ConvertedRustStatement {
             text: text.to_string(),
+            opens: None,
+        };
+    }
+    // An empty body on its own line, as in `while a` / `    && b` / `{}`, is a `:` with no block.
+    if let Some(header) = text.strip_suffix("{}")
+        && header[header.trim_end().len()..].contains('\n')
+        && is_multi_line_header_head(text.lines().next().unwrap_or_default().trim())
+    {
+        return ConvertedRustStatement {
+            text: colon_after_last_line(&lower_rust_syntax(header.trim_end())),
             opens: None,
         };
     }
@@ -1056,21 +1107,18 @@ fn convert_rust_statement(text: &str, parent: Option<RustBlockKind>) -> Converte
         };
     }
     if let Some(header) = text.strip_suffix('{') {
-        // A `{` on its own line, after a multi-line header, becomes a `:` line.
-        let separator = &header[header.trim_end().len()..];
-        let separator = if separator.contains('\n') {
-            separator
-        } else {
-            ""
-        };
+        // A `{` on its own line, after a multi-line header, becomes the `:` ending its last line.
+        let own_line = header[header.trim_end().len()..].contains('\n');
         let header = header.trim_end();
         let kind = classify_rust_block_header(header, parent);
         let text = if header.is_empty() {
             "{".to_string()
         } else if is_raw_rust_block_header(header, kind) {
             format!("{} {{", lower_rust_syntax(header))
+        } else if own_line {
+            colon_after_last_line(&lower_rust_syntax(header))
         } else {
-            format!("{}{separator}:", lower_rust_syntax(header))
+            format!("{}:", lower_rust_syntax(header))
         };
         return ConvertedRustStatement {
             text,
@@ -1580,7 +1628,7 @@ fn source_lines(source: &str) -> Result<Vec<SourceLine>, TranspileError> {
     let mut arm_indent = None;
     let in_literal = lines_ending_in_literal(source);
     let heads = with_pipe_patterns(
-        lone_opener_heads(&source.lines().collect::<Vec<_>>(), &in_literal, ":"),
+        colon_header_heads(&source.lines().collect::<Vec<_>>(), &in_literal),
         &source.lines().collect::<Vec<_>>(),
         &in_literal,
     );
@@ -1927,7 +1975,138 @@ fn with_pipe_patterns(
     heads
 }
 
-fn lone_opener_heads(lines: &[&str], in_literal: &[bool], opener: &str) -> Vec<Option<usize>> {
+/// For each line heading a Rusk header continued on more indented lines, such as a long `if`
+/// condition or a `where` clause, the index of the line ending with the `:` that opens its body.
+fn colon_header_heads(lines: &[&str], in_literal: &[bool]) -> Vec<Option<usize>> {
+    let code = |line: &str| line.trim()[..code_len(line.trim())].trim_end().to_string();
+    let mut heads = vec![None; lines.len()];
+    for head in 0..lines.len() {
+        let head_code = code(lines[head]);
+        // A match arm whose guard starts on the next line, as in `Some(x)` / `    if x > 1 =>:`.
+        let guarded_arm = lines[head + 1..]
+            .iter()
+            .find(|line| !line.trim().is_empty())
+            .is_some_and(|next| {
+                raw_indent(next) > raw_indent(lines[head]) && next.trim_start().starts_with("if ")
+            });
+        // A `{` inside a group opens an operand block rather than the body, as in `if (a || {`.
+        let operand_block = head_code.ends_with('{')
+            && open_delimiters(&head_code).is_some_and(|open| {
+                open[..open.len().saturating_sub(1)]
+                    .iter()
+                    .any(|d| matches!(d, '(' | '['))
+            });
+        if (head > 0 && in_literal[head - 1])
+            || (head_code.ends_with([':', '{', '}', ';', ',']) && !operand_block)
+            || !(guarded_arm || is_multi_line_header_head(&head_code))
+        {
+            continue;
+        }
+        let indent = raw_indent(lines[head]);
+        for end in head + 1..lines.len() {
+            let end_code = code(lines[end]);
+            if in_literal[end - 1] || end_code.is_empty() {
+                continue;
+            }
+            // Continuation lines are more indented, except a group closed at the head's indent,
+            // as in `) -> u8:` or `}) && b:`, an or-pattern's `| B`, and an item's `where`.
+            let continues = raw_indent(lines[end]) > indent
+                || (raw_indent(lines[end]) == indent
+                    && (end_code.starts_with([')', ']', '}'])
+                        || end_code.starts_with("| ")
+                        || (!starts_control_flow(&head_code)
+                            && (end_code == "where" || end_code.starts_with("where ")))));
+            // A closure head ends an expression's line, as in `= xs` / `.map(|x|:`.
+            if !continues || ends_with_closure_block(&end_code) {
+                break;
+            }
+            // A bound continued on a deeper line, as in `Self::Item:` / `    Clone + Default:`,
+            // does not end the header. A closer at the head's indent, as in `) -> u8:`, opens the body.
+            let continued = !(raw_indent(lines[end]) == indent
+                && end_code.starts_with([')', ']', '}']))
+                && awaits_bounds(strip_block_marker(&end_code).0)
+                && (end + 1..lines.len())
+                    .find(|&next| !in_literal[next - 1] && !code(lines[next]).is_empty())
+                    .is_some_and(|next| raw_indent(lines[next]) > raw_indent(lines[end]));
+            // A guard ends at its `=>:`, unlike a value continued after `y =`.
+            let arm_ends = !guarded_arm
+                || is_multi_line_header_head(&head_code)
+                || find_top_level_keyword(&end_code, "=>").is_some();
+            if has_block_marker(&end_code) && !end_code.ends_with("::") && !continued && arm_ends {
+                heads[head] = Some(end);
+                break;
+            }
+        }
+    }
+    block_condition_heads(heads, lines, in_literal, ":")
+}
+
+/// Whether the last predicate of `text` names a type without its bounds, as `Self::Item` or
+/// `where T`, unlike `where T: Copy`.
+fn awaits_bounds(text: &str) -> bool {
+    let chars = text.chars().collect::<Vec<_>>();
+    // A `,` inside `<...>`, as in `Into<Result<u8, ()>>`, separates generic arguments instead.
+    let angles = |segment: &[char]| {
+        (0..segment.len()).fold(0isize, |depth, index| match segment[index] {
+            '<' => depth + 1,
+            '>' if index == 0 || !matches!(segment[index - 1], '-' | '=') => depth - 1,
+            _ => depth,
+        })
+    };
+    let (mut start, mut predicate) = (0, 0);
+    loop {
+        let end = argument_end(&chars, start);
+        if chars.get(end) != Some(&',') {
+            break;
+        }
+        start = end + 1;
+        if angles(&chars[predicate..end]) == 0 {
+            predicate = start;
+        }
+    }
+    let last = chars[predicate..]
+        .iter()
+        .collect::<String>()
+        .replace("::", "");
+    !last.contains(':')
+}
+
+/// Whether `node` is a header whose `:` ends a more indented continuation line, which opens its
+/// `{` on a line of its own, as in `if a` / `    && b:`.
+fn opens_on_own_line(node: &Node) -> bool {
+    let first = node.text.lines().next().unwrap_or_default().trim();
+    let guarded_arm = node
+        .text
+        .lines()
+        .nth(1)
+        .is_some_and(|guard| guard.trim_start().starts_with("if "))
+        && node.text.lines().last().is_some_and(|last| {
+            find_top_level_keyword(&last[..code_len(last)], "=>").is_some()
+        });
+    node.text.lines().count() > 1
+        && (guarded_arm || is_multi_line_header_head(&first[..code_len(first)]))
+        && node.text.lines().last().is_some_and(|last| {
+            // A `where` line at the head's indent, as in `) -> u8` / `where T: Copy:`, too.
+            (raw_indent(last) > node.indent || has_where_line(last)) && has_block_marker(last)
+        })
+}
+
+/// Whether `code` can head a header continued on more indented lines: a control expression,
+/// a `let` or assignment whose value is one, or an item header without an expression body.
+fn is_multi_line_header_head(code: &str) -> bool {
+    // `if c then a else b` and `fn f() -> T = value` are expressions, not headers.
+    let expression_body = code
+        .match_indices(" = ")
+        .any(|(at, _)| open_delimiters(&code[..at]).is_some_and(|open| open.is_empty()));
+    (starts_control_flow(code)
+        || has_control_operand(code)
+        || looks_like_item_header_without_body(code))
+        && find_top_level_keyword(code, "then").is_none()
+        && !(is_function(code) && expression_body)
+}
+
+fn lone_opener_heads(lines: &[&str], in_literal: &[bool]) -> Vec<Option<usize>> {
+    let opener = "{";
     let code = |line: &str| line.trim()[..code_len(line.trim())].to_string();
     let mut heads = vec![None; lines.len()];
     for (end, line) in lines.iter().enumerate() {
@@ -1944,7 +2123,11 @@ fn lone_opener_heads(lines: &[&str], in_literal: &[bool], opener: &str) -> Vec<O
                 // An or-pattern continued at the head's indent, as in `if let A` / `| B = c`, or
                 // a group closed there, as in `if (matches!(` / `) && b)`.
                 || lines[start - 1].trim_start().starts_with("| ")
-                || lines[start - 1].trim_start().starts_with([')', ']']))
+                || lines[start - 1].trim_start().starts_with([')', ']'])
+                // A `where` clause at the head's indent, as in `-> u8` / `where T: Copy,` / `{`.
+                || has_where_line(lines[start - 1])
+                // rustfmt moves a comment after the header's last line onto a line of its own.
+                || is_comment(lines[start - 1].trim()))
         {
             start -= 1;
         }
@@ -2010,8 +2193,19 @@ fn lone_opener_heads(lines: &[&str], in_literal: &[bool], opener: &str) -> Vec<O
             heads[head] = Some(end);
         }
     }
-    // A condition or scrutinee holding a block, as in `if match x {` ... `} {`, `if a || {` ...
-    // `} {`, or `match f(|w| match w {` ... `}) {`, ends at its `}` line that opens the body.
+    block_condition_heads(heads, lines, in_literal, opener)
+}
+
+/// `heads` where a condition or scrutinee holding a block, as in `if match x {` ... `} {`,
+/// `if a || {` ... `} {`, or `match f(|w| match w {` ... `}) {`, ends at its `}` line that
+/// opens the body with `opener`.
+fn block_condition_heads(
+    mut heads: Vec<Option<usize>>,
+    lines: &[&str],
+    in_literal: &[bool],
+    opener: &str,
+) -> Vec<Option<usize>> {
+    let code = |line: &str| line.trim()[..code_len(line.trim())].to_string();
     for (head, line) in lines.iter().enumerate() {
         let head_code = code(line);
         let condition = ["if ", "while ", "else if ", "match "]
@@ -2071,7 +2265,7 @@ fn continues_where_clause(text: &str, next: &str, indent: usize) -> bool {
     if !in_where {
         return raw_indent(next) == indent && starts_where(&next_code);
     }
-    raw_indent(next) > indent || (raw_indent(next) == indent && matches!(&*next_code, ":" | "{"))
+    raw_indent(next) > indent || (raw_indent(next) == indent && matches!(&*next_code, "{" | "{}"))
 }
 
 /// Whether `text` holds a control expression as an operand or a let-else outside its groups, as
@@ -2470,6 +2664,13 @@ fn parse_nodes(
             let parsed = parse_nodes(lines, index, child_indent)?;
             children = parsed.0;
             index = parsed.1;
+        }
+        if !line.raw && line.text.trim() == ":" {
+            return Err(TranspileError {
+                line: line.line,
+                message: "a multi-line header ends its last line with `:`, as in `    T: Debug:`"
+                    .to_string(),
+            });
         }
         // A block argument such as `, |y|:` continues a chain whose head leaves a group open.
         let argument = is_branch(line.text.trim())
@@ -3227,9 +3428,13 @@ fn emit_general(node: &Node, context: Context, is_last: bool, emitter: &mut Emit
             let block_text = strip_open_brace(block_text);
             let indent = spaces(node.indent);
             emitter.push(node, format!("{}{} {{", indent, lower_expr(block_text)));
-            // The `}` lines up with the head's last line, as in `let x =` / `    if c {`.
-            let indent =
-                spaces(raw_indent(node.text.lines().last().unwrap_or_default()).max(node.indent));
+            // The `}` lines up with the head's last line, as in `let x =` / `    if c {`, or with
+            // the head itself after a `{` on a line of its own.
+            let indent = if opens_on_own_line(node) {
+                spaces(node.indent)
+            } else {
+                spaces(raw_indent(node.text.lines().last().unwrap_or_default()).max(node.indent))
+            };
             let context = if is_match(block_text) || is_trailing_match(block_text) {
                 Context::Match
             } else {
@@ -6419,7 +6624,8 @@ impl Emitter {
     }
 
     /// Pushes a possibly multi-line logical line, mapping each physical line to its source line.
-    /// A multi-line header whose `:` stands on its own line opens its `{` on its own line too.
+    /// A header whose `:` ends a more indented continuation line opens its `{` on a line of its
+    /// own at the header's indent, as rustfmt lays it out.
     fn push(&mut self, node: &Node, mut line: String) {
         // The line after an attribute from the same source line joins it, as in `#[inline] fn`.
         if self.attribute_line == Some(node.line)
@@ -6435,18 +6641,21 @@ impl Emitter {
             .trim_start()
             .starts_with("#[")
             .then_some(node.line);
-        let own_line_marker = node.text.lines().count() > 1
-            && node
-                .text
-                .lines()
-                .last()
-                .is_some_and(|last| last.trim() == ":");
-        if own_line_marker
-            && line.split('\n').count() + 1 == node.text.lines().count()
+        if opens_on_own_line(node)
+            && line.split('\n').count() == node.text.lines().count()
             && line.ends_with(" {")
         {
             line.truncate(line.len() - 2);
+            // rustfmt ends a `where` clause's last bound with `,`.
+            if has_where_line(&node.text) && !line.ends_with(',') {
+                line.push(',');
+            }
             line.push_str(&format!("\n{}{{", spaces(node.indent)));
+            // rustfmt keeps an empty body after a `where` clause on two lines.
+            if !has_where_line(&node.text) {
+                self.joining_lines
+                    .push(self.lines.len() + line.split('\n').count() - 1);
+            }
         }
         if !is_else_branch(node.text.trim()) && is_branch(node.text.trim()) {
             self.joining_lines.push(self.lines.len());
@@ -6460,8 +6669,9 @@ impl Emitter {
         }
     }
 
-    /// Writes each `else` after the `}` line before it, as in `} else {`, renumbering the maps.
-    fn join_else_lines(&mut self) {
+    /// Writes each `else` after the `}` line before it, as in `} else {`, and an empty block's
+    /// `}` after its `{` line of its own, as in `{}`, renumbering the maps.
+    fn join_split_lines(&mut self) {
         let in_literal = lines_ending_in_literal(&self.lines.join("\n"));
         let mut joined = Vec::new();
         for index in (1..self.lines.len()).rev() {
@@ -6478,6 +6688,14 @@ impl Emitter {
                 if is_else_branch(branch.trim()) {
                     close.push(' ');
                 }
+                close.push_str(branch.trim_start());
+                self.lines.remove(index);
+                joined.push(index);
+            } else if close.trim() == "{"
+                && self.joining_lines.contains(&(index - 1))
+                && raw_indent(close) == raw_indent(branch)
+                && matches!(branch.trim(), "}" | "};" | "},")
+            {
                 close.push_str(branch.trim_start());
                 self.lines.remove(index);
                 joined.push(index);

@@ -61,22 +61,23 @@ pub fn name(n: i32) -> &'static str = match n:
 ## Multi-line headers
 
 A header continued over more indented lines, such as a `where` clause or a long condition,
-opens its body with a `:` line at the header's indent, where rustfmt puts the `{`:
+ends its last line with `:`. The body is indented one level past the header's first line:
 
 ```rsk
 pub fn show[T](value: T) -> String
 where
-    T: std.fmt.Debug,
-:
+    T: std.fmt.Debug:
     format!("{value:?}")
 
 pub fn check(a: bool, b: bool) -> bool:
     if a
-        && b
-    :
+        && b:
         return true
     false
 ```
+
+A bound that rustfmt continues on a deeper line, as in `Self::Item:` / `    Clone + Default:`,
+ends the header on that deeper line.
 
 ## Groups
 
