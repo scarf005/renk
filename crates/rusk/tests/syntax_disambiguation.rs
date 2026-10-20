@@ -1371,3 +1371,15 @@ fn rust_conversion_reads_continued_trait_constants() {
     let rusk = rust_to_rusk(source).unwrap();
     assert_eq!(rust(&rusk), source, "{rusk}");
 }
+
+#[test]
+fn rust_conversion_reads_patterns_over_several_header_lines() {
+    for source in [
+        "fn f(s: S) -> u8 {\n    if let Flags::Coff {\n        c, ..\n    } = s.flags\n    {\n        c\n    } else {\n        0\n    }\n}\n",
+        "fn f(s: S) -> u8 {\n    let c = if let Flags::Coff {\n        c, ..\n    } = s.flags\n    {\n        c\n    } else {\n        0\n    };\n    c\n}\n",
+        "fn f(s: S) -> u8 {\n    if let Outer::A(Inner {\n        b, ..\n    }) = s.flags\n    {\n        return b;\n    }\n    0\n}\n",
+    ] {
+        let rusk = rust_to_rusk(source).unwrap();
+        assert_eq!(rust(&rusk), source, "{rusk}");
+    }
+}

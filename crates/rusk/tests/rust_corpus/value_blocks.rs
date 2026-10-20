@@ -78,3 +78,26 @@ pub fn let_values_with_blocks_in_headers(x: u8, items: &[u8]) -> u8 {
 }
 
 const A_MAX: u8 = 9;
+
+pub enum Flags {
+    Coff { c: u8, d: u8 },
+    Other,
+}
+
+pub fn patterns_over_header_lines(flags: Flags, X: u8) -> u8 {
+    let c = if let Flags::Coff {
+        c, .. // } = {
+    } = flags
+    {
+        c + X
+    } else {
+        0
+    };
+    while let Flags::Coff {
+        d, ..
+    } = Flags::Other
+    {
+        return d;
+    }
+    c
+}
