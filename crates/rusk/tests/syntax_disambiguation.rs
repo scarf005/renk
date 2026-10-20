@@ -1302,3 +1302,38 @@ fn where_clauses_keep_one_comma_before_a_trailing_block_comment() {
         assert_eq!(rust(&rusk), source, "{rusk}");
     }
 }
+
+#[test]
+fn rust_conversion_keeps_unbound_receivers_values() {
+    let source = "fn f(point: P) -> u8 {\n    x.y = items.a(|d| d) + point.x;\n    x.y\n}\n";
+    let rusk = rust_to_rusk(source).unwrap();
+    assert_eq!(
+        rust(&rusk),
+        "fn f(point: P) -> u8 {\n    (x).y = (items).a(|d| d) + point.x;\n    (x).y\n}\n",
+        "{rusk}"
+    );
+    // A bound receiver beside a path ending in its name, as in `foo_x::y`, stays as written; an
+    // unbound raw identifier is parenthesized whole; inside a macro body, where parameters are
+    // not bindings, only the misread receivers change, not the closure's `state`.
+    for (source, expected) in [
+        (
+            "fn f(x: S) -> u8 {\n    x.y + foo_x::y() + self::x::y()\n}\n",
+            "fn f(x: S) -> u8 {\n    x.y + foo_x::y() + self::x::y()\n}\n",
+        ),
+        (
+            "fn f(x: S) -> u8 {\n    g(x.y, \"x::y\") + x::y(x) // x::y\n}\n",
+            "fn f(x: S) -> u8 {\n    g(x.y, \"x::y\") + x::y(x) // x::y\n}\n",
+        ),
+        (
+            "fn f() -> usize {\n    r#type.len()\n}\n",
+            "fn f() -> usize {\n    (r#type).len()\n}\n",
+        ),
+        (
+            "m! {\n    fn f(o: Option<S>) -> u8 {\n        o.map(|state| state.x)\n    }\n\n    fn g(s: S) -> u8 {\n        s.x\n    }\n}\n",
+            "m! {\n    fn f(o: Option<S>) -> u8 {\n        (o).map(|state| state.x)\n    }\n\n    fn g(s: S) -> u8 {\n        (s).x\n    }\n}\n",
+        ),
+    ] {
+        let rusk = rust_to_rusk(source).unwrap();
+        assert_eq!(rust(&rusk), expected, "{rusk}");
+    }
+}

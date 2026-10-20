@@ -264,3 +264,23 @@ pub fn borrowed_match_values(mut e: Vec<u32>) -> u32 {
     e.push(*first);
     *first + *last + !match e.len() { 0 => 1, _ => 2 }
 }
+
+mod tables {
+    #[allow(non_upper_case_globals)]
+    pub static lookup: [u8; 2] = [1, 2];
+}
+
+use tables::lookup;
+
+pub struct Point {
+    pub x: u8,
+}
+
+pub fn unbound_receivers(point: Point) -> usize {
+    let n = lookup.len(); // lookup.len()
+    let text = "lookup.iter()";
+    println!("{}", lookup.len());
+    n + text.len()
+        + point.x as usize
+        + lookup.iter().map(|v| *v as usize).sum::<usize>()
+}
