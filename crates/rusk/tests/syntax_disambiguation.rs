@@ -1255,3 +1255,15 @@ fn macro_groups_keep_if_and_match_heads_as_written() {
         );
     }
 }
+
+#[test]
+fn one_line_else_branches_close_what_their_chain_head_opened() {
+    assert_eq!(
+        rust("fn f(c: bool) -> u8:\n    max(if c:\n        1\n    else { 2 }, 3) // )\n"),
+        "fn f(c: bool) -> u8 {\n    max(if c {\n        1\n    } else { 2 }, 3) // )\n}\n"
+    );
+    assert_eq!(
+        rust("fn f(c: bool) -> u8:\n    let v = g(if c:\n        1\n    else if C then 3 else 2).min(X)\n    v\n"),
+        "fn f(c: bool) -> u8 {\n    let v = g(if c {\n        1\n    } else if C { 3 } else { 2 }).min(X);\n    v\n}\n"
+    );
+}

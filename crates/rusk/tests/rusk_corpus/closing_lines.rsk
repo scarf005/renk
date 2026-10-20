@@ -163,3 +163,19 @@ pub fn grouped_heads(c: bool, a: u8) -> usize:
     else:
         0
     ).max(n[0])
+
+pub fn one_line_else(c: bool, xs: &[usize]) -> usize:
+    let a = std::convert::identity(if c:
+        LIMIT
+    else { "})".len() }) // )
+    let b = [if C_ON:
+        a
+    else if c then 1 else 2]
+    let d = std::cmp::max(if c:
+        a
+    else { b[0] }, xs.len())
+    std::convert::identity(if c:
+        d
+    else if C_ON:
+        b[0]
+    else { 0 }).max(A_MAX as usize)
