@@ -107,3 +107,11 @@ pub fn converted<T>(t: T)
     -> u8
 where T: Into<Result<u8, ()>>:
     t.into().unwrap_or(0)
+
+pub fn evens(xs: Vec[u8]) -> impl Iterator<Item = u8> = xs.into_iter().filter(|X| *X >= 2)
+
+pub fn paired[T](t: T) -> u8
+where T: Iterator<Item = (u8, u16)>: // Item = ...
+    0
+
+pub fn boxed() -> Box<dyn Fn(u8) -> Option<u8>> = Box::new(|x| (x <= 3).then_some(x))

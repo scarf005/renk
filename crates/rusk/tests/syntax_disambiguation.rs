@@ -1127,3 +1127,23 @@ fn a_colon_line_alone_does_not_end_a_header() {
         assert_eq!(error.line, line, "{source:?}: {error}");
     }
 }
+
+#[test]
+fn equals_signs_inside_signature_generics_do_not_start_a_body() {
+    assert_eq!(
+        rust("pub fn evens(xs: Vec[u8]) -> impl Iterator<Item = u8> = xs.into_iter()\n"),
+        "pub fn evens(xs: Vec<u8>) -> impl Iterator<Item = u8> {\n    xs.into_iter()\n}\n"
+    );
+    assert_eq!(
+        rust("fn f[T](t: T) -> u8\nwhere T: Iterator<Item = (u8, u16)>:\n    0\n"),
+        "fn f<T>(t: T) -> u8\nwhere T: Iterator<Item = (u8, u16)>,\n{\n    0\n}\n"
+    );
+    assert_eq!(
+        rust("fn f() -> impl Fn(u8) -> Box<dyn Iterator<Item = u8>> = |x| g(x >= 1)\n"),
+        "fn f() -> impl Fn(u8) -> Box<dyn Iterator<Item = u8>> {\n    |x| g(x >= 1)\n}\n"
+    );
+    assert_eq!(
+        rust("pub trait Items:\n    fn items(&self) -> Box<dyn Iterator<Item = u8>>\n    fn one(&self) -> u8 = 1\n"),
+        "pub trait Items {\n    fn items(&self) -> Box<dyn Iterator<Item = u8>>;\n    fn one(&self) -> u8 {\n        1\n    }\n}\n"
+    );
+}
