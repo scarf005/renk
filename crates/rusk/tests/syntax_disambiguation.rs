@@ -1225,3 +1225,33 @@ fn closing_lines_continue_after_closing_braces_opened_in_the_head() {
         "fn f(xs: &[u8]) -> Vec<P> {\n    xs.iter().map(|x| P { v: x.min(match x {\n        0 => &1,\n        _ => x,\n    })}).collect()\n}\n"
     );
 }
+
+#[test]
+fn if_and_match_heads_inside_open_groups_own_their_blocks() {
+    assert_eq!(
+        rust("fn f(c: bool) -> u8:\n    max(if c:\n        1\n    else:\n        2\n    )\n"),
+        "fn f(c: bool) -> u8 {\n    max(if c {\n        1\n    } else {\n        2\n    })\n}\n"
+    );
+    assert_eq!(
+        rust("fn f(a: u8) -> [u8; 1]:\n    [match a:\n        0 => 1\n        _ => 2\n    ]\n"),
+        "fn f(a: u8) -> [u8; 1] {\n    [match a {\n        0 => 1,\n        _ => 2,\n    }]\n}\n"
+    );
+    assert_eq!(
+        rust("fn f(c: bool) -> u8:\n    let v = g(1, if c:\n        1\n    else:\n        2\n    )\n    v\n"),
+        "fn f(c: bool) -> u8 {\n    let v = g(1, if c {\n        1\n    } else {\n        2\n    });\n    v\n}\n"
+    );
+}
+
+#[test]
+fn macro_groups_keep_if_and_match_heads_as_written() {
+    for tokens in [
+        "    vec![match a:\n        0 => 1\n        _ => 2\n    ]\n",
+        "    vec![1, match a:\n        0 => 1\n        _ => 2\n    ]\n",
+        "    max!(if c:\n        1\n    else:\n        2\n    )\n",
+    ] {
+        assert_eq!(
+            rust(&format!("fn f(a: u8, c: bool) -> u8:\n{tokens}")),
+            format!("fn f(a: u8, c: bool) -> u8 {{\n{tokens}}}\n")
+        );
+    }
+}

@@ -136,3 +136,30 @@ pub fn braced_tails(xs: &[usize]) -> usize:
         acc + X // )}
     )}.n
     h + i + j
+
+const A_MAX: u8 = 9
+const C_ON: bool = true
+
+pub fn grouped_heads(c: bool, a: u8) -> usize:
+    let m = std::convert::identity(if c:
+        LIMIT // )
+    else:
+        "])".len()
+    )
+    let n = [match a:
+        0 => m
+        A_MAX => m + 1 // ]
+        _ => 2
+    ]
+    let o = (n[0], if C_ON:
+        m
+    else:
+        0
+    )
+    std::convert::identity(if C_ON:
+        n[0] + o.1
+    else if c:
+        m
+    else:
+        0
+    ).max(n[0])
