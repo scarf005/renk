@@ -6643,7 +6643,7 @@ impl Emitter {
         {
             line.truncate(line.len() - 2);
             // rustfmt ends a `where` clause's last bound with `,`.
-            if has_where_line(&node.text) && !line.ends_with(',') {
+            if has_where_line(&node.text) && !line[..code_len(&line)].ends_with(',') {
                 line.push(',');
             }
             line.push_str(&format!("\n{}{{", spaces(node.indent)));
