@@ -1291,3 +1291,14 @@ fn equals_signs_in_header_comments_do_not_start_a_body() {
         "fn f() -> u8 /* = 2 */ {\n    1\n}\n"
     );
 }
+
+#[test]
+fn where_clauses_keep_one_comma_before_a_trailing_block_comment() {
+    for source in [
+        "fn f<T>()\nwhere\n    T: Copy, /* c, */\n{\n}\n",
+        "fn f<T, U>() -> u8\nwhere\n    T: Copy,\n    U: Clone, /* ) */ /* d */\n{\n    1\n}\n",
+    ] {
+        let rusk = rust_to_rusk(source).unwrap();
+        assert_eq!(rust(&rusk), source, "{rusk}");
+    }
+}
