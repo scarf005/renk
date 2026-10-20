@@ -8,7 +8,10 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 proc-macro2 = "1"
-unicode-ident = "1.0.24"
+ra_ap_parser = "=0.0.349"
+ra_ap_syntax = "=0.0.349"
+rowan = "0.17"
+unicode-ident = "1.0.22"
 wasm-bindgen = "=0.2.102"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
