@@ -2045,14 +2045,6 @@ fn colon_header_heads(lines: &[&str], in_literal: &[bool]) -> Vec<Option<usize>>
 /// `where T`, unlike `where T: Copy`.
 fn awaits_bounds(text: &str) -> bool {
     let chars = text.chars().collect::<Vec<_>>();
-    // A `,` inside `<...>`, as in `Into<Result<u8, ()>>`, separates generic arguments instead.
-    let angles = |segment: &[char]| {
-        (0..segment.len()).fold(0isize, |depth, index| match segment[index] {
-            '<' => depth + 1,
-            '>' if index == 0 || !matches!(segment[index - 1], '-' | '=') => depth - 1,
-            _ => depth,
-        })
-    };
     let (mut start, mut predicate) = (0, 0);
     loop {
         let end = argument_end(&chars, start);
@@ -2060,7 +2052,8 @@ fn awaits_bounds(text: &str) -> bool {
             break;
         }
         start = end + 1;
-        if angles(&chars[predicate..end]) == 0 {
+        // A `,` inside `<...>`, as in `Into<Result<u8, ()>>`, separates generic arguments.
+        if angle_depth(&chars[predicate..end]) == 0 {
             predicate = start;
         }
     }
@@ -2069,6 +2062,35 @@ fn awaits_bounds(text: &str) -> bool {
         .collect::<String>()
         .replace("::", "");
     !last.contains(':')
+}
+
+/// The depth of the `<` generics `chars` leaves open, past the `>` of `->` and `=>`.
+fn angle_depth(chars: &[char]) -> isize {
+    (0..chars.len()).fold(0, |depth, index| match chars[index] {
+        '<' => depth + 1,
+        '>' if index == 0 || !matches!(chars[index - 1], '-' | '=') => depth - 1,
+        _ => depth,
+    })
+}
+
+/// `text` split at the `=` before a function's expression body, as in `fn f() -> T = value`; a
+/// `=` inside the signature's generics, as in `-> impl Iterator<Item = u8>`, stays in it.
+fn split_function_body(text: &str) -> Option<(&str, &str)> {
+    let chars = text.chars().collect::<Vec<_>>();
+    let mut offset = 0;
+    for (index, &character) in chars.iter().enumerate() {
+        let assigns = character == '='
+            && !matches!(chars.get(index + 1), Some('=' | '>'))
+            && (index == 0 || !matches!(chars[index - 1], '=' | '!' | '<' | '>'));
+        if assigns
+            && open_delimiters(&text[..offset]).is_some_and(|open| open.is_empty())
+            && angle_depth(&chars[..index]) == 0
+        {
+            return Some((&text[..offset], &text[offset + 1..]));
+        }
+        offset += character.len_utf8();
+    }
+    None
 }
 
 /// Whether `node` is a header whose `:` ends a more indented continuation line, which opens its
@@ -2095,14 +2117,11 @@ fn opens_on_own_line(node: &Node) -> bool {
 /// a `let` or assignment whose value is one, or an item header without an expression body.
 fn is_multi_line_header_head(code: &str) -> bool {
     // `if c then a else b` and `fn f() -> T = value` are expressions, not headers.
-    let expression_body = code
-        .match_indices(" = ")
-        .any(|(at, _)| open_delimiters(&code[..at]).is_some_and(|open| open.is_empty()));
     (starts_control_flow(code)
         || has_control_operand(code)
         || looks_like_item_header_without_body(code))
         && find_top_level_keyword(code, "then").is_none()
-        && !(is_function(code) && expression_body)
+        && !(is_function(code) && split_function_body(code).is_some())
 }
 
 fn lone_opener_heads(lines: &[&str], in_literal: &[bool]) -> Vec<Option<usize>> {
@@ -2869,7 +2888,7 @@ fn require_block_opener(node: &Node) -> Result<(), TranspileError> {
 /// `fn f() = match x:` owns its block like `fn f():` whose only body line is `match x:`.
 fn inline_block_body(node: &Node) -> Option<Node> {
     let (text, has_block) = strip_block_marker(node.text.trim());
-    let (_, body) = split_once_top_level(text, '=')?;
+    let (_, body) = split_function_body(text)?;
     let body = body.trim();
     (has_block
         && !body.is_empty()
@@ -2895,7 +2914,7 @@ fn validate_function_node(node: &Node) -> Result<(), TranspileError> {
         return validate_nodes(&[body], Context::Block);
     }
     let (text, _) = strip_block_marker(node.text.trim());
-    let Some((_, body)) = split_once_top_level(text, '=') else {
+    let Some((_, body)) = split_function_body(text) else {
         require_block_opener(node)?;
         return validate_nodes(&node.children, Context::Block);
     };
@@ -3553,7 +3572,7 @@ fn emit_function(node: &Node, emitter: &mut Emitter) {
     let (text, has_block) = strip_block_marker(text);
     let indent = spaces(node.indent);
     if let Some(body) = inline_block_body(node)
-        && let Some((signature, _)) = split_once_top_level(text, '=')
+        && let Some((signature, _)) = split_function_body(text)
     {
         let signature = signature.trim();
         emitter.push(node, format!("{}{} {{", indent, lower_signature(signature)));
@@ -3561,7 +3580,7 @@ fn emit_function(node: &Node, emitter: &mut Emitter) {
         emitter.push_generated(format!("{}}}", indent));
         return;
     }
-    let Some((signature, body)) = split_once_top_level(text, '=') else {
+    let Some((signature, body)) = split_function_body(text) else {
         if node.children.is_empty() && !has_block {
             emitter.push(node, format!("{}{}", indent, lower_signature(text)));
         } else {
@@ -3839,7 +3858,9 @@ fn emit_trait_member(node: &Node, emitter: &mut Emitter) {
     let (signature, _) = strip_explicit_semicolon(block_text);
     // A default body is `= value`, an indented block, or a one-line `{ ... }`.
     if is_function(signature)
-        && (text.contains('=') || signature.ends_with('}') || !node.children.is_empty())
+        && (split_function_body(signature).is_some()
+            || signature.ends_with('}')
+            || !node.children.is_empty())
     {
         emit_function(node, emitter);
     } else if is_function(signature) {
