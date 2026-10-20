@@ -1364,3 +1364,10 @@ fn rust_conversion_reads_let_values_with_blocks_in_their_headers() {
         assert_eq!(rust(&rusk), source, "{rusk}");
     }
 }
+
+#[test]
+fn rust_conversion_reads_continued_trait_constants() {
+    let source = "trait T {\n    const K: u8 = A\n        | B;\n}\n";
+    let rusk = rust_to_rusk(source).unwrap();
+    assert_eq!(rust(&rusk), source, "{rusk}");
+}
