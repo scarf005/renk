@@ -65,3 +65,45 @@ pub fn flags(out: &mut String, items: &[bool]) -> fmt::Result {
     }
     Ok(())
 }
+
+pub struct Wrap {
+    pub s: u8,
+}
+
+pub fn chain_after_literal(items: Option<u8>) -> Option<u8> {
+    items.map(|d| Wrap {
+        s: d,
+    })
+    .map(|e| {
+        let u = e.s;
+        u
+    })
+}
+
+pub fn chain_after_block(items: Option<u8>) -> Option<u8> {
+    items.map(|d| {
+        d + 1
+    })
+    .map(|e| {
+        let u = e;
+        u
+    })
+}
+
+pub fn Chain_after_call(items: Option<u8>, X: u8) -> Option<u8> {
+    items
+        .map(|d| Wrap {
+            s: d + X,
+        })
+        .and_then(|w| Some(
+            w.s,
+        ))
+        .map(|e| { // }
+            let u = e;
+            u
+        })
+        .map(|e| {
+            let u = e;
+            u
+        })
+}

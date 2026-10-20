@@ -96,3 +96,13 @@ pub fn imported_module_receivers(path: &str) -> usize {
     let count = env::args().count();
     env.len() + count
 }
+
+pub struct Def {}
+
+pub fn default_names() -> usize {
+    let mut default = Def {};
+    default = Def {};
+    let auto = Def {};
+    drop(auto);
+    std::mem::size_of_val(&default)
+}

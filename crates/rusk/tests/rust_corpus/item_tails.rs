@@ -25,3 +25,16 @@ pub fn scan(mut count: u8, ready: bool) -> Result<u8, ()> {
     });
     Ok(doubled.unwrap_or(0))
 }
+
+extern crate core as krate; pub fn after_extern() -> u8 {
+    let x = 1;
+    x
+}
+
+pub mod tail {
+    pub const K: u32 = 1
+        | 2;
+}
+
+pub const K: u32 = 1 | 2
+    | 4;

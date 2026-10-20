@@ -62,6 +62,10 @@ fn long_body(values: &[i32]) -> std.io.Result[Vec[String]]:
 fn last_call(counter: &mut Counter):
     counter.add("x")
 
+fn own_line_body(value: u8) -> u8 = value
+
+fn own_line_tail[T: Iterator](mut items: T) -> Option[T.Item] = items.next()
+
 fn main():
     let mut counter = Counter.new()
     for word in WORDS.iter():
@@ -72,3 +76,4 @@ fn main():
     println!("{units(&[1]):?} {checked(1):?} {pick(true)}")
     let _ = read("/nonexistent")
     let _ = long_body(&[1])
+    println!("{own_line_body(1)} {own_line_tail([2].iter()):?}")

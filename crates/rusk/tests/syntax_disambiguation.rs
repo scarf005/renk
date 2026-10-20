@@ -1179,3 +1179,37 @@ fn angle_brackets_inside_signature_groups_and_literals_do_not_hide_the_body() {
         "pub trait A {\n    fn a(&self) -> [u8; 1 << 2] {\n        [0; 4]\n    }\n}\n"
     );
 }
+
+#[test]
+fn rust_conversion_keeps_items_rusk_cannot_read_as_rust() {
+    for source in [
+        "default impl T for Foo {\n    fn f() -> u8 {\n        1\n    }\n}\n",
+        "auto trait A {\n    fn f() {}\n}\n\nfn z() {}\n",
+        "impl X {\n    default fn f() {\n        g();\n    }\n}\n",
+        "mod m {\n    default unsafe impl<T> T for Vec<T> {\n        fn f() {}\n    }\n}\n",
+        "fn f() {\n    extern crate x; fn g() {\n        h();\n    }\n    auto trait X {\n        // c\n    }\n    g();\n}\n",
+        "unsafe auto trait X {\n}\n\nfn z() {}\n\nmod m {\n    pub unsafe auto trait Y {\n    }\n}\n",
+    ] {
+        let rusk = rust_to_rusk(source).unwrap();
+        assert_eq!(rust(&rusk), source, "{rusk}");
+    }
+}
+
+#[test]
+fn rust_conversion_keeps_the_semicolon_after_item_values_ending_in_braces() {
+    for source in [
+        "extern crate x; static S: T = T {};\n",
+        "impl<X> T for X {\n    default const B: u32 = { 1 };\n    default const C: S = S {\n        a: 1,\n    };\n    default fn f(&self) -> u32 {\n        1\n    }\n}\n",
+        "fn f() {\n    extern crate y; let v = T { a: 1 };\n    g(v);\n}\n",
+    ] {
+        let rusk = rust_to_rusk(source).unwrap();
+        assert_eq!(rust(&rusk), source, "{rusk}");
+    }
+}
+
+#[test]
+fn rust_conversion_reads_gen_as_an_identifier() {
+    let source = "use crate::{\n    a::b,\n    gen::consts,\n};\n\nfn main(rng: R) {\n    let x: u8 = rng.gen();\n    if x > 0 {\n        println!(\"{x}\");\n    }\n}\n";
+    let rusk = rust_to_rusk(source).unwrap();
+    assert_eq!(rust(&rusk), source, "{rusk}");
+}

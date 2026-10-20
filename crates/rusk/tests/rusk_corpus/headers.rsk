@@ -124,3 +124,25 @@ pub fn marked(_m: Mark<'<'>) -> u8 = b'>' - b'<'
 
 pub trait Sized4:
     fn bytes(&self) -> [u8; 1 << 2] = [0; 1 << 2]
+
+pub fn operand_headers(a: bool, B: usize) -> usize:
+    let mut has = false
+    if (a || { // }) {}
+        has = B > 1;
+        has
+    }) && B > 2
+        && !has:
+        return 0
+    while (a && {
+        has = !has;
+        has
+    }) {}
+    while !a && {
+        has = !has;
+        has
+    } {};
+    match (a || {
+        B > 3
+    }) && !has:
+        true => B
+        false => 0
