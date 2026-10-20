@@ -1624,7 +1624,14 @@ fn source_lines(source: &str) -> Result<Vec<SourceLine>, TranspileError> {
         &source.lines().collect::<Vec<_>>(),
         &in_literal,
     );
-    while let Some((index, raw)) = raw_lines.next() {
+    // The closing line split off a one-line `else`, as `)` from `else { 2 })`.
+    let mut carry = None;
+    while let Some((index, raw)) = carry.take().or_else(|| {
+        raw_lines
+            .next()
+            .map(|(index, raw)| (index, raw.to_string()))
+    }) {
+        let raw = raw.as_str();
         let line = index + 1;
         let without_comment = keep_literal_end(raw, in_literal[index]);
         let trimmed = without_comment.trim();
@@ -1812,6 +1819,24 @@ fn source_lines(source: &str) -> Result<Vec<SourceLine>, TranspileError> {
             closing_comment: None,
             closed: false,
         });
+        // A one-line `else` that closes what its chain's head opened, as in `else { 2 })`, ends
+        // the chain with the closing line after its branch.
+        if is_else_branch(code) && !has_explicit_block_opener(code) {
+            let chars = code.chars().collect::<Vec<_>>();
+            let end = argument_end(&chars, 0);
+            if matches!(chars.get(end), Some(')' | ']' | ','))
+                && opens_group_block(&lines, &lines[lines.len() - 1])
+            {
+                let at = code
+                    .char_indices()
+                    .nth(end)
+                    .map_or(code.len(), |(at, _)| at);
+                let branch = lines.last_mut().expect("the `else` line was just pushed");
+                branch.text = code[..at].trim_end().to_string();
+                branch.comment = None;
+                carry = Some((index, format!("{}{}{comment}", spaces(indent), &code[at..])));
+            }
+        }
     }
     Ok(lines)
 }
