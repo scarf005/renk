@@ -154,3 +154,19 @@ fn long_groups_convert_in_linear_time() {
     let elapsed = start.elapsed();
     assert!(elapsed < std::time::Duration::from_secs(10), "{elapsed:?}");
 }
+
+#[test]
+fn long_block_argument_chains_convert_in_linear_time() {
+    let convert = |links: usize| {
+        let links = (0..links)
+            .map(|n| format!("        .a(|y| {{\n            y + {n}\n        }})\n"))
+            .collect::<String>();
+        let rust = format!("fn main() {{\n    x\n{links}        .z();\n}}\n");
+        let start = std::time::Instant::now();
+        rust_to_rusk(&rust).unwrap();
+        start.elapsed()
+    };
+    let (short, long) = (convert(1_000), convert(4_000));
+    // Four times the links take about four times as long, not sixteen.
+    assert!(long < short * 8, "{short:?} {long:?}");
+}
