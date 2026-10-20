@@ -2305,16 +2305,24 @@ fn block_condition_heads(
     let code = |line: &str| line.trim()[..code_len(line.trim())].to_string();
     for (head, line) in lines.iter().enumerate() {
         let head_code = code(line);
+        // The value of a `let` or `return`, as in `let v = if match x {`.
+        let expression = head_code
+            .strip_prefix("let ")
+            .and_then(|binding| binding.split_once(" = "))
+            .map(|(_, value)| value)
+            .or_else(|| head_code.strip_prefix("return "))
+            .filter(|value| value.starts_with("if ") || value.starts_with("match "))
+            .unwrap_or(&head_code);
         let condition = ["if ", "while ", "else if ", "match "]
             .iter()
-            .find_map(|keyword| head_code.strip_prefix(keyword));
+            .find_map(|keyword| expression.strip_prefix(keyword));
         let holds_block = condition.is_some_and(|condition| {
             // `if let Some(x) = if let ... {` or `while let Some(x) = match y {`.
             let value = condition
                 .strip_prefix("let ")
                 .and_then(|binding| binding.split_once(" = "))
                 .map(|(_, value)| value);
-            (condition.starts_with("match ") && !head_code.starts_with("match "))
+            (condition.starts_with("match ") && !expression.starts_with("match "))
                 || value
                     .is_some_and(|value| value.starts_with("if ") || value.starts_with("match "))
                 || (head_code.ends_with('{') && opens_operand_block(&head_code, true))
@@ -6533,7 +6541,8 @@ fn has_top_level_brace(text: &str) -> bool {
 
 /// Whether `text` ends in a block-owning `if` head after a binding, `return`, an open group, or
 /// closure parameters, such as `let x = if c`, `return if c`, `max(if c`, or `.map(|x| if c`;
-/// `if c then a else b` stays inline.
+/// `if c then a else b` and `if c { a } else { b }` stay inline, unlike a header over several
+/// lines such as `let v = if match x {` ... `}`.
 fn is_trailing_if(text: &str) -> bool {
     text.match_indices("if ").any(|(at, _)| {
         let before = text[..at].trim_end();
@@ -6542,7 +6551,8 @@ fn is_trailing_if(text: &str) -> bool {
                 || before
                     .strip_suffix("return")
                     .is_some_and(|rest| !rest.ends_with(is_ident_continue)))
-            && !has_top_level_brace(&text[at..])
+            && (!has_top_level_brace(&text[at..])
+                || (text[at..].contains('\n') && !is_control(text)))
             && !is_inline_if_expression(&text[at..])
             && is_balanced_tail(text, at)
     })

@@ -260,10 +260,9 @@ impl RustLayout {
         }
         let from = first.map_or(index, |first| self.index_of(&first));
         let in_parentheses = self.open_groups(from, index)?;
-        // A block in a statement's header, as in `if match x {` / `} {`, stays Rust up to the
-        // header's body; the Rusk reading, as in `if match x:` / `} || b {`, holds only for a
-        // `let` value.
-        let in_header = element.as_ref().is_some_and(|node| node.kind() != LET_STMT)
+        // A block in a header, as in `if match x {` / `} {` or `let r = match s(|t| {` / `}) {`,
+        // stays Rust up to the header's body.
+        let in_header = element.is_some()
             && self
                 .walk(&list)
                 .1
