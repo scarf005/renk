@@ -115,3 +115,12 @@ where T: Iterator<Item = (u8, u16)>: // Item = ...
     0
 
 pub fn boxed() -> Box<dyn Fn(u8) -> Option<u8>> = Box::new(|x| (x <= 3).then_some(x))
+
+pub struct Mark<const C: char>
+
+pub fn shifted(X: [u8; 8 >> 1]) -> [u8; 1 << 2] = X // [u8; 1 << 2] =
+
+pub fn marked(_m: Mark<'<'>) -> u8 = b'>' - b'<'
+
+pub trait Sized4:
+    fn bytes(&self) -> [u8; 1 << 2] = [0; 1 << 2]

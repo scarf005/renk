@@ -1147,3 +1147,35 @@ fn equals_signs_inside_signature_generics_do_not_start_a_body() {
         "pub trait Items {\n    fn items(&self) -> Box<dyn Iterator<Item = u8>>;\n    fn one(&self) -> u8 {\n        1\n    }\n}\n"
     );
 }
+
+#[test]
+fn angle_brackets_inside_signature_groups_and_literals_do_not_hide_the_body() {
+    for (source, signature, body) in [
+        (
+            "fn f() -> [u8; 1 << 2] = [0; 4]\n",
+            "fn f() -> [u8; 1 << 2]",
+            "[0; 4]",
+        ),
+        (
+            "fn f(x: [u8; 8 >> 1]) -> u8 = x[0]\n",
+            "fn f(x: [u8; 8 >> 1]) -> u8",
+            "x[0]",
+        ),
+        (
+            "fn f() -> Foo<{ 1 < 2 }> = Foo\n",
+            "fn f() -> Foo<{ 1 < 2 }>",
+            "Foo",
+        ),
+        ("fn f(s: S<'<'>) -> u8 = 1\n", "fn f(s: S<'<'>) -> u8", "1"),
+    ] {
+        assert_eq!(
+            rust(source),
+            format!("{signature} {{\n    {body}\n}}\n"),
+            "{source:?}"
+        );
+    }
+    assert_eq!(
+        rust("pub trait A:\n    fn a(&self) -> [u8; 1 << 2] = [0; 4]\n"),
+        "pub trait A {\n    fn a(&self) -> [u8; 1 << 2] {\n        [0; 4]\n    }\n}\n"
+    );
+}
