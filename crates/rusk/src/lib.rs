@@ -2701,11 +2701,7 @@ fn accepts_closing_line(text: &str, siblings: &[Node]) -> bool {
                 .find(|node| !is_branch(node.text.trim()))
                 .is_some_and(|head| {
                     let head = strip_block_marker(head.text.trim()).0;
-                    head.ends_with('{')
-                        || is_trailing_if(head)
-                        // An `if` inside an open call, as in `p => max(if c:`.
-                        || (head.contains("if ")
-                            && open_delimiters(head).is_some_and(|open| !open.is_empty()))
+                    head.ends_with('{') || is_trailing_if(head)
                 }))
 }
 
@@ -6328,15 +6324,22 @@ fn is_trailing_match(text: &str) -> bool {
             let before = text[..at].trim_end();
             !text[..at].ends_with(is_ident_continue)
                 // An operand, as in `= match`, `&mut match`, or `!match`.
-                && (before.ends_with(['=', '(', '|', ',', '>', '&', '*', '!', '-', '+'])
+                && (before.ends_with(['=', '(', '[', '|', ',', '>', '&', '*', '!', '-', '+'])
                     || ["return", "&mut"].iter().any(|keyword| {
                         before
                             .strip_suffix(keyword)
                             .is_some_and(|rest| !rest.ends_with(is_ident_continue))
                     }))
                 && !has_top_level_brace(&text[at..])
-                && open_delimiters(&text[at..]).is_some_and(|open| open.is_empty())
+                && is_balanced_tail(text, at)
         })
+}
+
+/// Whether `text[at..]` neither leaves a group open nor closes one opened before it, as the `]`
+/// of a macro group joined into one line with its arms, as in `vec![match a:` / `    ]`.
+fn is_balanced_tail(text: &str, at: usize) -> bool {
+    open_delimiters(&text[at..]).is_some_and(|open| open.is_empty())
+        && open_delimiters(text) == open_delimiters(&text[..at])
 }
 
 /// Whether `text` has a `{` or `}` outside parentheses and brackets, unlike the struct literal
@@ -6361,19 +6364,19 @@ fn has_top_level_brace(text: &str) -> bool {
     false
 }
 
-/// Whether `text` ends in a block-owning `if` head after a binding or `return`, such as
-/// `let x = if c` or `return if c`; `if c then a else b` stays an inline expression.
+/// Whether `text` ends in a block-owning `if` head after a binding, `return`, or an open group,
+/// such as `let x = if c`, `return if c`, or `max(if c`; `if c then a else b` stays inline.
 fn is_trailing_if(text: &str) -> bool {
     text.match_indices("if ").any(|(at, _)| {
         let before = text[..at].trim_end();
         !text[..at].ends_with(is_ident_continue)
-            && (before.ends_with('=')
+            && (before.ends_with(['=', '(', '[', ','])
                 || before
                     .strip_suffix("return")
                     .is_some_and(|rest| !rest.ends_with(is_ident_continue)))
             && !has_top_level_brace(&text[at..])
             && !is_inline_if_expression(&text[at..])
-            && open_delimiters(&text[at..]).is_some_and(|open| open.is_empty())
+            && is_balanced_tail(text, at)
     })
 }
 
