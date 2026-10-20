@@ -619,8 +619,18 @@ struct Rewrite {
 /// still transpiles to the same Rust or, when `aggressive` or inlining format arguments, to the
 /// same Rust tokens; format arguments are compared inlined.
 fn idiomatic_rusk(lines: Vec<String>, aggressive: bool) -> Vec<String> {
-    let Ok(expected) = transpile(&lines.join("\n")) else {
+    let Ok(mut expected) = transpile(&lines.join("\n")) else {
         return lines;
+    };
+    let lines = match parenthesize_path_receivers(&lines, &expected) {
+        Some(fixed) => {
+            let Ok(output) = transpile(&fixed.join("\n")) else {
+                return fixed;
+            };
+            expected = output;
+            fixed
+        }
+        None => lines,
     };
     let expected = canonical_format_macros(&expected.rust);
     let expected_tokens = rust_tokens(&expected);
@@ -661,6 +671,127 @@ fn idiomatic_rusk(lines: Vec<String>, aggressive: bool) -> Vec<String> {
             }
             apply_rewrites(&lines, &accepted).0
         })
+}
+
+/// `lines` with each lowercase receiver that Rusk reads as a path, as an unbound `items` in
+/// `items.a()` that `output` writes as `items::a()`, parenthesized as `(items).a()`; `None` when
+/// there is none. A Rust `.` is always a value access.
+fn parenthesize_path_receivers(lines: &[String], output: &TranspileOutput) -> Option<Vec<String>> {
+    let generated = output.rust.lines().collect::<Vec<_>>();
+    // The Rust generated for each physical source line.
+    let mut rust = Vec::<String>::new();
+    for entry in &output.source_map {
+        if let Some(source) = entry.source_line.checked_sub(1)
+            && let Some(line) = entry
+                .generated_line
+                .checked_sub(1)
+                .and_then(|line| generated.get(line))
+        {
+            if rust.len() <= source {
+                rust.resize(source + 1, String::new());
+            }
+            rust[source].push_str(line);
+            rust[source].push('\n');
+        }
+    }
+    let mut physical = 0;
+    let mut changed = false;
+    let fixed = lines
+        .iter()
+        .map(|line| {
+            line.split('\n')
+                .map(|line| {
+                    let rust = rust.get(physical).map_or("", String::as_str);
+                    physical += 1;
+                    let fixed = parenthesize_line_path_receivers(line, rust);
+                    changed |= fixed != line;
+                    fixed
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .collect();
+    changed.then_some(fixed)
+}
+
+/// `line` with each lowercase receiver `h` of `h.m` parenthesized when `rust`, the Rust it
+/// becomes, holds more `h::m` paths than `line` itself, outside comments and literals.
+fn parenthesize_line_path_receivers(line: &str, rust: &str) -> String {
+    let chars = line.chars().collect::<Vec<_>>();
+    let (line_code, rust_code) = (code_tokens(line), code_tokens(rust));
+    let misreads = |path: &str| count_path(&rust_code, path) > count_path(&line_code, path);
+    let mut text = String::new();
+    let mut index = 0;
+    while index < chars.len() {
+        if let Some(end) = opaque_span_end(&chars, index) {
+            text.extend(&chars[index..=end]);
+            index = end + 1;
+            continue;
+        }
+        if !is_ident_start(chars[index])
+            || (index > 0
+                && (is_ident_continue(chars[index - 1])
+                    || matches!(chars[index - 1], '.' | ':' | '#')))
+        {
+            text.push(chars[index]);
+            index += 1;
+            continue;
+        }
+        // A raw identifier, as in `r#type`, is one head.
+        let start = if chars[index..].starts_with(&['r', '#'])
+            && chars.get(index + 2).copied().is_some_and(is_ident_start)
+        {
+            index + 2
+        } else {
+            index
+        };
+        let end = read_ident(&chars, start);
+        let head = chars[index..end].iter().collect::<String>();
+        let member = (chars.get(end) == Some(&'.'))
+            .then(|| read_ident(&chars, end + 1))
+            .filter(|&member_end| member_end > end + 1)
+            .map(|member_end| chars[end + 1..member_end].iter().collect::<String>());
+        let misread = chars[start].is_lowercase()
+            && head != "self"
+            && member.is_some_and(|member| misreads(&format!("{head}::{member}")));
+        if misread {
+            text.push_str(&format!("({head})"));
+        } else {
+            text.push_str(&head);
+        }
+        index = end;
+    }
+    text
+}
+
+/// `text` with its comments and literals blanked out.
+fn code_tokens(text: &str) -> Vec<char> {
+    let mut chars = text.chars().collect::<Vec<_>>();
+    let mut index = 0;
+    while index < chars.len() {
+        if let Some(end) = opaque_span_end(&chars, index) {
+            chars[index..=end].fill(' ');
+            index = end + 1;
+        } else {
+            index += 1;
+        }
+    }
+    chars
+}
+
+/// How often `code` holds `path` as whole tokens, unlike `foo_x::y` or `crate::x::y` for `x::y`.
+fn count_path(code: &[char], path: &str) -> usize {
+    let path = path.chars().collect::<Vec<_>>();
+    (0..code.len().saturating_sub(path.len() - 1))
+        .filter(|&at| {
+            code[at..].starts_with(&path)
+                && !(at > 0
+                    && (is_ident_continue(code[at - 1]) || matches!(code[at - 1], ':' | '#')))
+                && !code
+                    .get(at + path.len())
+                    .is_some_and(|c| is_ident_continue(*c))
+        })
+        .count()
 }
 
 /// Rust tokens without layout or comments; `None` when the text does not lex.
