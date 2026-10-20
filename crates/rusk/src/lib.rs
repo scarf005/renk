@@ -3076,6 +3076,9 @@ fn validate_trait_member(node: &Node) -> Result<(), TranspileError> {
     let (text, _) = strip_block_marker(node.text.trim());
     if is_function(text) {
         validate_function_node(node)
+    } else if !node.children.is_empty() && are_continuations(&node.children) {
+        // A value continued on more indented lines, as in `const K: u8 = A` / `    | B`.
+        Ok(())
     } else {
         reject_children(
             node,
