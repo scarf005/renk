@@ -2274,12 +2274,20 @@ fn opens_on_own_line(node: &Node) -> bool {
         && node.text.lines().last().is_some_and(|last| {
             find_top_level_keyword(&last[..code_len(last)], "=>").is_some()
         });
+    let last = node.text.lines().last().unwrap_or_default();
+    // The value after a pattern over several lines, as in `if let S {` / `    a,` / `} = s:`.
+    let pattern_value = ["if let ", "while let "]
+        .iter()
+        .any(|keyword| first.contains(keyword))
+        && last
+            .trim_start()
+            .strip_prefix('}')
+            .is_some_and(|rest| rest.trim_start_matches([')', ']']).starts_with(" = "));
     node.text.lines().count() > 1
-        && (guarded_arm || is_multi_line_header_head(&first[..code_len(first)]))
-        && node.text.lines().last().is_some_and(|last| {
-            // A `where` line at the head's indent, as in `) -> u8` / `where T: Copy:`, too.
-            (raw_indent(last) > node.indent || has_where_line(last)) && has_block_marker(last)
-        })
+        && (guarded_arm || pattern_value || is_multi_line_header_head(&first[..code_len(first)]))
+        // A `where` line at the head's indent, as in `) -> u8` / `where T: Copy:`, too.
+        && (raw_indent(last) > node.indent || has_where_line(last) || pattern_value)
+        && has_block_marker(last)
 }
 
 /// Whether `code` can head a header continued on more indented lines: a control expression,
@@ -2316,19 +2324,25 @@ fn block_condition_heads(
         let condition = ["if ", "while ", "else if ", "match "]
             .iter()
             .find_map(|keyword| expression.strip_prefix(keyword));
-        let holds_block = condition.is_some_and(|condition| {
-            // `if let Some(x) = if let ... {` or `while let Some(x) = match y {`.
-            let value = condition
-                .strip_prefix("let ")
-                .and_then(|binding| binding.split_once(" = "))
-                .map(|(_, value)| value);
-            (condition.starts_with("match ") && !expression.starts_with("match "))
-                || value
-                    .is_some_and(|value| value.starts_with("if ") || value.starts_with("match "))
-                || (head_code.ends_with('{') && opens_operand_block(&head_code, true))
-                || open_delimiters(condition)
-                    .is_some_and(|open| open.contains(&'(') || open.contains(&'['))
+        // A pattern continued over lines, as in `if let Flags::Coff {` / `    c, ..` / `} = s.flags:`.
+        let pattern = condition.is_some_and(|condition| {
+            condition.starts_with("let ") && !condition.contains(" = ") && head_code.ends_with('{')
         });
+        let holds_block = pattern
+            || condition.is_some_and(|condition| {
+                // `if let Some(x) = if let ... {` or `while let Some(x) = match y {`.
+                let value = condition
+                    .strip_prefix("let ")
+                    .and_then(|binding| binding.split_once(" = "))
+                    .map(|(_, value)| value);
+                (condition.starts_with("match ") && !expression.starts_with("match "))
+                    || value.is_some_and(|value| {
+                        value.starts_with("if ") || value.starts_with("match ")
+                    })
+                    || (head_code.ends_with('{') && opens_operand_block(&head_code, true))
+                    || open_delimiters(condition)
+                        .is_some_and(|open| open.contains(&'(') || open.contains(&'['))
+            });
         if (head > 0 && in_literal[head - 1]) || !holds_block || !head_code.ends_with('{') {
             continue;
         }
@@ -2348,7 +2362,11 @@ fn block_condition_heads(
                     && end_code
                         .strip_prefix('}')
                         .map(|rest| rest.trim_start_matches([')', ']']).trim_start())
-                        .is_some_and(|rest| rest == opener || matches!(rest, "{}" | "{};"))
+                        .is_some_and(|rest| {
+                            rest == opener
+                                || matches!(rest, "{}" | "{};")
+                                || (pattern && rest.starts_with("= ") && rest.ends_with(opener))
+                        })
             })
             .or(heads[head]);
     }
