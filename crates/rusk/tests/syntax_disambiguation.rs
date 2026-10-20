@@ -1337,3 +1337,10 @@ fn rust_conversion_keeps_unbound_receivers_values() {
         assert_eq!(rust(&rusk), expected, "{rusk}");
     }
 }
+
+#[test]
+fn rust_conversion_closes_empty_value_blocks() {
+    let source = "fn f() -> u8 {\n    let g = {\n    };\n    h(g)\n}\n";
+    let rusk = rust_to_rusk(source).unwrap();
+    assert_eq!(rust(&rusk), source, "{rusk}");
+}

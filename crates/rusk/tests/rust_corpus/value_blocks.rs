@@ -47,3 +47,13 @@ pub fn unit_function_with_value_blocks(flag: bool, values: &mut Vec<i32>) {
     });
     let _ = (future, moved, doubled, matched, block, typed(1));
 }
+
+pub fn empty_value_blocks(A: u8) -> u8 {
+    let unit = {
+    };
+    let commented = { // {
+        /* } */
+    };
+    let _ = (unit, commented);
+    A
+}
