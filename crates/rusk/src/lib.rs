@@ -4180,7 +4180,8 @@ fn extract_argument_inline_ifs(text: &str) -> (String, Vec<String>) {
             && chars[..index]
                 .iter()
                 .rfind(|character| !character.is_whitespace())
-                .is_some_and(|character| matches!(character, '(' | '[' | ','));
+                // A closure body, as in `.map(|x| if c then a else b)`, too.
+                .is_some_and(|character| matches!(character, '(' | '[' | ',' | '|'));
         if is_argument {
             let end = argument_end(&chars, index);
             let inline_if = chars[index..end].iter().collect::<String>();
@@ -6389,13 +6390,14 @@ fn has_top_level_brace(text: &str) -> bool {
     false
 }
 
-/// Whether `text` ends in a block-owning `if` head after a binding, `return`, or an open group,
-/// such as `let x = if c`, `return if c`, or `max(if c`; `if c then a else b` stays inline.
+/// Whether `text` ends in a block-owning `if` head after a binding, `return`, an open group, or
+/// closure parameters, such as `let x = if c`, `return if c`, `max(if c`, or `.map(|x| if c`;
+/// `if c then a else b` stays inline.
 fn is_trailing_if(text: &str) -> bool {
     text.match_indices("if ").any(|(at, _)| {
         let before = text[..at].trim_end();
         !text[..at].ends_with(is_ident_continue)
-            && (before.ends_with(['=', '(', '[', ','])
+            && (before.ends_with(['=', '(', '[', ',', '|'])
                 || before
                     .strip_suffix("return")
                     .is_some_and(|rest| !rest.ends_with(is_ident_continue)))
