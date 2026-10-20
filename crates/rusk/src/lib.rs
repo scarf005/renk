@@ -2869,12 +2869,14 @@ fn accepts_closing_line(text: &str, siblings: &[Node]) -> bool {
 }
 
 /// The part after `}` of a closing line that continues the expression, such as `)?` in `})?`,
-/// `, b)` in `}, b)`, `)}.a` in `})}.a`, or `)` and the `.method()` lines after `})`.
+/// `, b)` in `}, b)`, `)}.a` in `})}.a`, `)()` in `})()`, or `)` and the `.method()` lines after
+/// `})`.
 fn closing_tail(text: &str) -> Option<&str> {
     let tail = text.trim().strip_prefix('}')?;
     let rest = tail.trim_start_matches([')', ']', '}']).trim_start();
-    // `}) && b` continues the call with an operand.
+    // `}) && b` continues the call with an operand, and `})()` calls the closure it closes.
     (rest.starts_with(['?', '.'])
+        || (tail.starts_with(')') && rest.starts_with(['(', '[']))
         || (tail.starts_with([')', ']']) && starts_with_binary_operator(rest))
         || rest
             .strip_prefix(',')
