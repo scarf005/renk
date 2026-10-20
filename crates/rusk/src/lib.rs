@@ -3728,7 +3728,8 @@ fn emit_statement(node: &Node, _context: Context, is_last: bool, emitter: &mut E
         && is_multiline_closure_head(rhs.trim())
     {
         emit_multiline_closure_assignment(node, lhs.trim(), rhs.trim(), emitter);
-    } else if !node.children.is_empty() && is_raw_braced_expr_head(text) {
+    } else if (!node.children.is_empty() || text.ends_with('{')) && is_raw_braced_expr_head(text) {
+        // An empty block, as in `let g = {` / `};`, closes on a line of its own too.
         let is_value = is_last && !has_explicit_semicolon && !is_let(text);
         emit_raw_braced_expr(node, text, is_value, emitter);
     } else if !node.children.is_empty()
