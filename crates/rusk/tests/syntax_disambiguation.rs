@@ -1213,3 +1213,15 @@ fn rust_conversion_reads_gen_as_an_identifier() {
     let rusk = rust_to_rusk(source).unwrap();
     assert_eq!(rust(&rusk), source, "{rusk}");
 }
+
+#[test]
+fn closing_lines_continue_after_closing_braces_opened_in_the_head() {
+    assert_eq!(
+        rust("fn f() -> u8:\n    S { a: g(|x| {\n        x\n    })}.a\n"),
+        "fn f() -> u8 {\n    S { a: g(|x| {\n        x\n    })}.a\n}\n"
+    );
+    assert_eq!(
+        rust("fn f(xs: &[u8]) -> Vec[P]:\n    xs.iter().map(|x| P { v: x.min(match x:\n        0 => &1\n        _ => x\n    })}).collect()\n"),
+        "fn f(xs: &[u8]) -> Vec<P> {\n    xs.iter().map(|x| P { v: x.min(match x {\n        0 => &1,\n        _ => x,\n    })}).collect()\n}\n"
+    );
+}

@@ -124,3 +124,15 @@ pub fn held(xs: &[usize]) -> usize:
         X * 2 // }
     ).sum() }
     h.n + i.n
+
+pub fn braced_tails(xs: &[usize]) -> usize:
+    let h = Holder { n: xs.iter().map(|X|:
+        X + "})".len() // })
+    ).sum() }.n
+    let i = Holder { n: xs.iter().fold(0, |acc, x| {
+        acc + *x
+    })}.n
+    let j = Holder { n: xs.iter().fold(0, |acc, X|:
+        acc + X // )}
+    )}.n
+    h + i + j
