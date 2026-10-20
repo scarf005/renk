@@ -1033,3 +1033,94 @@ fn blocks_opened_inside_groups_without_a_closing_line_are_errors() {
     }
     assert!(transpile("fn f():\n    let g = |x: u8|:\n        x + 1\n    g(1)\n").is_ok());
 }
+
+#[test]
+fn multi_line_headers_end_with_a_colon_on_their_last_line() {
+    assert_eq!(
+        rust(
+            "pub fn show[T](value: T) -> String\nwhere\n    T: std.fmt.Debug:\n    format!(\"{value:?}\")\n"
+        ),
+        "pub fn show<T>(value: T) -> String\nwhere\n    T: std::fmt::Debug,\n{\n    format!(\"{value:?}\")\n}\n"
+    );
+    assert_eq!(
+        rust(
+            "fn check(a: bool, B: bool) -> bool:\n    if a // (\n        && B: // ends in :\n        return true\n    let x = if a\n        && B:\n        1\n    else:\n        2\n    while let Some(y) = it\n        .next():\n        f(y)\n    x > 1\n"
+        ),
+        "fn check(a: bool, B: bool) -> bool {\n    if a // (\n        && B // ends in :\n    {\n        return true;\n    }\n    let x = if a\n        && B\n    {\n        1\n    } else {\n        2\n    };\n    while let Some(y) = it\n        .next()\n    {\n        f(y);\n    }\n    x > 1\n}\n"
+    );
+    assert_eq!(
+        rust("pub fn long(\n    a: u8,\n    b: u8,\n) -> u8:\n    a + b\n"),
+        "pub fn long(\n    a: u8,\n    b: u8,\n) -> u8 {\n    a + b\n}\n"
+    );
+    assert_eq!(
+        rust(
+            "pub fn names(xs: Vec[String]) -> Vec[String] = xs\n    .into_iter()\n    .map(|x|:\n        x.to_uppercase()\n    )\n    .collect()\n"
+        ),
+        "pub fn names(xs: Vec<String>) -> Vec<String> {\n    xs\n        .into_iter()\n        .map(|x| {\n            x.to_uppercase()\n        })\n        .collect()\n}\n"
+    );
+    assert_eq!(
+        rust(
+            "trait Show:\n    fn show[T](&self, value: T)\n    where\n        T: Copy\n    fn name(&self) -> String\n"
+        ),
+        "trait Show {\n    fn show<T>(&self, value: T)\n    where\n        T: Copy;\n    fn name(&self) -> String;\n}\n"
+    );
+    assert_eq!(
+        rust("fn f(b: bool) -> u8:\n    let y =\n        if b:\n            1\n        else:\n            2\n    y\n"),
+        "fn f(b: bool) -> u8 {\n    let y =\n        if b {\n            1\n        } else {\n            2\n        };\n    y\n}\n"
+    );
+    assert_eq!(
+        rust("impl Foo for Bar\nwhere\n    T: Copy,\n{}\n"),
+        "impl Foo for Bar\nwhere\n    T: Copy,\n{}\n"
+    );
+    assert_eq!(
+        rust("fn f[T](t: T) -> usize\nwhere T:\n    Clone + Copy:\n    0\n"),
+        "fn f<T>(t: T) -> usize\nwhere T:\n    Clone + Copy,\n{\n    0\n}\n"
+    );
+    assert_eq!(
+        rust("fn h[T](t: T, u: u8)\n    -> u8\nwhere T: Fn(u8, u8):\n    u\n"),
+        "fn h<T>(t: T, u: u8)\n    -> u8\nwhere T: Fn(u8, u8),\n{\n    u\n}\n"
+    );
+    assert_eq!(
+        rust("fn h<T>(t: T)\n    -> u8\nwhere T: Into<Result<u8, ()>>:\n    0\n"),
+        "fn h<T>(t: T)\n    -> u8\nwhere T: Into<Result<u8, ()>>,\n{\n    0\n}\n"
+    );
+    assert_eq!(
+        rust("fn f(b: &str) -> u8:\n    let y =\n        if b == \"=>\":\n            1\n        else:\n            2\n    y\n"),
+        "fn f(b: &str) -> u8 {\n    let y =\n        if b == \"=>\" {\n            1\n        } else {\n            2\n        };\n    y\n}\n"
+    );
+    let raw = "fn s() -> usize:\n    let c = vec![\n        {\n        },\n    ]\n    c.len()\n";
+    assert!(rust(raw).contains("        {\n        },\n"), "{}", rust(raw));
+    assert_eq!(
+        rust_to_rusk("pub trait Bits:\n    Clone\n    + Copy\n{\n    const ONE: Self;\n}\n").unwrap(),
+        "pub trait Bits: Clone + Copy:\n    const ONE: Self;\n"
+    );
+    for source in [
+        "impl<T> Other for Vec<T>\nwhere\n    T: Copy,\n{\n}\n",
+        "fn f(b: u8) {\n    while b\n        .next()\n        .is_some()\n    {}\n    g();\n}\n",
+    ] {
+        let rusk = rust_to_rusk(source).unwrap();
+        assert!(!rusk.contains("{}"), "{rusk}");
+        assert_eq!(rust(&rusk), source);
+    }
+    let rust_source = "pub fn show<T>(value: T) -> String\nwhere\n    T: std::fmt::Debug, // bound\n{\n    if value.is_ok()\n        && value.len() > 1\n    {\n        return String::new();\n    }\n    format!(\"{value:?}\")\n}\n";
+    let rusk = rust_to_rusk(rust_source).unwrap();
+    assert_eq!(
+        rusk,
+        "pub fn show[T](value: T) -> String\nwhere\n    T: std.fmt.Debug: // bound\n    if value.is_ok()\n        && value.len() > 1:\n        return String.new()\n    format!(\"{value:?}\")\n"
+    );
+    assert_eq!(rust(&rusk), rust_source);
+}
+
+#[test]
+fn a_colon_line_alone_does_not_end_a_header() {
+    for (source, line) in [
+        (
+            "fn f(a: bool, b: bool):\n    if a\n        && b\n    :\n        g()\n",
+            2,
+        ),
+        ("fn f[T](x: T)\nwhere\n    T: Copy,\n:\n    g()\n", 1),
+    ] {
+        let error = transpile(source).expect_err(source);
+        assert_eq!(error.line, line, "{source:?}: {error}");
+    }
+}

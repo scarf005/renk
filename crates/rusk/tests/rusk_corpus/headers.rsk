@@ -1,0 +1,109 @@
+const MAX: usize = 3
+
+pub fn show[T](value: T) -> String
+where
+    T: std.fmt.Debug:
+    format!("{value:?}")
+
+pub fn check(a: bool, B: bool, xs: &[usize]) -> usize:
+    if a // (
+        && B: // ends in :
+        return 0
+    let x = if xs
+        .iter()
+        .any(|x| *x > MAX):
+        1
+    else if a
+        || "a:".len() > MAX:
+        2
+    else:
+        3
+    let mut it = xs.iter()
+    while let Some(y) = it
+        .next():
+        if *y > MAX:
+            break
+    match xs
+        .first():
+        Some(first) => *first + x
+        None => x
+
+pub fn long(
+    a: usize,
+    b: usize,
+) -> usize:
+    a + b
+
+pub fn names(xs: Vec[String]) -> Vec[String] = xs
+    .into_iter()
+    .map(|x|:
+        x.to_uppercase()
+    )
+    .collect()
+
+pub trait Show:
+    fn show[T](&self, value: T)
+    where
+        T: Copy
+    fn name(&self) -> String
+
+impl[T] Show for Vec[T]
+where
+    T: Clone:
+    fn show[U](&self, _value: U)
+    where
+        U: Copy:
+        let _ = self.len()
+    fn name(&self) -> String = "vec".to_string()
+
+pub fn nested(
+    xs: &[usize],
+    B: bool,
+) -> usize:
+    struct W[V](V);
+
+    impl[V] W[V]
+    where
+        V: Copy:
+        fn get(
+            &self,
+        ) -> usize:
+            1
+
+    if B // )
+        && xs.len() > MAX:
+        return 0
+    match xs.first():
+        Some(x)
+            if *x
+                > MAX =>:
+            if B:
+                *x
+            else:
+                0
+        _ => W(1u8).get()
+
+pub trait Pair: Clone
+    + Copy:
+    fn first(&self) -> usize
+
+pub fn bounded[T](t: T, text: &str) -> usize
+where T:
+    Clone + Copy:
+    let y =
+        if text == "=>": // =>
+            1
+        else:
+            2
+    let _ = t.clone()
+    y
+
+pub fn spaced[T, F](t: T, f: F)
+    -> usize
+where T: Copy, F: Fn(T, T) -> usize:
+    f(t, t)
+
+pub fn converted<T>(t: T)
+    -> u8
+where T: Into<Result<u8, ()>>:
+    t.into().unwrap_or(0)
