@@ -2064,13 +2064,27 @@ fn awaits_bounds(text: &str) -> bool {
     !last.contains(':')
 }
 
-/// The depth of the `<` generics `chars` leaves open, past the `>` of `->` and `=>`.
+/// The depth of the `<` generics `chars` leaves open, past the `>` of `->` and `=>` and the
+/// shifts or comparisons inside groups and literals, as in `[u8; 1 << 2]` or `S<'<'>`.
 fn angle_depth(chars: &[char]) -> isize {
-    (0..chars.len()).fold(0, |depth, index| match chars[index] {
-        '<' => depth + 1,
-        '>' if index == 0 || !matches!(chars[index - 1], '-' | '=') => depth - 1,
-        _ => depth,
-    })
+    let (mut depth, mut groups, mut index) = (0, 0usize, 0);
+    while index < chars.len() {
+        if let Some(end) = opaque_span_end(chars, index) {
+            index = end + 1;
+            continue;
+        }
+        match chars[index] {
+            '(' | '[' | '{' => groups += 1,
+            ')' | ']' | '}' => groups = groups.saturating_sub(1),
+            '<' if groups == 0 => depth += 1,
+            '>' if groups == 0 && (index == 0 || !matches!(chars[index - 1], '-' | '=')) => {
+                depth -= 1
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+    depth
 }
 
 /// `text` split at the `=` before a function's expression body, as in `fn f() -> T = value`; a
