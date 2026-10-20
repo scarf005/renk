@@ -146,3 +146,12 @@ pub fn operand_headers(a: bool, B: usize) -> usize:
     }) && !has:
         true => B
         false => 0
+
+pub fn commented_bounds[T]() -> usize
+where
+    // T: Pair<Item = T> + Show = T,
+    T: Clone + Copy /* = */:
+    let text = "= {" // =
+    text.len()
+
+pub fn commented_value(B: u8) -> &'static str /* -> T = v */ = if B > 0 then "a = b" else "="

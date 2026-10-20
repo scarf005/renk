@@ -1279,3 +1279,15 @@ fn closure_bodies_take_if_heads_and_inline_ifs() {
         "fn f(xs: &[u8]) -> Vec<u8> {\n    xs.iter().map(|X| if X > &0 { 1 } else { 2 }).collect()\n}\n"
     );
 }
+
+#[test]
+fn equals_signs_in_header_comments_do_not_start_a_body() {
+    assert_eq!(
+        rust("fn f[T]()\nwhere\n    // T: A<B, Error = Error>,\n    T: Copy:\n    g()\n"),
+        "fn f<T>()\nwhere\n    // T: A<B, Error = Error>,\n    T: Copy,\n{\n    g();\n}\n"
+    );
+    assert_eq!(
+        rust("fn f() -> u8 /* = 2 */ = 1\n"),
+        "fn f() -> u8 /* = 2 */ {\n    1\n}\n"
+    );
+}
