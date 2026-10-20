@@ -948,3 +948,88 @@ fn matches_whose_arms_end_with_values_end_with_a_semicolon() {
         &["            } else {\n                2\n            }\n", "    };\n    g();\n"],
     );
 }
+
+#[test]
+fn blocks_opened_inside_groups_end_with_a_closing_line() {
+    assert_eq!(
+        rust(
+            "fn f(mut xs: Vec[i32]) -> i32:\n    xs.sort_by(|a, b|:\n        b.cmp(a)\n    )\n    xs.iter().map(|x|:\n        x * 2 // (\n    ).sum()\n"
+        ),
+        "fn f(mut xs: Vec<i32>) -> i32 {\n    xs.sort_by(|a, b| {\n        b.cmp(a)\n    });\n    xs.iter().map(|x| {\n        x * 2 // (\n    }).sum()\n}\n"
+    );
+    assert_eq!(
+        rust(
+            "fn f(xs: &[i32]) -> usize:\n    xs\n        .iter()\n        .filter(|x|:\n            **x > 0\n        )\n        .count()\n"
+        ),
+        "fn f(xs: &[i32]) -> usize {\n    xs\n        .iter()\n        .filter(|x| {\n            **x > 0\n        })\n        .count()\n}\n"
+    );
+    assert_eq!(
+        rust(
+            "fn f(a: Option[u8], c: bool) -> u8:\n    let m = max(match a:\n        Some(x) => x\n        None => 0\n    , 1)\n    max(if c:\n        1\n    else:\n        2\n    , m)\n"
+        ),
+        "fn f(a: Option<u8>, c: bool) -> u8 {\n    let m = max(match a {\n        Some(x) => x,\n        None => 0,\n    }, 1);\n    max(if c {\n        1\n    } else {\n        2\n    }, m)\n}\n"
+    );
+    assert_eq!(
+        rust(
+            "fn f(o: Option[Vec[u8]]) -> usize:\n    match o:\n        Some(v) => v.iter().map(|x|:\n            *x as usize\n        ).sum()\n        None => 0\n"
+        ),
+        "fn f(o: Option<Vec<u8>>) -> usize {\n    match o {\n        Some(v) => v.iter().map(|x| {\n            *x as usize\n        }).sum(),\n        None => 0,\n    }\n}\n"
+    );
+    let source = "fn f(mut xs: Vec<i32>) -> usize {\n    xs.sort_by(|a, b| {\n        b.cmp(a)\n    });\n    xs.iter()\n        .filter(|x| {\n            **x > 0\n        })\n        .count()\n}\n";
+    assert_eq!(
+        rust_to_rusk(source).unwrap(),
+        "fn f(mut xs: Vec[i32]) -> usize:\n    xs.sort_by(|a, b| {\n        b.cmp(a)\n    })\n    xs.iter()\n        .filter(|x| {\n            **x > 0\n        })\n        .count()\n"
+    );
+    assert_eq!(
+        rust(
+            "fn f(a: Option[u8], b: Option[u8], xs: &[u8]) -> u8:\n    let m = max(match a:\n        Some(x) => x\n        None => 0\n    , match b:\n        Some(x) => x\n        None => 0\n    )\n    g(|x|:\n        x\n    , |y| {\n        y\n    })\n    xs.iter().map(|x|:\n        *x\n    // between\n    ).sum()\n"
+        ),
+        "fn f(a: Option<u8>, b: Option<u8>, xs: &[u8]) -> u8 {\n    let m = max(match a {\n        Some(x) => x,\n        None => 0,\n    }, match b {\n        Some(x) => x,\n        None => 0,\n    });\n    g(|x| {\n        x\n    }, |y| {\n        y\n    });\n    xs.iter().map(|x| {\n        *x\n        // between\n    }).sum()\n}\n"
+    );
+    for source in [
+        "fn f(a: Option<u8>, b: Option<u8>) -> u8 {\n    let m = max(match a {\n        Some(x) => x,\n        None => 0,\n    }, match b {\n        Some(x) => x,\n        None => 0,\n    });\n    g(|x| {\n        x\n    }, |y| {\n        y\n    });\n    m\n}\n",
+        "fn f(total: i32, c: bool) -> i32 {\n    max(if c {\n        total\n    } else if total > 1 { 1 } else { 0 }, 0)\n}\n",
+        "fn f(o: Option<u8>) -> u8 {\n    o.map_or_else(|| {\n        0\n    }, move |y| { // keep\n        y\n    })\n}\n",
+        "fn f() -> u8 {\n    let s = S { a: g(|x| {\n        x\n    })};\n    s.a\n}\n",
+    ] {
+        assert_eq!(rust(&rust_to_rusk(source).unwrap()), source);
+    }
+}
+
+#[test]
+fn blocks_opened_inside_groups_without_a_closing_line_are_errors() {
+    for (source, line) in [
+        (
+            "fn f(mut xs: Vec[i32]):\n    xs.sort_by(|a, b|:\n        b.cmp(a)\n    xs.len()\n",
+            2,
+        ),
+        (
+            "fn f(xs: &[i32]) -> i32:\n    xs.iter().map(|x|:\n        x * 2\n",
+            2,
+        ),
+        (
+            "fn f(xs: &[i32]) -> i32:\n    xs.iter().map(|x| {\n        x * 2\n",
+            2,
+        ),
+        (
+            "fn f(c: bool) -> u8:\n    max(if c:\n        1\n    else:\n        2\n",
+            4,
+        ),
+        (
+            "fn f(xs: &[i32]) -> usize:\n    xs\n        .iter()\n        .filter(|x|:\n            **x > 0\n        .count()\n",
+            4,
+        ),
+        ("fn f() -> usize:\n    xs.map(|x|:\n        1\n    ]\n    2\n", 4),
+        ("fn f() -> usize:\n    xs.map(|x|:\n        1\n    }\n    2\n", 4),
+        ("fn f() -> usize:\n    xs.map(|x|:\n        1\n    ))\n    2\n", 4),
+        ("fn f() -> usize:\n    xs.map(|x| {\n        1\n    }\n    2\n", 4),
+        ("fn f() -> u8:\n    let s = S { a: g(|x| {\n        x\n    })\n    s.a\n", 4),
+        ("fn f() -> u8:\n    let x = 1\n    , |y|:\n        y\n", 3),
+        ("fn f(c: bool) -> u8:\n    if c:\n        1;\n    , |y|:\n        y\n    0\n", 4),
+        ("fn f(c: bool) -> u8:\n    if c {\n        1;\n    }, |y| {\n        y\n    }\n    0\n", 4),
+    ] {
+        let error = transpile(source).expect_err(source);
+        assert_eq!(error.line, line, "{source:?}: {error}");
+    }
+    assert!(transpile("fn f():\n    let g = |x: u8|:\n        x + 1\n    g(1)\n").is_ok());
+}

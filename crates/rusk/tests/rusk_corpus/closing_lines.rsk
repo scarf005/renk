@@ -1,0 +1,108 @@
+const LIMIT: usize = 2
+
+pub fn sorted(mut xs: Vec[i32]) -> Vec[i32]:
+    xs.sort_by(|a, b|:
+        b.cmp(a)
+    )
+    xs
+
+pub fn doubled_total(xs: &[i32]) -> i32:
+    xs.iter().map(|x|:
+        let y = x * 2 // (
+        y
+    ).sum()
+
+pub fn chained(xs: &[i32]) -> usize:
+    xs
+        .iter()
+        .filter(|x|:
+            let text = "(" // ends in (
+            **x > text.len() as i32
+        )
+        .count()
+
+pub fn spawned() -> u8:
+    std::thread::spawn(move || -> u8:
+        1 + 1
+    ).join().unwrap_or(0)
+
+pub fn parsed(text: &str) -> Result[usize, std::num::ParseIntError]:
+    let n = Some(text).map(|s|:
+        s.parse[usize]()
+    ).unwrap()?
+    Ok(n)
+
+pub fn larger(a: Option[usize], c: bool) -> usize:
+    let m = std::cmp::max(match a:
+        Some(x) => x
+        None => 0
+    , LIMIT)
+    let n = std::cmp::max(if c:
+        1
+    else:
+        2
+    , m)
+    n
+
+pub fn nested(xs: Vec[Vec[u8]]) -> Vec[usize]:
+    xs.into_iter().map(|row| row.into_iter().map(|x|:
+        x as usize * LIMIT
+    ).sum()).collect()
+
+pub fn in_brackets(xs: &[u8]) -> [usize; 1]:
+    [xs.iter().map(|x|:
+        *x as usize
+    ).sum()]
+
+pub fn arm(o: Option[Vec[u8]]) -> usize:
+    match o:
+        Some(v) => v.iter().map(|x|:
+            *x as usize
+        ).sum()
+        None => 0
+
+pub fn macro_receiver() -> usize:
+    vec![1usize, 2].iter().map(|X|:
+        X + 1
+    ).sum()
+
+pub fn brace_closure(xs: &[i32]) -> i32:
+    xs.iter().map(|x| {
+        x * 2
+    }).sum()
+
+pub fn block_arguments(a: Option[usize], b: Option[usize]) -> usize:
+    let m = std::cmp::max(match a:
+        Some(x) => x // ,
+        None => 0
+    , match b:
+        Some(X) => X
+        None => 0
+    )
+    let n = a.map_or_else(||:
+        let text = ")" // ends in )
+        text.len()
+    , |x|:
+        x * LIMIT
+    )
+    let total = b.map_or_else(|| {
+        m
+    }, |X| {
+        X + n
+    })
+    [total].iter().map(|x|:
+        *x
+    // before the closer
+    ).sum()
+
+pub struct Holder:
+    pub n: usize
+
+pub fn held(xs: &[usize]) -> usize:
+    let h = Holder { n: xs.iter().map(|x| {
+        *x + "}".len()
+    }).sum()}
+    let i = Holder { n: xs.iter().map(|X|:
+        X * 2 // }
+    ).sum() }
+    h.n + i.n

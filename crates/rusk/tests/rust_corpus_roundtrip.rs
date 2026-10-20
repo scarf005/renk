@@ -57,7 +57,14 @@ const RUSK_CORPUS: &[(&str, &str)] = &[
         "one_line_control",
         include_str!("rusk_corpus/one_line_control.rsk"),
     ),
-    ("cfg_statements", include_str!("rusk_corpus/cfg_statements.rsk")),
+    (
+        "cfg_statements",
+        include_str!("rusk_corpus/cfg_statements.rsk"),
+    ),
+    (
+        "closing_lines",
+        include_str!("rusk_corpus/closing_lines.rsk"),
+    ),
 ];
 
 #[test]
