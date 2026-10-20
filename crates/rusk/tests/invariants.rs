@@ -3,9 +3,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use rusk::{
-    FormatOptions, SourceMapNode, format_source, ruk_to_rust, rusk_to_ruk, rust_to_rusk, transpile,
-};
+use rusk::{FormatOptions, SourceMapNode, format_source, rust_to_rusk, transpile};
 
 fn sources(dirs: &[&str], extension: &str) -> Vec<(PathBuf, String)> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -172,20 +170,6 @@ fn rust_round_trips_reach_a_fixed_point_after_one_pass() {
     for (path, rust) in rust {
         let once = round_trip(&rust);
         assert_eq!(round_trip(&once), once, "{}", path.display());
-    }
-}
-
-#[test]
-fn ruk_conversion_preserves_the_generated_rust() {
-    for (path, source) in rusk_sources() {
-        let rust = transpile(&source).unwrap().rust;
-        let ruk = rusk_to_ruk(&source).unwrap();
-        assert_eq!(
-            rust_to_rusk(&ruk_to_rust(&ruk).unwrap()).unwrap(),
-            rust_to_rusk(&rust).unwrap(),
-            "{}",
-            path.display()
-        );
     }
 }
 

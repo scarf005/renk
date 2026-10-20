@@ -67,8 +67,7 @@ mod wasm_api {
     use wasm_bindgen::prelude::*;
 
     use super::{
-        FormatOptions, TranspileError, format_source, ruk_to_rusk, ruk_to_rust, rusk_to_ruk,
-        rust_to_ruk, rust_to_rusk, source_map_json, transpile,
+        FormatOptions, TranspileError, format_source, rust_to_rusk, source_map_json, transpile,
     };
 
     #[wasm_bindgen]
@@ -93,26 +92,6 @@ mod wasm_api {
     #[wasm_bindgen]
     pub fn convert_rust_to_rusk(source: &str) -> Result<String, JsValue> {
         rust_to_rusk(source).map_err(error_to_js_value)
-    }
-
-    #[wasm_bindgen]
-    pub fn convert_rust_to_ruk(source: &str) -> Result<String, JsValue> {
-        rust_to_ruk(source).map_err(error_to_js_value)
-    }
-
-    #[wasm_bindgen]
-    pub fn convert_ruk_to_rust(source: &str) -> Result<String, JsValue> {
-        ruk_to_rust(source).map_err(error_to_js_value)
-    }
-
-    #[wasm_bindgen]
-    pub fn convert_ruk_to_rusk(source: &str) -> Result<String, JsValue> {
-        ruk_to_rusk(source).map_err(error_to_js_value)
-    }
-
-    #[wasm_bindgen]
-    pub fn convert_rusk_to_ruk(source: &str) -> Result<String, JsValue> {
-        rusk_to_ruk(source).map_err(error_to_js_value)
     }
 
     fn error_to_js_value(error: TranspileError) -> JsValue {
@@ -288,577 +267,20 @@ pub fn wrap_script_statements(source: &str, syntax: SourceSyntax) -> Option<(Str
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceSyntax {
     Rusk,
-    Ruk,
     Rust,
 }
 
 pub fn to_rust(source: &str, syntax: SourceSyntax) -> Result<String, TranspileError> {
     match syntax {
         SourceSyntax::Rusk => transpile(source).map(|output| output.rust),
-        SourceSyntax::Ruk => ruk_to_rust(source),
         SourceSyntax::Rust => Ok(ensure_trailing_newline(source)),
-    }
-}
-
-pub fn to_ruk(source: &str, syntax: SourceSyntax) -> Result<String, TranspileError> {
-    match syntax {
-        SourceSyntax::Rusk => rusk_to_ruk(source),
-        SourceSyntax::Ruk => Ok(ensure_trailing_newline(source)),
-        SourceSyntax::Rust => rust_to_ruk(source),
     }
 }
 
 pub fn to_rusk(source: &str, syntax: SourceSyntax) -> Result<String, TranspileError> {
     match syntax {
         SourceSyntax::Rusk => Ok(ensure_trailing_newline(source)),
-        SourceSyntax::Ruk => ruk_to_rusk(source),
         SourceSyntax::Rust => rust_to_rusk(source),
-    }
-}
-
-pub fn rusk_to_ruk(source: &str) -> Result<String, TranspileError> {
-    let rust = transpile(source)?.rust;
-    rust_to_ruk(&rust)
-}
-
-pub fn ruk_to_rusk(source: &str) -> Result<String, TranspileError> {
-    let rust = ruk_to_rust(source)?;
-    rust_to_rusk(&rust)
-}
-
-/// Drops every Rust semicolon that Ruk inference restores, keeping the rest.
-pub fn rust_to_ruk(source: &str) -> Result<String, TranspileError> {
-    let source = &expand_indent_tabs(source);
-    let mut rust = Vec::new();
-    let mut output = Vec::new();
-    for (raw, in_literal) in source.lines().zip(lines_ending_in_literal(source)) {
-        let raw = keep_literal_end(raw, in_literal);
-        if raw.trim() != GENERATED_HEADER.trim_end() {
-            rust.push(raw);
-            output.push(if in_literal { raw.to_string() } else { strip_rust_semicolon(raw) });
-        }
-    }
-    loop {
-        let inferred = ruk_to_rust(&output.join("\n"))?;
-        let mut restored = false;
-        for ((line, raw), inferred) in output.iter_mut().zip(&rust).zip(inferred.lines()) {
-            if inferred != *raw && line != raw {
-                *line = raw.to_string();
-                restored = true;
-            }
-        }
-        if !restored {
-            break;
-        }
-    }
-    Ok(ensure_trailing_newline(
-        &trim_outer_blank_lines(output).join("\n"),
-    ))
-}
-
-pub fn ruk_to_rust(source: &str) -> Result<String, TranspileError> {
-    RukSemicolonInferer::new(source)?.infer()
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RukScopeKind {
-    Function { returns_value: bool },
-    Trait,
-    /// A block in expression position, such as a closure, `async`, or `let x = if c {` body,
-    /// whose tail expression is its value.
-    Value,
-    /// A `macro_rules!` body, which stays Rust tokens.
-    Macro,
-    /// A loop body, or an `if`/`match`/`unsafe` block whose value is unused.
-    Statement,
-    Item,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct RukScope {
-    indent: usize,
-    kind: RukScopeKind,
-    /// Opened by a `let` or assignment, so its closing `}` ends the statement.
-    ends_statement: bool,
-}
-
-#[derive(Debug)]
-struct RukSemicolonInferer {
-    /// Logical lines: a line ending inside a string literal or block comment joins the next one.
-    lines: Vec<String>,
-    scopes: Vec<RukScope>,
-}
-
-impl RukSemicolonInferer {
-    fn new(source: &str) -> Result<Self, TranspileError> {
-        reject_indent_tabs(source)?;
-        let mut lines = Vec::<String>::new();
-        let mut joins_next = false;
-        for (raw, in_literal) in source.lines().zip(lines_ending_in_literal(source)) {
-            match lines.last_mut() {
-                Some(line) if joins_next => {
-                    line.push('\n');
-                    line.push_str(raw);
-                }
-                _ => lines.push(raw.to_string()),
-            }
-            joins_next = in_literal;
-        }
-        Ok(Self {
-            lines,
-            scopes: Vec::new(),
-        })
-    }
-
-    fn infer(mut self) -> Result<String, TranspileError> {
-        let mut output = Vec::new();
-        let mut delimiter_depth = 0usize;
-        let mut brace_depth = 0usize;
-        let mut delimiter_base_brace_depth = None::<usize>;
-        // An item header continued over several lines, such as a function signature or a `where`
-        // clause, until the line opening its body or ending it.
-        let mut signature = None::<String>;
-        // The scope the previous line closed, which an `else {` line on its own continues.
-        let mut previous_closed = None::<RukScope>;
-        let lines = self.lines.iter().map(String::as_str).collect::<Vec<_>>();
-        let heads = lone_opener_heads(&lines, &vec![false; lines.len()], "{");
-        // The lone `{` line ending a multi-line header, and the scope its first line closed.
-        let mut header_end = None::<usize>;
-        let mut header_closed = None::<RukScope>;
-        // Inside an attribute such as `#[cfg(any(` that continues over several lines.
-        let mut in_attribute = false;
-        for index in 0..self.lines.len() {
-            header_end = header_end.filter(|&end| end >= index).or(heads[index]);
-            let in_long_header = header_end.is_some_and(|end| end > index);
-            let raw = self.lines[index].trim_end().to_string();
-            let raw = raw.as_str();
-            let text = raw.trim_start();
-            let indent = raw_indent(raw);
-            let next_delimiter_depth = delimiter_depth_after_line(delimiter_depth, text);
-            let leaves_delimiter_open = next_delimiter_depth > 0;
-            let suppress_semicolon = leaves_delimiter_open
-                && delimiter_base_brace_depth.is_none_or(|base| brace_depth <= base);
-            let closed = self.close_scopes_for_line(text, indent);
-            let code = &text[..code_len(text)];
-            let in_header = signature.is_some()
-                || looks_like_item_header_without_body(without_attributes(code));
-            // A header line before its `where` clause or before the `{` line after it.
-            let header_continues = in_header
-                && (code == "where"
-                    || code.ends_with(" where")
-                    || self.next_code_line(index).is_some_and(|next| {
-                        let next = next.trim();
-                        next == "{" || next == "where" || next.starts_with("where ")
-                    }));
-            if delimiter_depth == 0 {
-                in_attribute = text.starts_with('#') && next_delimiter_depth > 0;
-            }
-            // A `})}` line closing a macro's last arm and the macro itself stays tokens too.
-            let closes_macro = closed.is_some_and(|scope| scope.kind == RukScopeKind::Macro);
-            let converted = if self.in_macro()
-                || closes_macro
-                || header_continues
-                || in_long_header
-                || in_attribute
-            {
-                raw.to_string()
-            } else if closed.is_some_and(|scope| scope.ends_statement)
-                // A chain closed on the same line, as in `} else { 2 }`, also ends it.
-                && (code == "}"
-                    || (code.starts_with("} else")
-                        && code.ends_with('}')
-                        && open_delimiters(&code[1..]).is_some_and(|open| open.is_empty())))
-                && !self.continues_on_next_line(index)
-            {
-                insert_semicolon(raw)
-            } else {
-                self.infer_line(raw, text, index, suppress_semicolon)
-            };
-            let terminated = split_line_comment(&converted)
-                .map_or(converted.as_str(), |(code, _)| code)
-                .trim_end()
-                .ends_with(';');
-            output.push(converted);
-            let header = match signature.take() {
-                Some(start) => format!("{start} {code}"),
-                None => without_attributes(code).to_string(),
-            };
-            if heads[index].is_some() {
-                header_closed = closed;
-            }
-            let closed = if header_end == Some(index) {
-                header_closed.take()
-            } else {
-                closed
-            };
-            if in_long_header
-                || (looks_like_item_header_without_body(&header)
-                    && !header.ends_with(['{', ';', '}'])
-                    && !terminated)
-            {
-                signature = Some(header);
-            } else {
-                let continued =
-                    previous_closed.filter(|_| is_else_branch(strip_open_brace(&header)));
-                self.open_scope_from_line(&header, index, indent, closed.or(continued));
-            }
-            if !code.is_empty() && !in_long_header {
-                previous_closed = closed;
-            }
-            let next_brace_depth = brace_depth_after_line(brace_depth, text);
-            if delimiter_depth == 0 && next_delimiter_depth > 0 {
-                delimiter_base_brace_depth = Some(brace_depth);
-            } else if next_delimiter_depth == 0 {
-                delimiter_base_brace_depth = None;
-            }
-            delimiter_depth = next_delimiter_depth;
-            brace_depth = next_brace_depth;
-        }
-        Ok(ensure_trailing_newline(&output.join("\n")))
-    }
-
-    /// Pops the scopes a `}` line closes and returns the outermost one.
-    fn close_scopes_for_line(&mut self, text: &str, indent: usize) -> Option<RukScope> {
-        if !text.starts_with('}') {
-            return None;
-        }
-        let mut closed = None;
-        while self
-            .scopes
-            .last()
-            .is_some_and(|scope| scope.indent >= indent)
-        {
-            closed = self.scopes.pop();
-        }
-        closed
-    }
-
-    fn in_macro(&self) -> bool {
-        self.scopes
-            .iter()
-            .any(|scope| scope.kind == RukScopeKind::Macro)
-    }
-
-    fn infer_line(&self, raw: &str, text: &str, index: usize, suppress_semicolon: bool) -> String {
-        if suppress_semicolon {
-            return raw.to_string();
-        }
-        let code = &text[..code_len(text)];
-        if !ruk_line_needs_semicolon(code) {
-            return raw.to_string();
-        }
-        if !self.should_add_semicolon(code, index) {
-            // Rust takes attributes only on a statement or a block, so a cfg-selected tail such
-            // as `#[cfg(unix)]` / `v.len()` becomes a block.
-            let block_like = code.ends_with('}')
-                && (starts_control_flow(code)
-                    || code.starts_with(['{', '#'])
-                    || code.starts_with("match ")
-                    || is_brace_macro_invocation(code));
-            if self.has_cfg(index)
-                && self.tail_is_value()
-                && (self.is_tail_of_current_scope(index) || self.is_cfg_alternative(index, index))
-                && !self.continues_on_next_line(index)
-                && !block_like
-                && !looks_like_item_header_without_body(code)
-                && !split_arrow(code).is_some_and(|(pattern, _)| {
-                    open_delimiters(pattern).is_some_and(|open| open.is_empty())
-                })
-                && open_delimiters(code).is_some_and(|open| open.is_empty())
-            {
-                let (code, comment) = raw.split_at(code_len(raw));
-                let indent = raw_indent(code);
-                return format!("{}{{ {} }}{comment}", &code[..indent], &code[indent..]);
-            }
-            return raw.to_string();
-        }
-        insert_semicolon(raw)
-    }
-
-    /// Whether the attributes right before line `index` hold a `#[cfg(...)]`.
-    fn has_cfg(&self, index: usize) -> bool {
-        self.lines[..index]
-            .iter()
-            .rev()
-            .map(|line| line.trim())
-            .filter(|line| !line.is_empty() && !is_comment(line))
-            .take_while(|line| line.starts_with("#["))
-            .any(|line| line.starts_with("#[cfg"))
-    }
-
-    /// Whether the next code line continues this expression: `.method()`, `?`, `| pattern`,
-    /// `+ operand`, or `let ... else`.
-    fn continues_on_next_line(&self, index: usize) -> bool {
-        self.next_code_line(index).is_some_and(|next| {
-            let next = next.trim_start();
-            next.starts_with(['.', '?'])
-                || next.starts_with("| ")
-                || starts_with_binary_operator(next)
-                || is_else_branch(strip_open_brace(next))
-        })
-    }
-
-    fn should_add_semicolon(&self, text: &str, index: usize) -> bool {
-        // A one-line control statement whose blocks end with statements, as in
-        // `if c { f(); }`, is `()`.
-        if (starts_control_flow(text) || text.starts_with("match "))
-            && text.ends_with('}')
-            && has_unit_blocks(text)
-        {
-            return false;
-        }
-        // A match arm, as in `None => {}`, ends with its body, unlike the inline `match` of
-        // `let z = match o { _ => 1 }`.
-        let is_arm = split_arrow(text).is_some_and(|(pattern, _)| {
-            open_delimiters(pattern).is_some_and(|open| open.is_empty())
-        }) && !is_let(text)
-            && !is_assignment(text);
-        if self.continues_on_next_line(index) || is_arm {
-            return false;
-        }
-        if is_let(text)
-            || is_assignment(text)
-            || is_jump_statement(text)
-            || is_use_or_extern_crate(text)
-        {
-            return true;
-        }
-        if self.in_trait_scope() && looks_like_trait_item_without_body(text) {
-            return true;
-        }
-        // A unit or tuple struct, as in `pub struct T(pub u32)`, or a `mod p` declaration has no
-        // body.
-        let item = without_attributes(text);
-        if (is_struct_item(item) || starts_item(item, "mod")) && !item.ends_with(['{', '}']) {
-            return true;
-        }
-        // An item or a `name! { ... }` invocation, which may also be an item, needs no `;`.
-        if looks_like_item_header_without_body(text)
-            || is_extern_block(text)
-            || is_brace_macro_invocation(text)
-            || (is_macro_item(text) && text.ends_with('}'))
-        {
-            return false;
-        }
-        if !self.is_tail_of_current_scope(index) && !self.is_cfg_alternative(index, index) {
-            return true;
-        }
-        !self.tail_is_value()
-    }
-
-    /// Whether lines `start..=end` are one of several tails, each under its own `#[cfg(...)]`,
-    /// which only other alternatives follow.
-    fn is_cfg_alternative(&self, start: usize, end: usize) -> bool {
-        // The line starting a statement continued on `start`, as in `{ v.iter()` / `.count() }`.
-        let mut start = start;
-        while let Some(previous) = (0..start).rev().find(|&line| {
-            let text = self.lines[line].trim();
-            !text.is_empty() && !is_comment(text)
-        }) && {
-            let text = self.lines[start].trim_start();
-            text.starts_with(['.', '?']) || starts_with_binary_operator(text)
-        } {
-            start = previous;
-        }
-        let indent = raw_indent(&self.lines[start]);
-        self.has_cfg(start)
-            && self
-                .next_code_line(end)
-                .is_some_and(|line| line.trim().starts_with("#["))
-            && (end + 1..self.lines.len())
-                .filter(|&later| {
-                    let text = self.lines[later].trim();
-                    !text.is_empty() && !is_comment(text)
-                })
-                .take_while(|&later| raw_indent(&self.lines[later]) >= indent)
-                .filter(|&later| {
-                    raw_indent(&self.lines[later]) == indent
-                        && !self.lines[later]
-                            .trim_start()
-                            .starts_with(['#', '}', ')', ']'])
-                })
-                .all(|later| self.has_cfg(later))
-    }
-
-    fn is_tail_of_current_scope(&self, index: usize) -> bool {
-        self.next_code_line(index)
-            .is_none_or(|next| next.trim_start().starts_with('}'))
-    }
-
-    fn previous_code_line(&self, index: usize) -> Option<&str> {
-        self.lines[..index]
-            .iter()
-            .rev()
-            .map(String::as_str)
-            .find(|line| {
-                let text = line.trim();
-                !text.is_empty() && !is_comment(text)
-            })
-    }
-
-    fn next_code_line(&self, index: usize) -> Option<&str> {
-        self.lines.iter().skip(index + 1).map(String::as_str).find(|line| {
-            let text = line.trim();
-            !text.is_empty() && !is_comment(text)
-        })
-    }
-
-    fn in_trait_scope(&self) -> bool {
-        self.scopes
-            .iter()
-            .rev()
-            .any(|scope| matches!(scope.kind, RukScopeKind::Trait))
-    }
-
-    /// Whether a scope tail is a value: the nearest function or value block decides.
-    fn tail_is_value(&self) -> bool {
-        self.scopes.iter().rev().find_map(|scope| match scope.kind {
-            RukScopeKind::Function { returns_value } => Some(returns_value),
-            RukScopeKind::Value => Some(true),
-            RukScopeKind::Statement => Some(false),
-            _ => None,
-        }) == Some(true)
-    }
-
-    /// The line closing the block chain opened at `index`: the first `}` line at `indent` that no
-    /// `else` continues, on the same or the next line.
-    fn block_chain_end(&self, index: usize, indent: usize) -> Option<usize> {
-        let is_else = |text: &str| is_else_branch(strip_open_brace(text.trim()));
-        (index + 1..self.lines.len())
-            .filter(|&line| {
-                let text = self.lines[line].trim();
-                !text.is_empty()
-                    && !is_comment(text)
-                    && raw_indent(&self.lines[line]) <= indent
-            })
-            .find(|&line| {
-                let text = self.lines[line].trim_start();
-                !is_else(text)
-                    && !text.strip_prefix('}').is_some_and(is_else)
-                    && !self.next_code_line(line).is_some_and(is_else)
-            })
-            .filter(|&line| self.lines[line].trim_start().starts_with('}'))
-    }
-
-    /// Whether each arm of the `match` opened at `index` is a block ending with a statement, as
-    /// in `None => {}` or `Some(x) => {` / `v.push(x)` / `}`, so the `match` is `()`.
-    fn has_block_arms(&self, index: usize, indent: usize) -> bool {
-        let Some(end) = self.block_chain_end(index, indent) else {
-            return false;
-        };
-        let arms = (index + 1..end)
-            .map(|line| {
-                (
-                    raw_indent(&self.lines[line]),
-                    without_trailing_line_comment(self.lines[line].trim()).trim_end(),
-                )
-            })
-            .filter(|(_, code)| !code.is_empty() && !is_comment(code))
-            .collect::<Vec<_>>();
-        let Some(&(arm_indent, _)) = arms.first() else {
-            return false;
-        };
-        arms.iter()
-            .filter(|(at, code)| *at == arm_indent && !code.starts_with('}'))
-            .all(|(_, code)| {
-                split_arrow(code).is_some_and(|(_, body)| {
-                    let body = body.trim();
-                    body == "{"
-                        || is_brace_group(body) && {
-                            let inner = body[1..body.len() - 1].trim();
-                            inner.is_empty() || inner.ends_with(';')
-                        }
-                })
-            })
-    }
-
-    /// Opens the scope of a line ending with `{`; a `} else {` line continues the closed scope.
-    fn open_scope_from_line(
-        &mut self,
-        text: &str,
-        index: usize,
-        indent: usize,
-        closed: Option<RukScope>,
-    ) {
-        if !text.ends_with('{') {
-            return;
-        }
-        if let Some(scope) = closed {
-            self.scopes.push(RukScope { indent, ..scope });
-            return;
-        }
-        let header = strip_open_brace(text);
-        // A value continued from `let x =` on the previous line.
-        let binding = self.previous_code_line(index).map(|line| {
-            let code = split_line_comment(line.trim()).map_or(line.trim(), |(code, _)| code);
-            code.trim_end().to_string()
-        });
-        let binding = binding.filter(|line| line.ends_with('=') && starts_control_flow(header));
-        // The `else` of a `let` on earlier lines: a wrapped `let ... else`, as in
-        // `let Some(y) = v` / `    .first()` / `else {`, or an `if` value, as in
-        // `let w = if c { 1 }` / `else {`.
-        let let_head = self.lines[..index]
-            .iter()
-            .rev()
-            .map(|line| &line.trim()[..code_len(line.trim())])
-            .zip(self.lines[..index].iter().rev())
-            .filter(|(code, _)| !code.is_empty())
-            .find(|(_, line)| raw_indent(line) <= indent)
-            .map(|(code, _)| code)
-            .filter(|code| header == "else" && is_let(code) && !code.ends_with('{'));
-        let let_else = let_head.is_some_and(|code| !code.ends_with('}'));
-        let kind = if is_function(header) {
-            RukScopeKind::Function {
-                returns_value: function_returns_value(header),
-            }
-        } else if is_trait_item(header) {
-            RukScopeKind::Trait
-        } else if is_macro_item(header) {
-            RukScopeKind::Macro
-        } else if opens_value_block(header)
-            || binding.is_some()
-            || (let_head.is_some() && !let_else)
-        {
-            RukScopeKind::Value
-        } else if is_loop(header) || let_else {
-            RukScopeKind::Statement
-        } else if let Some(end) = self
-            .block_chain_end(index, indent)
-            .filter(|_| starts_control_flow(header))
-        {
-            if self.tail_is_value()
-                && (self.is_tail_of_current_scope(end) || self.is_cfg_alternative(index, end))
-            {
-                RukScopeKind::Value
-            } else {
-                RukScopeKind::Statement
-            }
-        } else {
-            RukScopeKind::Item
-        };
-        // A `match` whose value is unused ends with `;`, so its arms need not be `()`.
-        let ends_statement = (!is_function(header)
-            && (is_let(header) || is_assignment(header))
-            && !starts_control_flow(header))
-            || binding.is_some_and(|line| is_let(&line) || is_assignment(&line))
-            || let_head.is_some()
-            || (kind == RukScopeKind::Statement
-                && header.starts_with("match ")
-                && !self.has_block_arms(index, indent));
-        self.scopes.push(RukScope {
-            indent,
-            kind,
-            ends_statement,
-        });
-    }
-}
-
-fn insert_semicolon(raw: &str) -> String {
-    // Before a trailing comment, as in `let h = g /* in a */`.
-    let (code, comment) = raw.split_at(code_len(raw));
-    match comment.trim_start() {
-        "" => format!("{code};"),
-        comment => format!("{code}; {comment}"),
     }
 }
 
@@ -866,22 +288,6 @@ fn starts_control_flow(header: &str) -> bool {
     ["if ", "while ", "for ", "match ", "else", "loop", "unsafe"]
         .iter()
         .any(|keyword| header.starts_with(keyword))
-}
-
-/// Whether a `{` after `header` opens a block in expression position, whose tail is its value.
-fn opens_value_block(header: &str) -> bool {
-    let closure = header.ends_with('|')
-        || header
-            .rsplit_once("| ->")
-            .is_some_and(|(params, _)| params.contains('|'));
-    let r#async = header == "async"
-        || header.ends_with(" async")
-        || header.ends_with("(async")
-        || header.ends_with("async move");
-    closure
-        || r#async
-        || header.ends_with(['=', '(', ','])
-        || (!starts_control_flow(header) && (is_let(header) || is_assignment(header)))
 }
 
 fn strip_rust_semicolon(raw: &str) -> String {
@@ -961,34 +367,12 @@ fn trim_outer_blank_lines(mut lines: Vec<String>) -> Vec<String> {
     lines
 }
 
-fn ruk_line_needs_semicolon(text: &str) -> bool {
-    // Attributes before an item on its line, as in `#[derive(Debug)] struct A(u8)`.
-    let text = without_attributes(text.trim());
-    !text.is_empty()
-        && !is_comment(text)
-        && !text.starts_with('#')
-        && !text.ends_with(';')
-        && !text.ends_with(',')
-        && !text.ends_with('{')
-        && !text.ends_with(['=', '+', '-', '/', '%', '&', '|', '^', '<'])
-        && !text.ends_with("=>")
-        && !text
-            .chars()
-            .all(|character| matches!(character, '}' | ',' | ';'))
-}
-
 fn looks_like_item_header_without_body(text: &str) -> bool {
     is_struct_item(text)
         || is_enum_item(text)
         || is_trait_item(text)
         || is_rust_impl_or_mod_item(text)
         || is_function(text)
-}
-
-fn looks_like_trait_item_without_body(text: &str) -> bool {
-    (is_function(text) && !text.ends_with('}'))
-        || text.starts_with("type ")
-        || text.starts_with("const ")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2053,7 +1437,7 @@ fn indent_tab_lines(source: &str) -> impl Iterator<Item = usize> {
     })
 }
 
-/// Rusk and Ruk read structure from indentation, so a tab there is ambiguous.
+/// Rusk reads structure from indentation, so a tab there is ambiguous.
 fn reject_indent_tabs(source: &str) -> Result<(), TranspileError> {
     match indent_tab_lines(source).next() {
         Some(index) => Err(TranspileError {
@@ -6720,13 +6104,6 @@ fn is_let(text: &str) -> bool {
     text.starts_with("let ")
 }
 
-/// Whether `text` starts an `extern` block, as in `unsafe extern "C" { fn abs(x: i32) -> i32; }`.
-fn is_extern_block(text: &str) -> bool {
-    let text = without_visibility(text);
-    let text = text.strip_prefix("unsafe ").unwrap_or(text);
-    starts_item(text, "extern") && !text.starts_with("extern crate ") && !is_function(text)
-}
-
 fn is_use_or_extern_crate(text: &str) -> bool {
     let text = without_visibility(text);
     text.starts_with("use ") || text.starts_with("extern crate ")
@@ -7350,163 +6727,6 @@ fn main() {
     }
 
     #[test]
-    fn converts_between_rust_ruk_and_rusk() {
-        let rust_source = r#"
-fn main() {
-    let user = User::new(1, "Ada".to_string());
-    println!("{}", user.display_name());
-}
-
-fn id(value: i32) -> i32 {
-    value
-}
-"#;
-
-        let ruk = rust_to_ruk(rust_source).unwrap();
-        assert_eq!(
-            ruk,
-            r#"fn main() {
-    let user = User::new(1, "Ada".to_string())
-    println!("{}", user.display_name())
-}
-
-fn id(value: i32) -> i32 {
-    value
-}
-"#
-        );
-        assert_eq!(
-            ruk_to_rust(&ruk).unwrap(),
-            ensure_trailing_newline(rust_source.trim_start())
-        );
-        assert!(ruk_to_rusk(&ruk).unwrap().contains("let user = User.new"));
-        assert!(
-            rusk_to_ruk("fn main():\n    println!(\"hello\")\n")
-                .unwrap()
-                .contains("println!(\"hello\")")
-        );
-        assert!(
-            rust_to_ruk("fn discarded() -> i32 {\n    1;\n}\n")
-                .unwrap()
-                .contains("1;")
-        );
-    }
-
-    #[test]
-    fn ruk_keeps_multiline_call_open_until_closing_line() {
-        let source = r#"
-fn main() {
-    println!(
-        "{}", user.display_name())
-    println!(
-        "{}", user.display_name()
-    )
-}
-"#;
-
-        assert_eq!(
-            ruk_to_rust(source).unwrap(),
-            r#"
-fn main() {
-    println!(
-        "{}", user.display_name());
-    println!(
-        "{}", user.display_name()
-    );
-}
-"#
-        );
-    }
-
-    #[test]
-    fn ruk_newline_semicolon_cases_compile() {
-        use std::{env, fs, process::Command};
-
-        let source = r#"
-struct User {
-    name: String,
-}
-
-impl User {
-    fn display_name(&self) -> &str {
-        &self.name
-    }
-}
-
-fn unit_multiline_macro(user: &User) {
-    println!(
-        "{}", user.display_name()
-    )
-    println!(
-        // comments must not close the pending call
-        "{}", user.display_name()
-    )
-}
-
-fn tail_multiline_call(user: &User) -> String {
-    format!(
-        "{}", user.display_name()
-    )
-}
-
-fn let_multiline_vector() -> Vec<i32> {
-    let values = vec![
-        1,
-        2
-    ]
-    values
-}
-
-fn multiline_chain_arguments(values: Vec<String>) -> Vec<String> {
-    values
-        .into_iter()
-        .map(|line| {
-            let trimmed = line.trim()
-            if trimmed.is_empty() { String::new() } else { trimmed.to_string() }
-        })
-        .filter(
-            |value| !value.is_empty()
-        )
-        .collect::<Vec<String>>()
-}
-
-fn non_tail_multiline_call(user: &User) -> String {
-    tail_multiline_call(
-        user
-    )
-    tail_multiline_call(user)
-}
-"#;
-
-        let rust = ruk_to_rust(source).unwrap();
-        assert!(rust.contains("    println!(\n        \"{}\", user.display_name()\n    );\n"));
-        assert!(rust.contains("fn tail_multiline_call(user: &User) -> String {\n    format!(\n        \"{}\", user.display_name()\n    )\n}"));
-        assert!(rust.contains("    let values = vec![\n        1,\n        2\n    ];\n"));
-        assert!(rust.contains("            let trimmed = line.trim();\n"));
-        assert!(
-            rust.contains("        .filter(\n            |value| !value.is_empty()\n        )\n")
-        );
-        assert!(rust.contains("    tail_multiline_call(\n        user\n    );\n"));
-
-        let dir = env::temp_dir().join(format!("rusk-ruk-newline-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("lib.rs");
-        fs::write(&path, rust).unwrap();
-        let status = Command::new("rustc")
-            .arg("--edition=2024")
-            .arg("--crate-type=lib")
-            .arg("--emit=metadata")
-            .arg("-o")
-            .arg(dir.join("out.rmeta"))
-            .arg(&path)
-            .status()
-            .unwrap();
-        assert!(status.success());
-        let _ = fs::remove_dir_all(dir);
-    }
-
-    #[test]
     fn converts_rust_to_rusk() {
         let source = r#"
 #[derive(Debug, Clone)]
@@ -7678,7 +6898,7 @@ pub fn normalized_names(lines: Vec<String>) -> Vec<String> {
             .filter(|path| {
                 path.extension()
                     .and_then(|extension| extension.to_str())
-                    .is_some_and(|extension| matches!(extension, "rsk" | "rk"))
+                    .is_some_and(|extension| extension == "rsk")
             })
             .collect::<Vec<_>>();
         examples.sort();
@@ -7690,20 +6910,11 @@ pub fn normalized_names(lines: Vec<String>) -> Vec<String> {
 
         for example in examples {
             let source = fs::read_to_string(&example).unwrap();
-            let rust = if example
-                .extension()
-                .is_some_and(|extension| extension == "rk")
-            {
-                ruk_to_rust(&source).unwrap_or_else(|error| {
+            let rust = transpile(&source)
+                .unwrap_or_else(|error| {
                     panic!("failed to transpile {}: {error}", example.display())
                 })
-            } else {
-                transpile(&source)
-                    .unwrap_or_else(|error| {
-                        panic!("failed to transpile {}: {error}", example.display())
-                    })
-                    .rust
-            };
+                .rust;
             if example
                 .file_stem()
                 .and_then(|stem| stem.to_str())

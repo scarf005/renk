@@ -151,11 +151,6 @@ fn subcommands_dispatch_on_the_input_extension() {
     )
     .unwrap();
     fs::write(
-        dir.join("a.rk"),
-        "fn f() -> i32 {\n    let x = 1\n    x\n}\n",
-    )
-    .unwrap();
-    fs::write(
         dir.join("b.rs"),
         "fn f(c: bool) -> i32 {\n    if c {\n        1\n    } else {\n        2\n    }\n}\n",
     )
@@ -165,28 +160,15 @@ fn subcommands_dispatch_on_the_input_extension() {
         "fn f() -> i32:\n    let x = 1  \n    x\n",
     )
     .unwrap();
-    let cases: [(&[&str], &str); 7] = [
+    let cases: [(&[&str], &str); 3] = [
         (
             &["from-rust", "a.rs"],
             "fn f() -> i32:\n    let x = 1\n    x\n",
         ),
-        (
-            &["to-ruk", "a.rs"],
-            "fn f() -> i32 {\n    let x = 1\n    x\n}\n",
-        ),
-        (
-            &["to-ruk", "a.rsk"],
-            "fn f() -> i32 {\n    let x = 1\n    x\n}\n",
-        ),
-        (&["a.rk"], "fn f() -> i32 {\n    let x = 1;\n    x\n}\n"),
         (&["fmt", "a.rsk"], "fn f() -> i32:\n    let x = 1\n    x\n"),
         (
             &["from-rust", "--aggressive", "b.rs"],
             "fn f(c: bool) -> i32 = if c then 1 else 2\n",
-        ),
-        (
-            &["fmt", "a.rk"],
-            "fn f() -> i32 {\n    let x = 1\n    x\n}\n",
         ),
     ];
     for (args, expected) in cases {

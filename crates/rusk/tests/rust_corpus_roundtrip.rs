@@ -6,9 +6,7 @@ use std::{
 };
 
 use proc_macro2::{TokenStream, TokenTree};
-use rusk::{
-    SourceSyntax, ruk_to_rust, rust_to_ruk, rust_to_rusk, rust_to_rusk_aggressive, to_rust,
-};
+use rusk::{SourceSyntax, rust_to_rusk, rust_to_rusk_aggressive, to_rust};
 
 const CORPUS: &[(&str, &str)] = &[
     ("basic_items", include_str!("rust_corpus/basic_items.rs")),
@@ -62,8 +60,6 @@ const RUSK_CORPUS: &[(&str, &str)] = &[
     ("cfg_statements", include_str!("rusk_corpus/cfg_statements.rsk")),
 ];
 
-const RUK_CORPUS: &[(&str, &str)] = &[("statements", include_str!("rusk_corpus/statements.rk"))];
-
 #[test]
 fn rust_corpus_roundtrips_to_compilable_rust() {
     let out_dir = env::temp_dir().join(format!("rusk-rust-corpus-{}", std::process::id()));
@@ -100,15 +96,6 @@ fn rust_corpus_roundtrips_to_compilable_rust() {
             tokens(&roundtripped),
             "{name} changed tokens\nRusk:\n{aggressive}"
         );
-
-        let ruk = rust_to_ruk(rust).unwrap_or_else(|error| {
-            panic!("failed to convert corpus case {name} from Rust to Ruk: {error}")
-        });
-        let ruk_rust = ruk_to_rust(&ruk).unwrap_or_else(|error| {
-            panic!("failed to convert corpus case {name} back from Ruk: {error}\nRuk:\n{ruk}")
-        });
-        compile_rust(&out_dir, name, "ruk-roundtrip", &ruk_rust);
-        assert_eq!(multiline_literals(&ruk_rust), multiline_literals(rust), "{name} via Ruk");
     }
 
     let _ = fs::remove_dir_all(out_dir);
@@ -132,8 +119,6 @@ fn rust_conversions_keep_the_text_of_rustfmt_shaped_rust() {
     let rust = include_str!("rust_corpus/exact_text.rs");
     let rusk = rust_to_rusk(rust).unwrap();
     assert_eq!(to_rust(&rusk, SourceSyntax::Rusk).unwrap(), rust, "via Rusk:\n{rusk}");
-    let ruk = rust_to_ruk(rust).unwrap();
-    assert_eq!(ruk_to_rust(&ruk).unwrap(), rust, "via Ruk:\n{ruk}");
 }
 
 fn tokens(rust: &str) -> String {
@@ -162,22 +147,6 @@ fn rusk_corpus_transpiles_to_compilable_rust() {
         });
         compile_rust(&out_dir, name, "rusk-roundtrip", &roundtripped);
         assert_eq!(multiline_literals(&roundtripped), multiline_literals(&rust), "{name}");
-    }
-
-    let _ = fs::remove_dir_all(out_dir);
-}
-
-#[test]
-fn ruk_corpus_transpiles_to_compilable_rust() {
-    let out_dir = env::temp_dir().join(format!("rusk-ruk-corpus-{}", std::process::id()));
-    let _ = fs::remove_dir_all(&out_dir);
-    fs::create_dir_all(&out_dir).unwrap();
-
-    for (name, ruk) in RUK_CORPUS {
-        let rust = ruk_to_rust(ruk).unwrap_or_else(|error| {
-            panic!("failed to convert Ruk corpus case {name} to Rust: {error}")
-        });
-        compile_rust(&out_dir, name, "ruk", &rust);
     }
 
     let _ = fs::remove_dir_all(out_dir);

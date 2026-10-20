@@ -661,7 +661,6 @@ fn route_path(path: &str) -> String {
 fn is_app_route(path: &str) -> bool {
     matches!(path, "/")
         || path.starts_with("/examples/")
-        || path.starts_with("/ruk-examples/")
         || path.starts_with("/rust-examples/")
 }
 

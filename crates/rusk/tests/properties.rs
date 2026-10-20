@@ -1,8 +1,5 @@
 use proptest::prelude::*;
-use rusk::{
-    FormatOptions, format_source, ruk_to_rust, rusk_to_ruk, rust_to_ruk, rust_to_rusk,
-    rust_to_rusk_aggressive, transpile,
-};
+use rusk::{FormatOptions, format_source, rust_to_rusk, rust_to_rusk_aggressive, transpile};
 
 const FRAGMENTS: &[&str] = &[
     "fn ",
@@ -110,20 +107,15 @@ proptest! {
     fn conversions_never_panic_on_token_soup(source in rusk_like()) {
         let _ = transpile(&source);
         let _ = format_source(&source, FormatOptions::default());
-        let _ = rusk_to_ruk(&source);
-        let _ = ruk_to_rust(&source);
         let _ = rust_to_rusk(&source);
         let _ = rust_to_rusk_aggressive(&source);
-        let _ = rust_to_ruk(&source);
     }
 
     #[test]
     fn conversions_never_panic_on_arbitrary_text(source in any::<String>()) {
         let _ = transpile(&source);
         let _ = format_source(&source, FormatOptions::default());
-        let _ = ruk_to_rust(&source);
         let _ = rust_to_rusk(&source);
-        let _ = rust_to_ruk(&source);
     }
 
     #[test]

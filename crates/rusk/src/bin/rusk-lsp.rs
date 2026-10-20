@@ -729,7 +729,6 @@ fn source_syntax(uri: &Url) -> SourceSyntax {
         })
         .as_deref()
     {
-        Some("rk") => SourceSyntax::Ruk,
         Some("rs") => SourceSyntax::Rust,
         _ => SourceSyntax::Rusk,
     }
@@ -1452,22 +1451,6 @@ mod tests {
 
         let rust_uri = rust_uri_for_rusk_uri(&rusk_uri, &source_root_uri, &rust_root_uri).unwrap();
 
-        assert_eq!(
-            rust_uri.to_file_path().unwrap(),
-            source_root.join("target/rusk/src/main.rs")
-        );
-    }
-
-    #[test]
-    fn maps_ruk_files_to_target_rust() {
-        let source_root = std::env::temp_dir().join("rusk-lsp-source-root-ruk");
-        let source_root_uri = Url::from_directory_path(&source_root).unwrap();
-        let rust_root_uri = target_rusk_root_uri(&source_root_uri).unwrap();
-        let ruk_uri = Url::from_file_path(source_root.join("src/main.rk")).unwrap();
-
-        let rust_uri = rust_uri_for_rusk_uri(&ruk_uri, &source_root_uri, &rust_root_uri).unwrap();
-
-        assert_eq!(source_syntax(&ruk_uri), SourceSyntax::Ruk);
         assert_eq!(
             rust_uri.to_file_path().unwrap(),
             source_root.join("target/rusk/src/main.rs")

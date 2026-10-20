@@ -2,7 +2,7 @@
 
 ![](./thumbnail.webp)
 
-`rusk` is an alternative syntax for [rust](https://rust-lang.org) inspired by the [2023 post rust's ugly syntax ](https://matklad.github.io/2023/01/26/rusts-ugly-syntax.html). `ruk` (`.rk`) is Rust syntax with optional semicolons inferred from function signatures.
+`rusk` is an alternative syntax for [rust](https://rust-lang.org) inspired by the [2023 post rust's ugly syntax ](https://matklad.github.io/2023/01/26/rusts-ugly-syntax.html).
 
 Documentation: <https://scarf005.github.io/rusk/>
 
@@ -49,11 +49,9 @@ pub fn main() {
 
 ```sh
 rusk input.rsk -o output.rs
-rusk input.rk -o output.rs
 rusk transpile input.rsk --source-map output.map.json
 rusk from-rust input.rs -o output.rsk
 rusk from-rust input.rs -o output.rsk --aggressive
-rusk to-ruk input.rs -o output.rk
 rusk fmt input.rsk -o input.rsk --line-width 100
 cat input.rsk | rusk
 rusk run
@@ -94,7 +92,7 @@ just web # open web editor
 - arguments of std expression macros (the `format!`/`print!`/`write!`/`panic!` family, `assert!`/`assert_eq!`/`assert_ne!` and their `debug_` forms, `dbg!`, `vec!`, `matches!`) are Rusk expressions, e.g. `vec![Foo.new(); 3]` -> `vec![Foo::new(); 3]`; their format strings take inline expressions, e.g. `println!("{user.name()}")` and `assert!(ok, "{xs.len()}")`
 - source formatter that preserves existing line break style; only line width is configurable
 - hierarchical JSON source map generation
-- Rust-to-Rusk, Rust-to-Ruk, Ruk-to-Rust, Ruk-to-Rusk, and Rusk-to-Ruk conversion
+- Rust-to-Rusk conversion
 - `from-rust` writes idiomatic Rusk (dotted paths, `[T]` generics, `fn f() -> T = expr`, inferred `;`, `if c then a else b`) only where the result transpiles back to the same Rust; `--aggressive` also accepts rewrites that keep the Rust tokens but not their line layout, such as multi-line `if`/`else` value chains
 
 ## Formatter
@@ -108,7 +106,7 @@ rusk fmt src/main.rsk --line-width 120
 
 ## Cargo wrapper
 
-`rusk` can wrap common Cargo commands. It transpiles `.rsk` and `.rk` files under Cargo source roots (`src`, `examples`, `tests`, `benches`, plus `build.rsk`/`build.rk`) into generated `.rs` files, then runs Cargo.
+`rusk` can wrap common Cargo commands. It transpiles `.rsk` files under Cargo source roots (`src`, `examples`, `tests`, `benches`, plus `build.rsk`) into generated `.rs` files, then runs Cargo.
 
 ```sh
 rusk run        # cargo run
@@ -148,7 +146,7 @@ The service binds to `127.0.0.1:8080` on the host for local use or a local Cloud
 
 ## Language Server
 
-`rusk-lsp` is a standard stdio Language Server Protocol server. It reports diagnostics for `.rsk` and `.rk` files, document symbols for `.rsk`, and proxies Rust features through generated Rust when `rust-analyzer` is available.
+`rusk-lsp` is a standard stdio Language Server Protocol server. It reports diagnostics and document symbols for `.rsk` files and proxies Rust features through generated Rust when `rust-analyzer` is available.
 
 ```sh
 cargo install --path crates/rusk --bin rusk-lsp

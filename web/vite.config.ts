@@ -29,7 +29,7 @@ const WASMBUILD_ARGS = [
 ]
 
 const isExampleRoute = (url?: string) =>
-  url?.startsWith("/examples/") || url?.startsWith("/ruk-examples/") ||
+  url?.startsWith("/examples/") ||
   url?.startsWith("/rust-examples/") || false
 
 const exampleRouteFallback = (): Plugin => ({

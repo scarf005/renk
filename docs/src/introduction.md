@@ -4,8 +4,6 @@ Rusk is an indentation-based syntax for [Rust](https://rust-lang.org), inspired 
 [Rust's Ugly Syntax](https://matklad.github.io/2023/01/26/rusts-ugly-syntax.html). `rusk`
 transpiles `.rsk` files to Rust and converts Rust back to Rusk.
 
-Ruk (`.rk`) is plain Rust syntax with semicolons inferred from function signatures.
-
 ```rsk
 #[derive(Debug, Clone)]
 pub struct User:

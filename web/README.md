@@ -1,6 +1,6 @@
 # Rusk Web Demo
 
-A Vite + Deno + Preact demo for `rusk` and `ruk`. The Rust/Ruk/Rusk converters are compiled to WebAssembly with [`denoland/wasmbuild`](https://github.com/denoland/wasmbuild), then called from Preact Signals for instant browser-side output.
+A Vite + Deno + Preact demo for `rusk`. The Rust/Rusk converters are compiled to WebAssembly with [`denoland/wasmbuild`](https://github.com/denoland/wasmbuild), then called from Preact Signals for instant browser-side output.
 
 ## Running
 

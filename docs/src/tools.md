@@ -13,9 +13,9 @@ rusk fmt src/main.rsk --line-width 120
 
 ## Cargo wrapper
 
-`rusk` wraps Cargo commands. It transpiles `.rsk` and `.rk` files under Cargo source roots
-(`src`, `examples`, `tests`, `benches`, and `build.rsk`/`build.rk`) into generated `.rs` files,
-then runs Cargo. Existing `.rs` files that rusk did not generate are never overwritten.
+`rusk` wraps Cargo commands. It transpiles `.rsk` files under Cargo source roots (`src`,
+`examples`, `tests`, `benches`, and `build.rsk`) into generated `.rs` files, then runs Cargo.
+Existing `.rs` files that rusk did not generate are never overwritten.
 
 ```sh
 rusk run        # cargo run
@@ -53,9 +53,9 @@ fn main():
 
 ## Language server
 
-`rusk-lsp` is a stdio Language Server Protocol server. It reports diagnostics for `.rsk` and
-`.rk` files and document symbols for `.rsk`, and proxies Rust features through the generated
-Rust when `rust-analyzer` is available. A Zed extension lives in
+`rusk-lsp` is a stdio Language Server Protocol server. It reports diagnostics and document
+symbols for `.rsk` files, and proxies Rust features through the generated Rust when
+`rust-analyzer` is available. A Zed extension lives in
 [`editors/zed`](https://github.com/scarf005/rusk/tree/main/editors/zed).
 
 ## Web runner

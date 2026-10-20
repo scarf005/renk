@@ -1,4 +1,4 @@
-use rusk::{FormatOptions, format_source, ruk_to_rust, rust_to_ruk, rust_to_rusk, transpile};
+use rusk::{FormatOptions, format_source, rust_to_rusk, transpile};
 
 fn rust(source: &str) -> String {
     transpile(source).unwrap().rust
@@ -74,23 +74,6 @@ fn rust_conversion_parenthesizes_camel_case_path_value_receivers() {
     assert!(roundtrip.contains("String::new().len()"), "{output}");
     assert!(roundtrip.contains("i32::MAX.count_ones()"), "{output}");
     assert!(!output.contains("(i32::MAX)"), "{output}");
-}
-
-#[test]
-fn ruk_delimiter_depth_ignores_comments_and_literals() {
-    let output = ruk_to_rust(
-        "fn f() -> usize {\n    let a = 1 // see (\n    let b = '('\n    let c = r#\"\"(\"#\n    let d = std::cmp::max(\n        a,\n        2,\n    )\n    a + d\n}\n",
-    )
-    .unwrap();
-    for expected in [
-        "    let a = 1; // see (\n",
-        "    let b = '(';\n",
-        "    let c = r#\"\"(\"#;\n",
-        "    let d = std::cmp::max(\n",
-        "    );\n",
-    ] {
-        assert!(output.contains(expected), "missing {expected:?}\n{output}");
-    }
 }
 
 #[test]
@@ -279,46 +262,6 @@ fn non_ascii_text_before_a_brace_does_not_panic() {
 }
 
 #[test]
-fn ruk_semicolons_go_before_trailing_comments() {
-    let output = ruk_to_rust("fn main() {\n    let x = 1 // one\n    println!(\"{x}\") // two\n}\n").unwrap();
-    assert!(output.contains("    let x = 1; // one\n"), "{output}");
-    assert!(output.contains("    println!(\"{x}\"); // two\n"), "{output}");
-}
-
-#[test]
-fn ruk_value_blocks_keep_their_tail_expression() {
-    let output = ruk_to_rust(
-        "fn main() {\n    let future = spawn(async {\n        one().await\n    })\n    let doubled = values.iter().map(|value| {\n        value * 2\n    })\n    let chosen = if flag || ready {\n        1\n    } else {\n        2\n    }\n    if flag || ready {\n        values.push(1)\n    }\n}\n",
-    )
-    .unwrap();
-    assert!(output.contains("        one().await\n    });\n"), "{output}");
-    assert!(output.contains("        value * 2\n    });\n"), "{output}");
-    assert!(output.contains("        1\n    } else {\n        2\n    };\n"), "{output}");
-    assert!(output.contains("        values.push(1);\n"), "{output}");
-}
-
-#[test]
-fn rust_to_ruk_keeps_semicolons_inference_cannot_restore() {
-    let source = "fn main() {\n    let chosen = if flag {\n        1\n    } else {\n        2\n    };\n    let block = {\n        3\n    };\n    run();\n}\n";
-    let ruk = rust_to_ruk(source).unwrap();
-    assert!(ruk.contains("    run()\n"), "{ruk}");
-    assert_eq!(ruk_to_rust(&ruk).unwrap(), source);
-}
-
-#[test]
-fn ruk_macro_rules_bodies_are_rust_tokens() {
-    let source = "macro_rules! twice {\n    ($t:expr) => {{\n        $t + $t\n    }};\n}\n";
-    assert_eq!(ruk_to_rust(source).unwrap(), source);
-    assert_eq!(ruk_to_rust(&rust_to_ruk(source).unwrap()).unwrap(), source);
-}
-
-#[test]
-fn ruk_lines_ending_in_an_operator_continue_the_statement() {
-    let output = ruk_to_rust("static TOTAL: i32 =\n    1 +\n    2\n").unwrap();
-    assert_eq!(output, "static TOTAL: i32 =\n    1 +\n    2;\n");
-}
-
-#[test]
 fn rust_brace_else_lines_continue_the_brace_chain() {
     let output = rust("fn pick(a: bool, b: bool) -> i32:\n    if a {\n        1\n    } else if b {\n        2\n    } else {\n        3\n    }\n");
     assert_eq!(
@@ -334,20 +277,10 @@ fn multiline_string_contents_survive_every_conversion() {
     let literal = "\"a  \nb // c;\n  d\"";
     let rusk = format!("fn main():\n    let s = {literal}\n    println!(\"{{s}}\")\n");
     let expected = format!("fn main() {{\n    let s = {literal};\n    println!(\"{{s}}\");\n}}\n");
-    let ruk = format!("fn main() {{\n    let s = {literal}\n    println!(\"{{s}}\")\n}}\n");
 
     assert_eq!(rust(&rusk), expected);
     assert_eq!(format_source(&rusk, FormatOptions::default()).unwrap(), rusk);
     assert!(rust_to_rusk(&expected).unwrap().contains(literal));
-    assert!(ruk_to_rust(&ruk).unwrap().contains(&format!("let s = {literal};\n")));
-    assert!(rust_to_ruk(&expected).unwrap().contains(&format!("let s = {literal}\n")));
-}
-
-#[test]
-fn ruk_continuation_lines_extend_the_statement() {
-    let source = "fn f() -> Result<usize, E> {\n    let v = parse()\n        ?\n        .len()\n    Ok(v)\n}\n";
-    let output = ruk_to_rust(source).unwrap();
-    assert!(output.contains("    let v = parse()\n        ?\n        .len();\n"), "{output}");
 }
 
 #[test]
@@ -385,16 +318,6 @@ fn raw_strings_stay_open_until_their_closing_hashes() {
     let source = "fn main():\n    let s = r#\"say \"\" \nhi\"#\n    print!(\"{s}\")\n";
     assert_eq!(format_source(source, FormatOptions::default()).unwrap(), source);
     assert!(rust(source).contains("r#\"say \"\" \nhi\"#;"), "{}", rust(source));
-}
-
-#[test]
-fn ruk_conversion_drops_semicolons_before_trailing_comments() {
-    let output = rust_to_ruk("fn f() {\n    g(); // c\n    h();\n}\n").unwrap();
-    assert_eq!(output, "fn f() {\n    g() // c\n    h()\n}\n");
-    assert_eq!(
-        ruk_to_rust(&output).unwrap(),
-        "fn f() {\n    g(); // c\n    h();\n}\n"
-    );
 }
 
 #[test]
@@ -623,19 +546,6 @@ fn unused_block_values_end_with_statements() {
         assert!(output.contains(expected), "missing {expected:?}\n{output}");
     }
 
-    let output = ruk_to_rust(
-        "fn f(c: bool) -> i32 {\n    for i in 0..3 {\n        m.insert(i, i)\n    }\n    if c {\n        m.insert(1, 1)\n    }\n    match c {\n        true => m.insert(2, 2),\n        false => None,\n    }\n    let x = if c {\n        1\n    }\n    else {\n        2\n    }\n    if c {\n        x\n    } else {\n        2\n    }\n}\n",
-    )
-    .unwrap();
-    for expected in [
-        "        m.insert(i, i);\n",
-        "        m.insert(1, 1);\n",
-        "        false => None,\n    };\n",
-        "    let x = if c {\n        1\n    }\n    else {\n        2\n    };\n",
-        "    if c {\n        x\n    } else {\n        2\n    }\n}\n",
-    ] {
-        assert!(output.contains(expected), "missing {expected:?}\n{output}");
-    }
 }
 
 #[test]

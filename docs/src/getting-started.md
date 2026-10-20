@@ -10,11 +10,9 @@ cargo install --path crates/rusk --bin rusk --bin rusk-lsp
 
 ```sh
 rusk input.rsk -o output.rs                     # Rusk to Rust
-rusk input.rk -o output.rs                      # Ruk to Rust
 rusk transpile input.rsk --source-map out.json  # with a JSON source map
 rusk from-rust input.rs -o output.rsk           # Rust to Rusk
 rusk from-rust input.rs -o output.rsk --aggressive
-rusk to-ruk input.rs -o output.rk               # Rust or Rusk to Ruk
 rusk fmt input.rsk -o input.rsk --line-width 100
 cat input.rsk | rusk                            # stdin to stdout
 rusk run                                        # cargo run on a Rusk crate
@@ -43,5 +41,4 @@ pub fn main():
 Then run `rusk hello.rsk -o hello.rs && rustc --edition 2024 hello.rs && ./hello`, which prints
 `3`.
 
-The [examples](https://github.com/scarf005/rusk/tree/main/examples) directory has a `.rsk` and a
-`.rk` version of each program.
+The [examples](https://github.com/scarf005/rusk/tree/main/examples) directory has more programs.

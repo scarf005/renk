@@ -39,7 +39,7 @@ import {
   searchKeymap,
 } from "@codemirror/search"
 
-type CodeLanguage = "rusk" | "ruk" | "rust" | "json" | "text"
+type CodeLanguage = "rusk" | "rust" | "json" | "text"
 
 type RuskStringFrame = { depth: number; interpolated: boolean }
 type RuskState = {
@@ -377,7 +377,7 @@ class CodeMirror extends Component<CodeMirrorProps> {
 
 interface InputEditorProps {
   value: string
-  language?: "rusk" | "ruk" | "rust"
+  language?: "rusk" | "rust"
   onChange: (value: string) => void
   onScroll?: () => void
   editorRef?: Ref<HTMLElement>
@@ -402,7 +402,7 @@ export const InputEditor = ({
 
 interface OutputDisplayProps {
   value: string
-  language: "rusk" | "ruk" | "rust" | "json" | "text"
+  language: "rusk" | "rust" | "json" | "text"
   error?: string
   onScroll?: () => void
   outputRef?: Ref<HTMLElement>
