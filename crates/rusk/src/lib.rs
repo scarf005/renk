@@ -2105,21 +2105,28 @@ fn angle_depth(chars: &[char]) -> isize {
 }
 
 /// `text` split at the `=` before a function's expression body, as in `fn f() -> T = value`; a
-/// `=` inside the signature's generics, as in `-> impl Iterator<Item = u8>`, stays in it.
+/// `=` inside the signature's generics, as in `-> impl Iterator<Item = u8>`, or inside a comment
+/// stays in it.
 fn split_function_body(text: &str) -> Option<(&str, &str)> {
     let chars = text.chars().collect::<Vec<_>>();
-    let mut offset = 0;
-    for (index, &character) in chars.iter().enumerate() {
-        let assigns = character == '='
+    let mut index = 0;
+    while index < chars.len() {
+        if let Some(end) = opaque_span_end(&chars, index) {
+            index = end + 1;
+            continue;
+        }
+        let assigns = chars[index] == '='
             && !matches!(chars.get(index + 1), Some('=' | '>'))
             && (index == 0 || !matches!(chars[index - 1], '=' | '!' | '<' | '>'));
-        if assigns
-            && open_delimiters(&text[..offset]).is_some_and(|open| open.is_empty())
-            && angle_depth(&chars[..index]) == 0
-        {
-            return Some((&text[..offset], &text[offset + 1..]));
+        if assigns {
+            let offset = chars[..index].iter().map(|c| c.len_utf8()).sum::<usize>();
+            if open_delimiters(&text[..offset]).is_some_and(|open| open.is_empty())
+                && angle_depth(&chars[..index]) == 0
+            {
+                return Some((&text[..offset], &text[offset + 1..]));
+            }
         }
-        offset += character.len_utf8();
+        index += 1;
     }
     None
 }
