@@ -49,6 +49,14 @@ pub(crate) struct RustLayout {
     depth: Vec<(usize, usize)>,
     /// For each element's first token, how far `open_groups` scanned it and what it found.
     scans: RefCell<HashMap<usize, GroupScan>>,
+    /// For each node walked, its element and the latest body start of it and its ancestors up to
+    /// that element, so a deep chain such as `x` / `.a(|y| {` ... is walked once. A block's list
+    /// becomes a container before the blocks inside it are read, so neither changes later.
+    elements: RefCell<HashMap<SyntaxNode, (Option<SyntaxNode>, Option<TextSize>)>>,
+    /// For each element, its first token.
+    first_tokens: RefCell<HashMap<SyntaxNode, Option<SyntaxToken>>>,
+    /// The attributes, in source order.
+    attributes: Vec<SyntaxNode>,
 }
 
 /// The delimiters open after the scanned tokens, and whether a line break falls inside them;
@@ -80,9 +88,15 @@ impl RustLayout {
             last_code: vec![None; starts.len()],
             opens: vec![false; starts.len()],
             closers: HashSet::new(),
+            attributes: root
+                .descendants()
+                .filter(|node| node.kind() == ATTR)
+                .collect(),
             containers: HashSet::from([root]),
             depth: Vec::new(),
             scans: RefCell::default(),
+            elements: RefCell::default(),
+            first_tokens: RefCell::default(),
             starts,
         };
         for (index, token) in layout.tokens.iter().enumerate() {
@@ -140,7 +154,12 @@ impl RustLayout {
         {
             return end;
         }
-        if let Some(attribute) = token.parent_ancestors().find(|node| node.kind() == ATTR)
+        let start = token.text_range().start();
+        if let Some(attribute) = self.attributes[..self
+            .attributes
+            .partition_point(|attribute| attribute.text_range().start() <= start)]
+            .last()
+            .filter(|attribute| attribute.text_range().contains(start))
             && let Some(end) = attribute.last_token().as_ref().and_then(ends_own)
         {
             return end;
@@ -214,14 +233,16 @@ impl RustLayout {
         }
         let line = self.start_line(brace);
         let element = self.element(brace);
+        let first = element
+            .as_ref()
+            .and_then(|element| self.first_token(element));
         // An empty body on a line of its own, as in `while b` / `.next()` / `{}`, ends a header.
         let empty_own_line = self.first[line] == Some(index)
             && self.last_code[line] == Some(index + 1)
             && self.tokens.get(index + 1) == Some(&close)
-            && element
+            && first
                 .as_ref()
-                .and_then(SyntaxNode::first_token)
-                .is_some_and(|first| self.start_line(&first) < line);
+                .is_some_and(|first| self.start_line(first) < line);
         if !(empty_own_line
             || (self.last_code[line] == Some(index)
                 && self.first[self.start_line(&close)].map(|at| &self.tokens[at]) == Some(&close)
@@ -229,21 +250,16 @@ impl RustLayout {
         {
             return None;
         }
-        let from = element
-            .as_ref()
-            .and_then(SyntaxNode::first_token)
-            .map_or(index, |first| self.index_of(&first));
+        let from = first.map_or(index, |first| self.index_of(&first));
         let in_parentheses = self.open_groups(from, index)?;
         // A block in a statement's header, as in `if match x {` / `} {`, stays Rust up to the
         // header's body; the Rusk reading, as in `if match x:` / `} || b {`, holds only for a
         // `let` value.
         let in_header = element.as_ref().is_some_and(|node| node.kind() != LET_STMT)
-            && list
-                .ancestors()
-                .take_while(|node| Some(node) != element.as_ref())
-                .chain(element.clone())
-                .filter_map(|node| body(&node))
-                .any(|body| body.text_range().start() > brace.text_range().start());
+            && self
+                .walk(&list)
+                .1
+                .is_some_and(|body| body > brace.text_range().start());
         // A branch after one that stays Rust, as in `} else {`, stays Rust too.
         let branch = list
             .parent()
@@ -392,10 +408,43 @@ impl RustLayout {
     /// The statement, item, field, variant, or match arm holding `token` in the innermost Rusk
     /// block.
     fn element(&self, token: &SyntaxToken) -> Option<SyntaxNode> {
-        token.parent_ancestors().find(|node| {
-            node.parent()
-                .is_some_and(|parent| self.containers.contains(&parent))
-        })
+        self.walk(&token.parent()?).0
+    }
+
+    /// The element holding `node`, and the latest start of a body of `node` or of an ancestor up
+    /// to that element: past a `{` in a header, as in `if match x {` / `} {`.
+    fn walk(&self, node: &SyntaxNode) -> (Option<SyntaxNode>, Option<TextSize>) {
+        let mut path = Vec::new();
+        let mut found = (None, None);
+        for node in node.ancestors() {
+            if let Some(known) = self.elements.borrow().get(&node) {
+                found = known.clone();
+                break;
+            }
+            let is_element = node
+                .parent()
+                .is_some_and(|parent| self.containers.contains(&parent));
+            path.push(node);
+            if is_element {
+                found.0 = path.last().cloned();
+                break;
+            }
+        }
+        let mut elements = self.elements.borrow_mut();
+        for node in path.into_iter().rev() {
+            let body = body(&node).map(|body| body.text_range().start());
+            found.1 = found.1.max(body);
+            elements.insert(node, found.clone());
+        }
+        found
+    }
+
+    fn first_token(&self, element: &SyntaxNode) -> Option<SyntaxToken> {
+        self.first_tokens
+            .borrow_mut()
+            .entry(element.clone())
+            .or_insert_with(|| element.first_token())
+            .clone()
     }
 
     fn is_closer(&self, token: &SyntaxToken) -> bool {
