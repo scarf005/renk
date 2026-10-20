@@ -15,3 +15,15 @@ pub fn normalized_names(lines: Vec<String>) -> Vec<String> {
         })
         .collect::<Vec<String>>()
 }
+
+pub fn called_closures(A: u8) -> u8 {
+    let a = (|| {
+        A + "})()".len() as u8 // })()
+    })();
+    let b = [(|X: u8| {
+        X
+    })(a)];
+    std::convert::identity((|| {
+        b[0]
+    })())
+}

@@ -1344,3 +1344,10 @@ fn rust_conversion_closes_empty_value_blocks() {
     let rusk = rust_to_rusk(source).unwrap();
     assert_eq!(rust(&rusk), source, "{rusk}");
 }
+
+#[test]
+fn rust_conversion_keeps_the_brace_of_called_closures() {
+    let source = "fn f() -> u8 {\n    h((|| {\n        1\n    })(), 2)\n}\n";
+    let rusk = rust_to_rusk(source).unwrap();
+    assert_eq!(rust(&rusk), source, "{rusk}");
+}
