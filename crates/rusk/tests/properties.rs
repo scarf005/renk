@@ -172,6 +172,24 @@ fn long_block_argument_chains_convert_in_linear_time() {
 }
 
 #[test]
+fn deep_closures_convert_in_time_linear_in_their_text() {
+    let convert = |depth: usize| {
+        let closures = (0..depth).fold("1".to_string(), |body, level| {
+            let indent = "    ".repeat(depth - level);
+            format!("g(|| {{\n{indent}    {body}\n{indent}}})")
+        });
+        let rust = format!("fn f() -> u8 {{\n    {closures}\n}}\n");
+        let start = std::time::Instant::now();
+        rust_to_rusk(&rust).unwrap();
+        start.elapsed()
+    };
+    // Twice the depth is four times the indented text, so it should take about four times as
+    // long, not eight.
+    let (short, long) = (convert(200), convert(400));
+    assert!(long < short * 5, "{short:?} {long:?}");
+}
+
+#[test]
 fn deep_nesting_converts_on_a_small_caller_stack() {
     let parens = 5_000;
     let parens = format!(
