@@ -2964,10 +2964,10 @@ fn accepts_closing_line(text: &str, siblings: &[Node]) -> bool {
 fn closing_tail(text: &str) -> Option<&str> {
     let tail = text.trim().strip_prefix('}')?;
     let rest = tail.trim_start_matches([')', ']', '}']).trim_start();
-    // `}) && b` continues the call with an operand, and `})()` calls the closure it closes.
+    // `}) && b` and `} + 1` continue with an operand, and `})()` calls the closure it closes.
     (rest.starts_with(['?', '.'])
         || (tail.starts_with(')') && rest.starts_with(['(', '[']))
-        || (tail.starts_with([')', ']']) && starts_with_binary_operator(rest))
+        || starts_with_binary_operator(rest)
         || rest
             .strip_prefix(',')
             .is_some_and(|arguments| !arguments.trim().is_empty()))

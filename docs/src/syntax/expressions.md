@@ -23,6 +23,17 @@ pub fn sign(value: i32) -> i32:
     sign
 ```
 
+A `}` line at the head's indent continues the value with an operator:
+
+```rsk
+pub fn bucket(value: i32) -> i32:
+    let base = match value:
+        0 => 1
+        _ => 2
+    } * 10
+    base
+```
+
 ## `let ... else`
 
 ```rsk
