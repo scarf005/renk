@@ -47,6 +47,29 @@ fn transpiles_stdin_to_stdout() {
     let _ = fs::remove_dir_all(dir);
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn transpiles_when_the_process_limit_refuses_threads() {
+    // With no thread to spare, the conversion runs on the caller's stack.
+    let dir = temp_dir("process-limit");
+    fs::write(dir.join("main.rsk"), "fn main():\n    println!(\"hi\")\n").unwrap();
+    let output = Command::new("sh")
+        .arg("-c")
+        .arg(format!(
+            "ulimit -u 1 && exec '{}' transpile main.rsk",
+            env!("CARGO_BIN_EXE_rusk")
+        ))
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
+    assert_eq!(
+        text(&output.stdout),
+        "fn main() {\n    println!(\"hi\");\n}\n"
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
 #[test]
 fn writes_output_and_a_json_source_map() {
     let dir = temp_dir("source-map");

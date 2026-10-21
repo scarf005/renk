@@ -185,3 +185,31 @@ fn deep_block_argument_chains_convert_on_a_small_stack() {
         .join()
         .unwrap();
 }
+
+#[test]
+fn deep_nesting_converts_on_a_small_caller_stack() {
+    let parens = 5_000;
+    let parens = format!(
+        "fn f() -> u8 {{\n    {}1{}\n}}\n",
+        "(".repeat(parens),
+        ")".repeat(parens)
+    );
+    let closures = (0..300).fold("1".to_string(), |body, depth| {
+        let indent = "    ".repeat(300 - depth);
+        format!("g(|| {{\n{indent}    {body}\n{indent}}})")
+    });
+    let closures = format!("fn f() -> u8 {{\n    {closures}\n}}\n");
+    // The parsers recurse once per level, past the stack of the calling thread.
+    std::thread::Builder::new()
+        .stack_size(1 << 20)
+        .spawn(move || {
+            for rust in [parens, closures] {
+                let rusk = rust_to_rusk(&rust).unwrap();
+                assert_eq!(transpile(&rusk).unwrap().rust, rust);
+                format_source(&rusk, FormatOptions::default()).unwrap();
+            }
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
