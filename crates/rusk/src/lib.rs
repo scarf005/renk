@@ -1033,6 +1033,9 @@ fn expression_body_rewrites(lines: &[String]) -> Vec<Rewrite> {
                 .0
                 .ends_with(['{', ';'])
             && block_ends_at(lines, end, indent)
+            && top_level_statements(&lines[index + 1..end].join("\n").chars().collect::<Vec<_>>())
+                .len()
+                == 1
         {
             let mut text = format!(
                 "{} = {}",
@@ -4337,6 +4340,30 @@ fn lower_field_or_variant(text: &str) -> String {
 }
 
 fn lower_expr(text: &str) -> String {
+    let chars = text.chars().collect::<Vec<_>>();
+    let statements = top_level_statements(&chars);
+    if statements.len() > 1 {
+        // Each statement of a line lowers alone, and a `let` binds its names for the statements
+        // after it, as `s` in `let t = s.y(); let s = 1; s.len()`, but not before it.
+        let mut names = Vec::new();
+        let mut lowered = String::new();
+        for range in statements {
+            let statement = &chars[range.clone()];
+            let text = statement.iter().collect::<String>();
+            let code = text.trim();
+            let (head, tail) = text.split_at(text.len() - text.trim_start().len());
+            lowered.push_str(head);
+            lowered.push_str(&with_value_scope(names.clone(), || lower_expr(code)));
+            lowered.push_str(&tail[code.len()..]);
+            if range.end < chars.len() {
+                lowered.push(';');
+            }
+            if is_let_statement(statement) {
+                names.extend(let_pattern_bindings(statement, false));
+            }
+        }
+        return lowered;
+    }
     let (text, inline_ifs) = extract_argument_inline_ifs(text);
     inline_ifs
         .iter()
@@ -6169,20 +6196,21 @@ fn node_bindings(text: &str, context: Context, has_block: bool) -> NodeBindings 
         return bindings;
     }
     let mut lets = let_pattern_bindings(&chars, true);
-    if is_let(text) {
-        // Each `let` statement of the line, as in `let a = 1; let b = 2`, binds for later lines.
-        let mut start = 0;
-        while start < chars.len() {
-            let end =
-                top_level_position(&chars, start, |at| chars[at] == ';').unwrap_or(chars.len());
-            let statement = &chars[start..end];
+    let statements = top_level_statements(&chars);
+    if statements
+        .iter()
+        .any(|statement| is_let_statement(&chars[statement.clone()]))
+    {
+        // Each `let` statement of the line, as in `let a = 1; let b = 2`, binds for later lines;
+        // `lower_basic_expr` binds it for the line's later statements.
+        for statement in statements {
+            let statement = &chars[statement];
             let mut lets = let_pattern_bindings(statement, true);
-            if is_let(statement.iter().collect::<String>().trim_start()) {
+            if is_let_statement(statement) {
                 let first = let_pattern_bindings(statement, false);
                 bindings.siblings.extend(lets.drain(..first.len()));
             }
             bindings.own.extend(lets);
-            start = end + 1;
         }
         return bindings;
     }
@@ -6202,6 +6230,23 @@ fn node_bindings(text: &str, context: Context, has_block: bool) -> NodeBindings 
     }
     bindings.own.extend(nested);
     bindings
+}
+
+/// The statements `chars` separates with top-level `;`, as `let a = 1` and ` a` in
+/// `let a = 1; a`; a `;` in a literal, group, or macro body separates none.
+fn top_level_statements(chars: &[char]) -> Vec<std::ops::Range<usize>> {
+    let mut statements = Vec::new();
+    let mut start = 0;
+    while start < chars.len() {
+        let end = top_level_position(chars, start, |at| chars[at] == ';').unwrap_or(chars.len());
+        statements.push(start..end);
+        start = end + 1;
+    }
+    statements
+}
+
+fn is_let_statement(statement: &[char]) -> bool {
+    is_let(statement.iter().collect::<String>().trim_start())
 }
 
 /// Const generic parameters a header such as `impl[const N: usize] Grid[N]` declares.
