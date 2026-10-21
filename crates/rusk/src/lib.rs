@@ -3774,15 +3774,20 @@ fn emit_function(node: &Node, emitter: &mut Emitter) {
         return;
     }
     let Some((signature, body)) = split_function_body(text) else {
-        if node.children.is_empty() && !has_block && !text.ends_with('{') {
+        // A block comment after the `{`, as in `fn f() { /* } */`, stays after it.
+        let (code, comment) = match text.split_at(code_len(text)) {
+            (code, comment) if code.ends_with('{') => (code, comment),
+            _ => (text, ""),
+        };
+        if node.children.is_empty() && !has_block && !code.ends_with('{') {
             emitter.push(node, format!("{}{}", indent, lower_signature(text)));
         } else {
-            let signature = strip_open_brace(text.trim());
+            let signature = strip_open_brace(code.trim());
             let returns_value = function_returns_value(signature);
-            let opener = brace_opener(text, &indent);
+            let opener = brace_opener(code, &indent);
             emitter.push(
                 node,
-                format!("{}{}{opener}", indent, lower_signature(signature)),
+                format!("{}{}{opener}{comment}", indent, lower_signature(signature)),
             );
             emit_function_body(&node.children, returns_value, emitter);
             emitter.push_generated(format!("{}}}", indent));
@@ -4080,10 +4085,10 @@ fn emit_trait_member(node: &Node, emitter: &mut Emitter) {
     let text = node.text.trim();
     let (block_text, _) = strip_block_marker(text);
     let (signature, _) = strip_explicit_semicolon(block_text);
-    // A default body is `= value`, an indented block, or a one-line `{ ... }`.
+    // A default body is `= value`, an indented block, a one-line `{ ... }`, or an empty `{` / `}`.
     if is_function(signature)
         && (split_function_body(signature).is_some()
-            || signature.ends_with('}')
+            || signature[..code_len(signature)].ends_with(['{', '}'])
             || !node.children.is_empty())
     {
         emit_function(node, emitter);
