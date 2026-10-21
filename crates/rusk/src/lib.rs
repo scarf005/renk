@@ -1255,13 +1255,19 @@ fn convert_rust_statement(text: &str, parent: Option<RustBlockKind>) -> Converte
             opens: None,
         };
     }
-    // An empty body on its own line, as in `while a` / `    && b` / `{}`, is a `:` with no block.
+    // An empty body on its own line, as in `while a` / `    && b` / `{}`, is a `:` with no block;
+    // after a `where` clause, which also reads a `{}` line, the line stays.
     if let Some(header) = text.strip_suffix("{}")
         && header[header.trim_end().len()..].contains('\n')
         && is_multi_line_header_head(text.lines().next().unwrap_or_default().trim())
     {
+        let lowered = lower_rust_syntax(header.trim_end());
         return ConvertedRustStatement {
-            text: colon_after_last_line(&lower_rust_syntax(header.trim_end())),
+            text: if has_where_line(header) {
+                format!("{lowered}{}{{}}", &header[header.trim_end().len()..])
+            } else {
+                colon_after_last_line(&lowered)
+            },
             opens: None,
         };
     }
