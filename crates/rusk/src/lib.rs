@@ -3651,7 +3651,8 @@ fn emit_general(node: &Node, context: Context, is_last: bool, emitter: &mut Emit
                 }
             ));
         } else if is_control(block_text)
-            && block_text.ends_with('}')
+            // A one-line `else` an operator continues, as in `else { 0 } + 1`, too.
+            && (block_text.ends_with('}') || block_text.starts_with("else {"))
             && node.children.is_empty()
             && open_delimiters(block_text).is_some_and(|open| open.is_empty())
         {
