@@ -365,3 +365,8 @@ pub fn one_line_else_arms(c: bool, o: Option[u8]) -> u8:
             1
         else { 2 }, 3)
     a
+
+pub fn closures_around_std_macros(xs: Vec[String]) -> usize:
+    let shown = xs.iter().map(|env| format!("{}", env.len())).count()
+    let listed = xs.iter().map(|env| vec![env.len(), 1]).count()
+    shown + listed + env.args().count()

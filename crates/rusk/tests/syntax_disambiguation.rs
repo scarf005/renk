@@ -1601,3 +1601,14 @@ fn brace_bodies_of_trait_methods_keep_their_lines() {
         "trait T {\n    fn m() {\n    }\n\n    fn n(&self) -> u8 { // {\n        1\n    }\n\n    fn p() { // }\n    }\n\n    fn q() { /* } */\n    }\n\n    fn o();\n}\n"
     );
 }
+
+#[test]
+fn closure_parameters_are_values_in_std_macro_arguments() {
+    // The closure around a std macro binds its parameters there; one closed before it does not.
+    assert_eq!(
+        rust(
+            "fn f(xs: Vec[String]) -> String:\n    let v = xs.iter().map(|env| format!(\"{}\", env.len())).count()\n    let w = xs.iter().map(|env| env.len()).count() + vec![env.len()][0]\n    format!(\"{v}{w}\")\n"
+        ),
+        "fn f(xs: Vec<String>) -> String {\n    let v = xs.iter().map(|env| format!(\"{}\", env.len())).count();\n    let w = xs.iter().map(|env| env.len()).count() + vec![env::len()][0];\n    format!(\"{v}{w}\")\n}\n"
+    );
+}
