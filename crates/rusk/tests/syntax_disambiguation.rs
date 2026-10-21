@@ -1472,3 +1472,33 @@ fn same_line_let_binds_the_later_statements_of_its_line() {
         assert_eq!(rust(source), expected, "{source}");
     }
 }
+
+#[test]
+fn rust_conversion_reads_receivers_after_multi_line_literals_and_comments() {
+    // A line continuing a string or block comment is lexed with the lines before it.
+    for (source, expected) in [
+        (
+            "fn f() -> u8 {\n    let s = \"\n    z::y\"; z.y\n}\n",
+            "fn f() -> u8 {\n    let s = \"\n    z::y\"; (z).y\n}\n",
+        ),
+        (
+            "fn f() -> u8 {\n    let s = \"a\n    \"; z.y\n}\n",
+            "fn f() -> u8 {\n    let s = \"a\n    \"; (z).y\n}\n",
+        ),
+        (
+            "fn f() -> u8 {\n    /* a\n    \" */ z.y\n}\n",
+            "fn f() -> u8 {\n    /* a\n    \" */ (z).y\n}\n",
+        ),
+        (
+            "fn f() -> u8 {\n    let s = r#\"a\n    \" z.y\"#; z.y\n}\n",
+            "fn f() -> u8 {\n    let s = r#\"a\n    \" z.y\"#; (z).y\n}\n",
+        ),
+        (
+            "fn f() -> usize {\n    let s = \"a\n    z.y\"; s.len()\n}\n",
+            "fn f() -> usize {\n    let s = \"a\n    z.y\"; s.len()\n}\n",
+        ),
+    ] {
+        let rusk = rust_to_rusk(source).unwrap();
+        assert_eq!(rust(&rusk), expected, "{rusk}");
+    }
+}

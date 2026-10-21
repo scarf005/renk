@@ -190,3 +190,20 @@ pub fn tuple_pattern_lines(value: Option<(u8, u8, u8)>, bytes: &[u8]) -> u8 {
     }
     total
 }
+
+pub struct Field {
+    pub y: u8,
+}
+
+#[allow(non_upper_case_globals)]
+pub const z: Field = Field { y: 1 };
+
+pub fn receiver_after_literals() -> u8 {
+    let s = "
+    z::y"; z.y + s.len() as u8
+}
+
+pub fn receiver_after_comment() -> u8 {
+    /* a
+    " */ z.y
+}
