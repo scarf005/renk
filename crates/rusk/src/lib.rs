@@ -2275,14 +2275,16 @@ fn opens_on_own_line(node: &Node) -> bool {
             find_top_level_keyword(&last[..code_len(last)], "=>").is_some()
         });
     let last = node.text.lines().last().unwrap_or_default();
-    // The value after a pattern over several lines, as in `if let S {` / `    a,` / `} = s:`.
+    // The value after a pattern over several lines, as in `if let S {` / `    a,` / `} = s:` or
+    // `if let Some(` / `    a,` / `) = s:`.
     let pattern_value = ["if let ", "while let "]
         .iter()
         .any(|keyword| first.contains(keyword))
+        && last.trim_start().starts_with(['}', ')', ']'])
         && last
             .trim_start()
-            .strip_prefix('}')
-            .is_some_and(|rest| rest.trim_start_matches([')', ']']).starts_with(" = "));
+            .trim_start_matches(['}', ')', ']'])
+            .starts_with(" = ");
     node.text.lines().count() > 1
         && (guarded_arm || pattern_value || is_multi_line_header_head(&first[..code_len(first)]))
         // A `where` line at the head's indent, as in `) -> u8` / `where T: Copy:`, too.
