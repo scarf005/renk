@@ -1557,3 +1557,14 @@ fn rust_conversion_keeps_operators_after_value_blocks() {
         assert_eq!(rust(&rusk), source, "{rusk}");
     }
 }
+
+#[test]
+fn rust_conversion_keeps_operators_after_one_line_else_branches() {
+    for source in [
+        "fn f(c: bool) -> u8 {\n    max(if c {\n        1\n    } else { 0 } + 1, 0)\n}\n",
+        "fn f(c: bool) -> u8 {\n    let v = g(if c {\n        1\n    } else { 0 } * 2);\n    v\n}\n",
+    ] {
+        let rusk = rust_to_rusk(source).unwrap();
+        assert_eq!(rust(&rusk), source, "{rusk}");
+    }
+}

@@ -261,3 +261,9 @@ pub fn value_match_compare(x: u8) -> bool {
     } == 1;
     b
 }
+
+pub fn value_else_plus(c: bool) -> u8 {
+    u8::max(if c {
+        1
+    } else { 0 } + 1, 0)
+}
