@@ -1059,12 +1059,15 @@ fn expression_body_rewrites(lines: &[String]) -> Vec<Rewrite> {
     while index + 1 < lines.len() {
         let (header, body) = (&lines[index], &lines[index + 1]);
         let indent = raw_indent(header);
-        let end = index
-            + 2
-            + lines[index + 2..]
-                .iter()
-                .take_while(|line| !line.trim().is_empty() && raw_indent(line) > indent + 4)
-                .count();
+        // Found only for a function header, as scanning from every line is quadratic.
+        let end = || {
+            index
+                + 2
+                + lines[index + 2..]
+                    .iter()
+                    .take_while(|line| !line.trim().is_empty() && raw_indent(line) > indent + 4)
+                    .count()
+        };
         if let Some(signature) = header.trim().strip_suffix(':')
             && is_function(signature)
             && function_returns_value(signature)
@@ -1074,11 +1077,17 @@ fn expression_body_rewrites(lines: &[String]) -> Vec<Rewrite> {
             && !split_trailing_comment(body.trim())
                 .0
                 .ends_with(['{', ';'])
-            && block_ends_at(lines, end, indent)
-            && top_level_statements(&lines[index + 1..end].join("\n").chars().collect::<Vec<_>>())
-                .len()
+            && block_ends_at(lines, end(), indent)
+            && top_level_statements(
+                &lines[index + 1..end()]
+                    .join("\n")
+                    .chars()
+                    .collect::<Vec<_>>(),
+            )
+            .len()
                 == 1
         {
+            let end = end();
             let mut text = format!(
                 "{} = {}",
                 header.trim_end().trim_end_matches(':'),
