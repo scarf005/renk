@@ -677,8 +677,14 @@ fn idiomatic_rusk(lines: Vec<String>, aggressive: bool) -> Vec<String> {
 /// `items.a()` that `output` writes as `items::a()`, parenthesized as `(items).a()`; `None` when
 /// there is none. A Rust `.` is always a value access.
 fn parenthesize_path_receivers(lines: &[String], output: &TranspileOutput) -> Option<Vec<String>> {
-    let generated = output.rust.lines().collect::<Vec<_>>();
-    // The Rust generated for each physical source line.
+    // Comments and literals are blanked over the whole text, as a string may span lines.
+    let generated = code_tokens(&output.rust).into_iter().collect::<String>();
+    let generated = generated.lines().collect::<Vec<_>>();
+    let source = code_tokens(&lines.join("\n"))
+        .into_iter()
+        .collect::<String>();
+    let source = source.split('\n').collect::<Vec<_>>();
+    // The Rust code generated for each physical source line.
     let mut rust = Vec::<String>::new();
     for entry in &output.source_map {
         if let Some(source) = entry.source_line.checked_sub(1)
@@ -702,8 +708,9 @@ fn parenthesize_path_receivers(lines: &[String], output: &TranspileOutput) -> Op
             line.split('\n')
                 .map(|line| {
                     let rust = rust.get(physical).map_or("", String::as_str);
+                    let code = source.get(physical).copied().unwrap_or_default();
                     physical += 1;
-                    let fixed = parenthesize_line_path_receivers(line, rust);
+                    let fixed = parenthesize_line_path_receivers(line, code, rust);
                     changed |= fixed != line;
                     fixed
                 })
@@ -714,21 +721,19 @@ fn parenthesize_path_receivers(lines: &[String], output: &TranspileOutput) -> Op
     changed.then_some(fixed)
 }
 
-/// `line` with each lowercase receiver `h` of `h.m` parenthesized when `rust`, the Rust it
-/// becomes, holds more `h::m` paths than `line` itself, outside comments and literals.
-fn parenthesize_line_path_receivers(line: &str, rust: &str) -> String {
+/// `line` with each lowercase receiver `h` of `h.m` parenthesized when `rust`, the Rust code it
+/// becomes, holds more `h::m` paths than `code`, the line with comments and literals blanked.
+fn parenthesize_line_path_receivers(line: &str, code: &str, rust: &str) -> String {
     let chars = line.chars().collect::<Vec<_>>();
-    let (line_code, rust_code) = (code_tokens(line), code_tokens(rust));
+    let (line_code, rust_code) = (
+        code.chars().collect::<Vec<_>>(),
+        rust.chars().collect::<Vec<_>>(),
+    );
     let misreads = |path: &str| count_path(&rust_code, path) > count_path(&line_code, path);
     let mut text = String::new();
     let mut index = 0;
     while index < chars.len() {
-        if let Some(end) = opaque_span_end(&chars, index) {
-            text.extend(&chars[index..=end]);
-            index = end + 1;
-            continue;
-        }
-        if !is_ident_start(chars[index])
+        if !line_code.get(index).copied().is_some_and(is_ident_start)
             || (index > 0
                 && (is_ident_continue(chars[index - 1])
                     || matches!(chars[index - 1], '.' | ':' | '#')))
@@ -764,13 +769,17 @@ fn parenthesize_line_path_receivers(line: &str, rust: &str) -> String {
     text
 }
 
-/// `text` with its comments and literals blanked out.
+/// `text` with its comments and literals blanked out, keeping their line breaks.
 fn code_tokens(text: &str) -> Vec<char> {
     let mut chars = text.chars().collect::<Vec<_>>();
     let mut index = 0;
     while index < chars.len() {
         if let Some(end) = opaque_span_end(&chars, index) {
-            chars[index..=end].fill(' ');
+            for character in &mut chars[index..=end] {
+                if *character != '\n' {
+                    *character = ' ';
+                }
+            }
             index = end + 1;
         } else {
             index += 1;
