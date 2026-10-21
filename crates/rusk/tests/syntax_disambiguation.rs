@@ -1421,3 +1421,54 @@ fn tail_value_after_a_statement_on_its_line_keeps_no_semicolon() {
         assert_eq!(rust(source), expected, "{source}");
     }
 }
+
+#[test]
+fn rust_conversion_keeps_block_bodies_of_several_statements_on_a_line() {
+    // `= value` holds one expression; a line of statements stays a block.
+    for source in [
+        "fn f() -> usize {\n    let n = 1; n\n}\n",
+        "fn f() -> usize {\n    g(); 2 // g(); 2\n}\n",
+        "fn f() -> usize {\n    g(1)\n        .h(); 3\n}\n",
+    ] {
+        let rusk = rust_to_rusk(source).unwrap();
+        assert!(rusk.contains(":\n"), "{rusk}");
+        assert_eq!(rust(&rusk), source, "{rusk}");
+    }
+}
+
+#[test]
+fn same_line_let_binds_the_later_statements_of_its_line() {
+    // A `let` binds after its `;` on the same line, not before it.
+    for (source, expected) in [
+        (
+            "fn f() -> usize:\n    let s = \"a\"; s.len()\n",
+            "fn f() -> usize {\n    let s = \"a\"; s.len()\n}\n",
+        ),
+        (
+            "fn f() -> usize:\n    let s = \"a;\n    b\"; s.len()\n",
+            "fn f() -> usize {\n    let s = \"a;\n    b\"; s.len()\n}\n",
+        ),
+        (
+            "fn f() -> usize:\n    g(); let s = t.x; s.y\n",
+            "fn f() -> usize {\n    g(); let s = t::x; s.y\n}\n",
+        ),
+        (
+            "fn f():\n    s.y(); let s = 1\n",
+            "fn f() {\n    s::y(); let s = 1;\n}\n",
+        ),
+        (
+            "fn f() -> u8:\n    let t = s.y(); let s = 1; t + s.y\n",
+            "fn f() -> u8 {\n    let t = s::y(); let s = 1; t + s.y\n}\n",
+        ),
+        (
+            "fn f() -> u8:\n    let s = \"a\"; return if s.is_empty() then 1 else 2\n",
+            "fn f() -> u8 {\n    let s = \"a\"; return if s.is_empty() { 1 } else { 2 };\n}\n",
+        ),
+        (
+            "fn f() -> usize:\n    let s = \"a\"; let n = if s.is_empty() then 0 else s.len(); n\n",
+            "fn f() -> usize {\n    let s = \"a\"; let n = if s.is_empty() { 0 } else { s.len() }; n\n}\n",
+        ),
+    ] {
+        assert_eq!(rust(source), expected, "{source}");
+    }
+}

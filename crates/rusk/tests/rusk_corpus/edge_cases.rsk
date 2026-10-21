@@ -309,3 +309,19 @@ pub fn tail_after_statement(z: Z) -> u8:
 pub fn tail_after_assignment(z: Z) -> u8:
     let mut v = 0
     v = pass_on(*&{ pass_on(v); z.y }); v // v;
+
+mod s:
+    pub fn y() -> u8 = 1
+
+pub fn let_on_the_line() -> usize:
+    let s = "a;"; s.len()
+
+pub fn let_over_lines() -> usize:
+    let s = "a;
+    b"; s.len()
+
+pub fn path_before_let() -> u8:
+    let t = s.y(); let s = 1; t + s
+
+pub fn let_before_inline_ifs() -> usize:
+    let s = "a"; let n = if s.is_empty() then 0 else s.len(); n
