@@ -155,3 +155,19 @@ where
     text.len()
 
 pub fn commented_value(B: u8) -> &'static str /* -> T = v */ = if B > 0 then "a = b" else "="
+
+pub struct Commas[T]:
+    pub t: u8,
+    pair: (u8, T), // pair,
+    s: [u8; 2],
+    u: u16 // u16,
+
+pub struct Tuple(pub u8, u16,);
+
+pub enum Variants:
+    A,
+    B(u8, u16),
+    C { x: u8 },
+    D:
+        y: u8,
+    E // E,
