@@ -3700,6 +3700,16 @@ fn emit_general(node: &Node, context: Context, is_last: bool, emitter: &mut Emit
     }
 }
 
+/// The `{` opening the body of `header`: on a line of its own at `indent` when `header` puts it
+/// there, as after a `where` clause, else after the header.
+fn brace_opener(header: &str, indent: &str) -> String {
+    if header.lines().last().is_some_and(|line| line.trim() == "{") {
+        format!("\n{indent}{{")
+    } else {
+        " {".to_string()
+    }
+}
+
 fn emit_braced_item(node: &Node, child_context: Context, emitter: &mut Emitter, header: String) {
     emit_braced_item_statement(node, child_context, emitter, header, false, true);
 }
@@ -3714,6 +3724,7 @@ fn emit_braced_item_statement(
 ) {
     let indent = spaces(node.indent);
     let (header, _) = strip_block_marker(&header);
+    let opener = brace_opener(header, &indent);
     let header = strip_open_brace(header);
     if node.children.is_empty()
         && header.ends_with('}')
@@ -3740,7 +3751,7 @@ fn emit_braced_item_statement(
         emitter.push(node, format!("{}{}{}", indent, header, terminator));
         return;
     }
-    emitter.push(node, format!("{}{} {{", indent, header));
+    emitter.push(node, format!("{indent}{header}{opener}"));
     emit_sequence(&node.children, child_context, tail_is_value, emitter);
     emitter.push_generated(format!(
         "{}}}{}",
@@ -3763,12 +3774,16 @@ fn emit_function(node: &Node, emitter: &mut Emitter) {
         return;
     }
     let Some((signature, body)) = split_function_body(text) else {
-        if node.children.is_empty() && !has_block {
+        if node.children.is_empty() && !has_block && !text.ends_with('{') {
             emitter.push(node, format!("{}{}", indent, lower_signature(text)));
         } else {
             let signature = strip_open_brace(text.trim());
             let returns_value = function_returns_value(signature);
-            emitter.push(node, format!("{}{} {{", indent, lower_signature(signature)));
+            let opener = brace_opener(text, &indent);
+            emitter.push(
+                node,
+                format!("{}{}{opener}", indent, lower_signature(signature)),
+            );
             emit_function_body(&node.children, returns_value, emitter);
             emitter.push_generated(format!("{}}}", indent));
         }
