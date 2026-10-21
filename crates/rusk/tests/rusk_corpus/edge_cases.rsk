@@ -325,3 +325,31 @@ pub fn path_before_let() -> u8:
 
 pub fn let_before_inline_ifs() -> usize:
     let s = "a"; let n = if s.is_empty() then 0 else s.len(); n
+
+const C: bool = true
+
+pub struct Sized2:
+    pub data: [u64; if C {
+        1
+    } else {
+        2
+    }]
+
+fn first_of(v: [u8; 1]) -> u8 = v[0]
+
+pub fn blocks_in_brackets(a: u8, c: bool) -> u8:
+    let y = [match a {
+        0 => 1 // 1 => [
+        _ => 2
+    }]
+    let v = first_of([match a {
+        0 => 1
+        _ => 2
+    }])
+    let e = [if c {
+        let b = 1
+        b
+    } else {
+        2
+    }]
+    y[0] + v + e[0]

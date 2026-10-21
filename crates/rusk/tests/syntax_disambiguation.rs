@@ -1520,3 +1520,16 @@ fn macro_bodies_holding_closures_stay_rust_tokens() {
     assert_eq!(rust(rusk), source);
     assert_eq!(rust_to_rusk(source).unwrap(), rusk);
 }
+
+#[test]
+fn brace_blocks_opened_in_brackets_hold_rusk_lines() {
+    // A `match` or `if` value inside brackets reads its arms and statements as Rusk, as inside
+    // parentheses; a block in an array type stays one Rust group.
+    let output = rust(
+        "struct S:\n    data: [u64; if C {\n        1\n    } else {\n        2\n    }]\n\nfn f(a: u8, c: bool) -> u8:\n    let y = [match a {\n        0 => 1\n        _ => 2\n    }]\n    let v = g(1, [match a {\n        0 => 1\n        _ => 2\n    }])\n    let e = [if c {\n        let b = 1\n        b\n    } else {\n        2\n    }]\n    y[0] + v + e[0]\n",
+    );
+    assert_eq!(
+        output,
+        "struct S {\n    data: [u64; if C {\n        1\n    } else {\n        2\n    }],\n}\n\nfn f(a: u8, c: bool) -> u8 {\n    let y = [match a {\n        0 => 1,\n        _ => 2,\n    }];\n    let v = g(1, [match a {\n        0 => 1,\n        _ => 2,\n    }]);\n    let e = [if c {\n        let b = 1;\n        b\n    } else {\n        2\n    }];\n    y[0] + v + e[0]\n}\n"
+    );
+}
