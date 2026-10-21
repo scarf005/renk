@@ -3774,7 +3774,9 @@ fn emit_statement(node: &Node, _context: Context, is_last: bool, emitter: &mut E
         emitter.push(node, format!("{indent}{text}"));
     } else if is_use_or_extern_crate(text) || starts_item(text, "type") {
         emitter.push(node, format!("{}{};", indent, lower_signature(text)));
-    } else if is_let(text) || is_assignment(text) || is_jump_statement(text) {
+    } else if let tail = last_statement(text)
+        && (is_let(tail) || is_assignment(tail) || is_jump_statement(tail))
+    {
         emitter.push(node, format!("{}{};", indent, lower_expr(text)));
     } else if !node.children.is_empty() && is_control(block_text) {
         emit_braced_item_statement(
@@ -3803,6 +3805,21 @@ fn emit_statement(node: &Node, _context: Context, is_last: bool, emitter: &mut E
         };
         emitter.push(node, format!("{}{}{}", indent, lower_expr(text), suffix));
     }
+}
+
+/// The statement after the last top-level `;` of `text`, as `s.len()` in `let s = 1; s.len()`;
+/// a `;` in a literal, group, or macro body separates none.
+fn last_statement(text: &str) -> &str {
+    let chars = text.chars().collect::<Vec<_>>();
+    let mut start = 0;
+    while let Some(end) = top_level_position(&chars, start, |at| chars[at] == ';') {
+        start = end + 1;
+    }
+    let at = text
+        .char_indices()
+        .nth(start)
+        .map_or(text.len(), |(at, _)| at);
+    text[at..].trim()
 }
 
 /// `text` split before the top-level `{ ... }` that ends it, as in `impl A { fn f() {} }`.
