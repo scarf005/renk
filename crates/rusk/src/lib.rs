@@ -1382,7 +1382,7 @@ fn is_raw_rust_block_header(header: &str, kind: RustBlockKind) -> bool {
 }
 
 fn lower_rust_syntax(text: &str) -> String {
-    let text = map_std_macro_arguments(text, lower_rust_syntax);
+    let text = map_std_macro_arguments(text, &|_, code| lower_rust_syntax(code));
     let text = parenthesize_value_receivers(&text);
     let text = parenthesize_index_calls(&text);
     let text = replace_rust_turbofish(&text);
@@ -4623,7 +4623,17 @@ fn closing_delimiters(text: &str) -> String {
 }
 
 fn lower_basic_expr(text: &str) -> String {
-    let text = map_std_macro_arguments(text, lower_expr);
+    // Std macro arguments see the parameters of the closures around them, as `env` in
+    // `.map(|env| format!("{}", env.len()))`.
+    let outer = closures(&text.chars().collect::<Vec<_>>());
+    let text = map_std_macro_arguments(text, &|start, argument| {
+        let names = outer
+            .iter()
+            .filter(|closure| closure.body.contains(&start))
+            .flat_map(|closure| closure.parameters.clone())
+            .collect();
+        with_value_scope(names, || lower_expr(argument))
+    });
     let chars = lower_format_macros(&text).chars().collect::<Vec<_>>();
     // A closure inside a macro body, as in `h!(o.map(|s| s.x))`, stays in its Rust tokens.
     let macros = macro_spans(&chars);
@@ -4963,9 +4973,9 @@ fn is_std_expression_macro(name: &str) -> bool {
 }
 
 /// `text` with each argument of every std expression macro outside literals and comments replaced
-/// by `lower(argument)`, keeping the separating `,` (or the `;` of `vec![x; n]`), whitespace, and
+/// by `lower(start, argument)`, where `start` is the argument's index in `text`, keeping the separating `,` (or the `;` of `vec![x; n]`), whitespace, and
 /// comments around it.
-fn map_std_macro_arguments(text: &str, lower: fn(&str) -> String) -> String {
+fn map_std_macro_arguments(text: &str, lower: &dyn Fn(usize, &str) -> String) -> String {
     let chars = text.chars().collect::<Vec<_>>();
     let mut output = String::new();
     let mut index = 0usize;
@@ -5021,7 +5031,7 @@ fn map_std_macro_arguments(text: &str, lower: fn(&str) -> String) -> String {
                 '(' | '[' | '{' => depth += 1,
                 ')' | ']' | '}' => depth = depth.saturating_sub(1),
                 ',' | ';' if depth == 0 => {
-                    output.push_str(&map_code(&chars[start..cursor], lower));
+                    output.push_str(&map_code(&chars[start..cursor], &|code| lower(start, code)));
                     output.push(chars[cursor]);
                     start = cursor + 1;
                 }
@@ -5029,7 +5039,7 @@ fn map_std_macro_arguments(text: &str, lower: fn(&str) -> String) -> String {
             }
             cursor += 1;
         }
-        output.push_str(&map_code(&chars[start..end], lower));
+        output.push_str(&map_code(&chars[start..end], &|code| lower(start, code)));
         output.push(chars[end]);
         index = end + 1;
     }
@@ -5037,7 +5047,7 @@ fn map_std_macro_arguments(text: &str, lower: fn(&str) -> String) -> String {
 }
 
 /// `lower` applied to the code of `chars`, keeping the whitespace and comments around it.
-fn map_code(chars: &[char], lower: fn(&str) -> String) -> String {
+fn map_code(chars: &[char], lower: &dyn Fn(&str) -> String) -> String {
     let mut first = None;
     let mut last = 0usize;
     let mut index = 0usize;
