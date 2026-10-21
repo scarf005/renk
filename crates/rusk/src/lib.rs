@@ -2005,21 +2005,25 @@ fn source_lines(source: &str) -> Result<Vec<SourceLine>, TranspileError> {
             closed: false,
         });
         // A one-line `else` that closes what its chain's head opened, as in `else { 2 })`, ends
-        // the chain with the closing line after its branch.
+        // the chain with the closing line after its branch; the `,` of an arm, as in
+        // `else { 2 },`, is the arm's own.
         if is_else_branch(code) && !has_explicit_block_opener(code) {
             let chars = code.chars().collect::<Vec<_>>();
             let end = argument_end(&chars, 0);
+            let at = code
+                .char_indices()
+                .nth(end)
+                .map_or(code.len(), |(at, _)| at);
             if matches!(chars.get(end), Some(')' | ']' | ','))
                 && opens_group_block(&lines, &lines[lines.len() - 1])
             {
-                let at = code
-                    .char_indices()
-                    .nth(end)
-                    .map_or(code.len(), |(at, _)| at);
                 let branch = lines.last_mut().expect("the `else` line was just pushed");
                 branch.text = code[..at].trim_end().to_string();
                 branch.comment = None;
                 carry = Some((index, format!("{}{}{comment}", spaces(indent), &code[at..])));
+            } else if code[at..].trim() == "," {
+                let branch = lines.last_mut().expect("the `else` line was just pushed");
+                branch.text = code[..at].trim_end().to_string();
             }
         }
     }
