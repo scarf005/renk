@@ -52,4 +52,5 @@ Type positions inside statements keep `[T]`: `let found: Option[i32] = None`.
 ## Escape hatches
 
 - `::` and `::<...>` force a path or generic application.
-- Parentheses force a value receiver: `(Unit).method()`, `(Ordering::Less).reverse()`.
+- Parentheses force a value receiver; the Rust output drops them: `(Unit).method()` ->
+  `Unit.method()`, `(Ordering::Less).reverse()` -> `Ordering::Less.reverse()`.

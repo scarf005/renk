@@ -4341,10 +4341,11 @@ fn lower_signature(text: &str) -> String {
     if without_visibility(text).starts_with("use ") {
         return lower_use_tree(text);
     }
-    replace_dotted_paths(
+    // A const expression, as in `[u8; (TABLE)[N].len()]`, reads receivers as values too.
+    unwrap_path_receivers(&replace_dotted_paths(
         &replace_square_generics(text, GenericMode::Type),
         PathMode::Type,
-    )
+    ))
 }
 
 /// Every `.` between use-tree segments, including before `*` and `{...}` groups, is `::`.
@@ -4631,6 +4632,72 @@ fn lower_basic_expr(text: &str) -> String {
         start = type_end;
     }
     output.push_str(&lower_value(start, chars.len()));
+    unwrap_path_receivers(&output)
+}
+
+/// `rust` without the parentheses around a lone path receiver, as in `(items).a()`,
+/// `(Ordering::Less).is_lt()`, or `(TABLE)[i]`, which Rusk reads as a value but Rust needs no
+/// parentheses for; call arguments and macro delimiters, as in `g(x).y` or `m!(x).y`, keep theirs.
+fn unwrap_path_receivers(rust: &str) -> String {
+    let chars = rust.chars().collect::<Vec<_>>();
+    // The `)` closing a lone path such as `a::B` or `r#type` opened at `open`.
+    let lone_path_end = |open: usize| {
+        let close = open
+            + 1
+            + chars[open + 1..]
+                .iter()
+                .take_while(|&&c| is_ident_continue(c) || matches!(c, ':' | '#'))
+                .count();
+        let text = chars[open + 1..close].iter().collect::<String>();
+        let path = text.strip_prefix("::").unwrap_or(&text);
+        let is_path = path.split("::").all(|segment| {
+            let segment = segment.strip_prefix("r#").unwrap_or(segment);
+            segment.chars().next().is_some_and(is_ident_start)
+                && segment.chars().all(is_ident_continue)
+        });
+        (is_path && chars.get(close) == Some(&')')).then_some(close)
+    };
+    // A group after a callee, as in `g(x)`, `m!(x)`, or `f::<T>(x)`, holds arguments; after a
+    // space, only a keyword such as `return` or `mut` precedes a value.
+    let follows_value_position = |at: usize| {
+        let before = chars[..at].iter().rev();
+        let spaces = before.clone().take_while(|c| c.is_whitespace()).count();
+        let word = before
+            .skip(spaces)
+            .take_while(|&&c| is_ident_continue(c))
+            .collect::<String>();
+        match at.checked_sub(1).map(|before| chars[before]) {
+            None => true,
+            Some(c) if is_ident_continue(c) || matches!(c, ')' | ']' | '>' | '!') => false,
+            Some(_) if spaces > 0 && !word.is_empty() => matches!(
+                &*word.chars().rev().collect::<String>(),
+                "return" | "in" | "if" | "match" | "while" | "break" | "else" | "mut"
+            ),
+            Some(_) => true,
+        }
+    };
+    let mut output = String::new();
+    let mut index = 0;
+    while index < chars.len() {
+        if let Some(end) =
+            opaque_span_end(&chars, index).or_else(|| macro_invocation_end(&chars, index))
+        {
+            output.extend(&chars[index..=end]);
+            index = end + 1;
+            continue;
+        }
+        if chars[index] == '('
+            && let Some(close) = lone_path_end(index)
+            && matches!(chars.get(close + 1), Some('.' | '['))
+            && follows_value_position(index)
+        {
+            output.extend(&chars[index + 1..close]);
+            index = close + 1;
+            continue;
+        }
+        output.push(chars[index]);
+        index += 1;
+    }
     output
 }
 
