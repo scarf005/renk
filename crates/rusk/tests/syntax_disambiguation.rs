@@ -1581,3 +1581,14 @@ fn rust_conversion_keeps_empty_bodies_after_where_clauses() {
         assert_eq!(rust(&rusk), source, "{rusk}");
     }
 }
+
+#[test]
+fn brace_bodies_after_where_clauses_keep_their_lines() {
+    let output = rust(
+        "fn f[T]() -> u8\nwhere\n    T: Copy,\n{\n    1\n}\n\nfn g[T]()\nwhere\n    T: Copy,\n{\n}\n\nimpl[T] S[T]\nwhere\n    T: Copy,\n{\n    fn a() {}\n}\n\nimpl[T] R[T]\nwhere\n    T: Copy,\n{\n}\n",
+    );
+    assert_eq!(
+        output,
+        "fn f<T>() -> u8\nwhere\n    T: Copy,\n{\n    1\n}\n\nfn g<T>()\nwhere\n    T: Copy,\n{\n}\n\nimpl<T> S<T>\nwhere\n    T: Copy,\n{\n    fn a() {}\n}\n\nimpl<T> R<T>\nwhere\n    T: Copy,\n{\n}\n"
+    );
+}
