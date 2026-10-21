@@ -145,14 +145,18 @@ proptest! {
 
 #[test]
 fn long_groups_convert_in_linear_time() {
-    let rows = (0..20_000)
-        .map(|n| format!("    ({n}, {n}),\n"))
-        .collect::<String>();
-    let rust = format!("pub static TABLE: &[(u32, u32)] = &[\n{rows}];\n");
-    let start = std::time::Instant::now();
-    transpile(&rust_to_rusk(&rust).unwrap()).unwrap();
-    let elapsed = start.elapsed();
-    assert!(elapsed < std::time::Duration::from_secs(10), "{elapsed:?}");
+    let convert = |rows: usize| {
+        let rows = (0..rows)
+            .map(|n| format!("    ({n}, {n}),\n"))
+            .collect::<String>();
+        let rust = format!("pub static TABLE: &[(u32, u32)] = &[\n{rows}];\n");
+        let start = std::time::Instant::now();
+        transpile(&rust_to_rusk(&rust).unwrap()).unwrap();
+        start.elapsed()
+    };
+    let (short, long) = (convert(5_000), convert(20_000));
+    // Four times the rows take about four times as long, not sixteen.
+    assert!(long < short * 8, "{short:?} {long:?}");
 }
 
 #[test]
