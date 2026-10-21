@@ -4042,8 +4042,13 @@ fn offset_node_indent(node: &Node, offset: usize) -> Node {
     }
 }
 
+/// A field or variant without the Rust `,` it may be written with.
+fn strip_member_comma(text: &str) -> &str {
+    text.strip_suffix(',').map_or(text, str::trim_end)
+}
+
 fn emit_struct_member(node: &Node, emitter: &mut Emitter) {
-    let text = node.text.trim();
+    let text = strip_member_comma(node.text.trim());
     if is_function(text) || is_impl_or_mod_item(text) {
         emit_general(node, Context::Block, true, emitter);
     } else {
@@ -4055,7 +4060,7 @@ fn emit_struct_member(node: &Node, emitter: &mut Emitter) {
 }
 
 fn emit_enum_member(node: &Node, emitter: &mut Emitter) {
-    let (text, _) = strip_block_marker(node.text.trim());
+    let (text, _) = strip_block_marker(strip_member_comma(node.text.trim()));
     if node.children.is_empty() {
         emitter.push(
             node,
