@@ -2072,9 +2072,13 @@ fn joins_next_line(
         || (open.last() == Some(&'{') && (is_use_or_extern_crate(code) || starts_raw_item(code)))
         || (code.trim_end().ends_with(',') && matches!(open.first(), Some('(' | '[')))
         // A block inside brackets, as in `data: [u64; if Self::COMPRESS {`, or an operand block,
-        // as in `+ if c {` or `if (a || {`, rather than a closure body.
+        // as in `+ if c {` or `if (a || {`, rather than a closure body or an element value, as
+        // in `[match a {`, whose lines are Rusk.
         || (code.trim_end().ends_with('{')
-            && (open.contains(&'[') || opens_operand_block(code, open.contains(&'('))))
+            && ((open.contains(&'[')
+                && !is_trailing_match(strip_open_brace(code))
+                && !is_trailing_if(strip_open_brace(code)))
+                || opens_operand_block(code, open.contains(&'('))))
         || opens_macro_braces(text)
     {
         *group = open.first().copied();
