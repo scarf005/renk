@@ -1378,6 +1378,11 @@ fn rust_conversion_reads_patterns_over_several_header_lines() {
         "fn f(s: S) -> u8 {\n    if let Flags::Coff {\n        c, ..\n    } = s.flags\n    {\n        c\n    } else {\n        0\n    }\n}\n",
         "fn f(s: S) -> u8 {\n    let c = if let Flags::Coff {\n        c, ..\n    } = s.flags\n    {\n        c\n    } else {\n        0\n    };\n    c\n}\n",
         "fn f(s: S) -> u8 {\n    if let Outer::A(Inner {\n        b, ..\n    }) = s.flags\n    {\n        return b;\n    }\n    0\n}\n",
+        // Tuple and slice patterns close with `)` or `]`; a call compared over lines is no pattern.
+        "fn f(s: S) -> u8 {\n    if let Some(\n        b,\n    ) = s.flags\n    {\n        return b;\n    }\n    0\n}\n",
+        "fn f(s: S) -> u8 {\n    while let Outer::A([\n        b, ..\n    ]) = s.flags\n    {\n        return b;\n    }\n    0\n}\n",
+        "fn f(s: S) -> u8 {\n    let c = if let [\n        b, ..\n    ] = s.flags\n    {\n        b\n    } else {\n        0\n    };\n    c\n}\n",
+        "fn f(s: S) -> u8 {\n    if g(\n        s,\n    ) == s.flags {\n        return 1;\n    }\n    0\n}\n",
     ] {
         let rusk = rust_to_rusk(source).unwrap();
         assert_eq!(rust(&rusk), source, "{rusk}");

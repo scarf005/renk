@@ -151,3 +151,42 @@ pub fn closure_chains(v: Vec<String>, c: bool) -> usize {
         env.len()
     }).count() + env::args().count()
 }
+
+pub fn tuple_pattern_lines(value: Option<(u8, u8, u8)>, bytes: &[u8]) -> u8 {
+    if let Some((first_binding_with_a_long_name, second_binding_with_a_long_name_too, _third)) =
+        value
+    {
+        return first_binding_with_a_long_name + second_binding_with_a_long_name_too;
+    }
+    while let Some(
+        [
+            first_byte_with_a_long_name,
+            second_byte_with_a_long_name,
+            third_byte,
+            ..,
+        ],
+    ) = bytes.get(..4)
+    {
+        return first_byte_with_a_long_name + second_byte_with_a_long_name + third_byte;
+    }
+    let total = if let [
+        first_byte_with_a_long_name,
+        second_byte_with_a_long_name,
+        ..,
+    ] = bytes
+    {
+        first_byte_with_a_long_name + second_byte_with_a_long_name
+    } else {
+        0
+    };
+    if usize::from(total)
+        == bytes
+            .iter()
+            .map(|byte| usize::from(*byte))
+            .filter(|byte| *byte > 1)
+            .count()
+    {
+        return 1;
+    }
+    total
+}
