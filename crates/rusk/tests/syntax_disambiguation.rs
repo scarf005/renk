@@ -1568,3 +1568,16 @@ fn rust_conversion_keeps_operators_after_one_line_else_branches() {
         assert_eq!(rust(&rusk), source, "{rusk}");
     }
 }
+
+#[test]
+fn rust_conversion_keeps_empty_bodies_after_where_clauses() {
+    // A `{}` line after a `where` clause stays; rustfmt's `{` / `}` becomes a `:`.
+    for source in [
+        "fn g<T>()\nwhere\n    T: Copy,\n{}\n",
+        "impl<T> S<T>\nwhere\n    T: Copy,\n{}\n",
+        "fn f<T>()\nwhere\n    T: Copy,\n{\n}\n",
+    ] {
+        let rusk = rust_to_rusk(source).unwrap();
+        assert_eq!(rust(&rusk), source, "{rusk}");
+    }
+}

@@ -267,3 +267,24 @@ pub fn value_else_plus(c: bool) -> u8 {
         1
     } else { 0 } + 1, 0)
 }
+
+pub fn empty_after_where<T>(_t: T)
+where
+    T: Copy, // T: Copy {
+{}
+
+pub struct Unit<T>(T);
+
+impl<T> Unit<T>
+where
+    T: Copy,
+{}
+
+impl<T> Clone for Unit<T>
+where
+    T: Copy,
+{
+    fn clone(&self) -> Self {
+        Unit(self.0)
+    }
+}
