@@ -353,3 +353,15 @@ pub fn blocks_in_brackets(a: u8, c: bool) -> u8:
         2
     }]
     y[0] + v + e[0]
+
+fn pair_sum(a: u8, b: u8) -> u8 = a + b
+
+pub fn one_line_else_arms(c: bool, o: Option[u8]) -> u8:
+    let a = match o:
+        Some(x) => if c:
+            x
+        else { 2 },
+        None => pair_sum(if c:
+            1
+        else { 2 }, 3)
+    a

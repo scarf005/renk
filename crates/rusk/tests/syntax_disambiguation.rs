@@ -1533,3 +1533,15 @@ fn brace_blocks_opened_in_brackets_hold_rusk_lines() {
         "struct S {\n    data: [u64; if C {\n        1\n    } else {\n        2\n    }],\n}\n\nfn f(a: u8, c: bool) -> u8 {\n    let y = [match a {\n        0 => 1,\n        _ => 2,\n    }];\n    let v = g(1, [match a {\n        0 => 1,\n        _ => 2,\n    }]);\n    let e = [if c {\n        let b = 1;\n        b\n    } else {\n        2\n    }];\n    y[0] + v + e[0]\n}\n"
     );
 }
+
+#[test]
+fn one_line_else_of_a_match_arm_keeps_the_arm_comma() {
+    // The `,` after a one-line `else` separates arms; inside a call it closes the argument.
+    let output = rust(
+        "fn f(c: bool, o: Option[u8]) -> u8:\n    let a = match o:\n        Some(x) => if c:\n            x\n        else { 2 },\n        None => g(if c:\n            1\n        else { 2 }, 3)\n    a\n",
+    );
+    assert_eq!(
+        output,
+        "fn f(c: bool, o: Option<u8>) -> u8 {\n    let a = match o {\n        Some(x) => if c {\n            x\n        } else { 2 },\n        None => g(if c {\n            1\n        } else { 2 }, 3),\n    };\n    a\n}\n"
+    );
+}
