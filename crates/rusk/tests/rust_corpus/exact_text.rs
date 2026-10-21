@@ -207,3 +207,20 @@ pub fn receiver_after_comment() -> u8 {
     /* a
     " */ z.y
 }
+
+macro_rules! keep {
+    ($($t:tt)*) => {
+        $($t)*
+    };
+}
+
+keep! {
+    pub fn inner(o: Option<u8>) -> Option<u8> {
+        o.map(|state| state + 1)
+    }
+}
+
+pub fn around(o: Option<u8>) -> Option<u8> {
+    let v = keep![o.map(|s| s * 2)];
+    v.map(|s| keep!(s + 1))
+}

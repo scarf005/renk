@@ -1502,3 +1502,12 @@ fn rust_conversion_reads_receivers_after_multi_line_literals_and_comments() {
         assert_eq!(rust(&rusk), expected, "{rusk}");
     }
 }
+
+#[test]
+fn macro_bodies_holding_closures_stay_rust_tokens() {
+    // A closure inside a macro body does not split it into Rusk code; one around a macro does.
+    let source = "m! {\n    fn f(o: Option<S>) -> u8 {\n        o.map(|state| state.x)\n    }\n}\n\nfn g(p: P) {\n    h!(o.map(|s| s.x));\n    let v = h![|s| s.x, o.y];\n    let w = p.map(|s| h!(o.y));\n}\n";
+    let rusk = "m! {\n    fn f(o: Option<S>) -> u8 {\n        o.map(|state| state.x)\n    }\n}\n\nfn g(p: P):\n    h!(o.map(|s| s.x))\n    let v = h![|s| s.x, o.y]\n    let w = p.map(|s| h!(o.y))\n";
+    assert_eq!(rust(rusk), source);
+    assert_eq!(rust_to_rusk(source).unwrap(), rusk);
+}
