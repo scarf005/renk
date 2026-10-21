@@ -1313,8 +1313,8 @@ fn rust_conversion_keeps_unbound_receivers_values() {
         "{rusk}"
     );
     // A bound receiver beside a path ending in its name, as in `foo_x::y`, stays as written; an
-    // unbound raw identifier is parenthesized whole; inside a macro body, where parameters are
-    // not bindings, only the misread receivers change, not the closure's `state`.
+    // unbound raw identifier is parenthesized whole; a macro body, whose parameters are not
+    // bindings, stays as written.
     for (source, expected) in [
         (
             "fn f(x: S) -> u8 {\n    x.y + foo_x::y() + self::x::y()\n}\n",
@@ -1330,7 +1330,7 @@ fn rust_conversion_keeps_unbound_receivers_values() {
         ),
         (
             "m! {\n    fn f(o: Option<S>) -> u8 {\n        o.map(|state| state.x)\n    }\n\n    fn g(s: S) -> u8 {\n        s.x\n    }\n}\n",
-            "m! {\n    fn f(o: Option<S>) -> u8 {\n        (o).map(|state| state.x)\n    }\n\n    fn g(s: S) -> u8 {\n        (s).x\n    }\n}\n",
+            "m! {\n    fn f(o: Option<S>) -> u8 {\n        o.map(|state| state.x)\n    }\n\n    fn g(s: S) -> u8 {\n        s.x\n    }\n}\n",
         ),
     ] {
         let rusk = rust_to_rusk(source).unwrap();

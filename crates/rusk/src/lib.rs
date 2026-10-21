@@ -4584,7 +4584,12 @@ fn closing_delimiters(text: &str) -> String {
 fn lower_basic_expr(text: &str) -> String {
     let text = map_std_macro_arguments(text, lower_expr);
     let chars = lower_format_macros(&text).chars().collect::<Vec<_>>();
-    let closures = closures(&chars);
+    // A closure inside a macro body, as in `h!(o.map(|s| s.x))`, stays in its Rust tokens.
+    let macros = macro_spans(&chars);
+    let closures = closures(&chars)
+        .into_iter()
+        .filter(|closure| !macros.iter().any(|span| span.contains(&closure.body.start)))
+        .collect::<Vec<_>>();
     // Each closure's parameters are values inside its body, as `env` in `.map(|env| *env)`, but
     // not after it.
     let lower_value = |start: usize, end: usize| {
@@ -6001,6 +6006,23 @@ fn macro_invocation_end(chars: &[char], start: usize) -> Option<usize> {
         _ => return None,
     };
     matching_bracket(chars, cursor, open, close)
+}
+
+/// The macro invocations of `chars`, as `h!(...)`, outside literals and comments.
+fn macro_spans(chars: &[char]) -> Vec<std::ops::Range<usize>> {
+    let mut spans = Vec::new();
+    let mut index = 0;
+    while index < chars.len() {
+        if let Some(end) = opaque_span_end(chars, index) {
+            index = end + 1;
+        } else if let Some(end) = macro_invocation_end(chars, index) {
+            spans.push(index..end + 1);
+            index = end + 1;
+        } else {
+            index += 1;
+        }
+    }
+    spans
 }
 
 fn has_ident_before(chars: &[char], index: usize) -> bool {
