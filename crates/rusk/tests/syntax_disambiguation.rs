@@ -1592,3 +1592,12 @@ fn brace_bodies_after_where_clauses_keep_their_lines() {
         "fn f<T>() -> u8\nwhere\n    T: Copy,\n{\n    1\n}\n\nfn g<T>()\nwhere\n    T: Copy,\n{\n}\n\nimpl<T> S<T>\nwhere\n    T: Copy,\n{\n    fn a() {}\n}\n\nimpl<T> R<T>\nwhere\n    T: Copy,\n{\n}\n"
     );
 }
+
+#[test]
+fn brace_bodies_of_trait_methods_keep_their_lines() {
+    let source = "trait T:\n    fn m() {\n    }\n\n    fn n(&self) -> u8 { // {\n        1\n    }\n\n    fn p() { // }\n    }\n\n    fn q() { /* } */\n    }\n\n    fn o();\n";
+    assert_eq!(
+        rust(source),
+        "trait T {\n    fn m() {\n    }\n\n    fn n(&self) -> u8 { // {\n        1\n    }\n\n    fn p() { // }\n    }\n\n    fn q() { /* } */\n    }\n\n    fn o();\n}\n"
+    );
+}

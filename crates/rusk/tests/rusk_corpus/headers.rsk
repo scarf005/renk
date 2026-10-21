@@ -171,3 +171,16 @@ pub enum Variants:
     D:
         y: u8,
     E // E,
+
+pub trait Hooks:
+    fn before() {
+    }
+
+    fn after() { // }
+    }
+
+    fn during() { /* } */
+    }
+
+pub fn outside() { /* } */
+}
