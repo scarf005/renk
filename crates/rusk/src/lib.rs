@@ -161,7 +161,36 @@ struct Emitter {
 }
 
 pub fn transpile(source: &str) -> Result<TranspileOutput, TranspileError> {
+    on_large_stack(|| transpile_source(source))
+}
+
+fn transpile_source(source: &str) -> Result<TranspileOutput, TranspileError> {
     with_value_scopes(|| transpile_lines(source))
+}
+
+/// `convert` run on a thread with a large stack, as the Rust parsers and the Rusk block tree
+/// recurse once per nesting level; WebAssembly has no threads and keeps its own stack, and a
+/// process limit that refuses the thread leaves `convert` on the caller's stack.
+#[cfg(not(target_arch = "wasm32"))]
+fn on_large_stack<T: Send>(convert: impl FnOnce() -> T + Send) -> T {
+    let convert = std::sync::Mutex::new(Some(convert));
+    let take = || convert.lock().unwrap().take().unwrap();
+    std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .stack_size(256 << 20)
+            .spawn_scoped(scope, || take()())
+            .map(|thread| {
+                thread
+                    .join()
+                    .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+            })
+    })
+    .unwrap_or_else(|_| take()())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn on_large_stack<T>(convert: impl FnOnce() -> T) -> T {
+    convert()
 }
 
 fn transpile_lines(source: &str) -> Result<TranspileOutput, TranspileError> {
@@ -194,6 +223,10 @@ fn transpile_lines(source: &str) -> Result<TranspileOutput, TranspileError> {
 }
 
 pub fn format_source(source: &str, options: FormatOptions) -> Result<String, TranspileError> {
+    on_large_stack(|| format_lines(source, options))
+}
+
+fn format_lines(source: &str, options: FormatOptions) -> Result<String, TranspileError> {
     if options.line_width == 0 {
         return Err(TranspileError {
             line: 1,
@@ -415,7 +448,7 @@ pub fn rust_to_rusk_aggressive(source: &str) -> Result<String, TranspileError> {
 }
 
 fn convert_rust_to_rusk(source: &str, aggressive: bool) -> Result<String, TranspileError> {
-    with_value_scopes(|| convert_rust_lines(source, aggressive))
+    on_large_stack(|| with_value_scopes(|| convert_rust_lines(source, aggressive)))
 }
 
 fn convert_rust_lines(source: &str, aggressive: bool) -> Result<String, TranspileError> {
@@ -619,12 +652,12 @@ struct Rewrite {
 /// still transpiles to the same Rust or, when `aggressive` or inlining format arguments, to the
 /// same Rust tokens; format arguments are compared inlined.
 fn idiomatic_rusk(lines: Vec<String>, aggressive: bool) -> Vec<String> {
-    let Ok(mut expected) = transpile(&lines.join("\n")) else {
+    let Ok(mut expected) = transpile_source(&lines.join("\n")) else {
         return lines;
     };
     let lines = match parenthesize_path_receivers(&lines, &expected) {
         Some(fixed) => {
-            let Ok(output) = transpile(&fixed.join("\n")) else {
+            let Ok(output) = transpile_source(&fixed.join("\n")) else {
                 return fixed;
             };
             expected = output;
@@ -661,7 +694,7 @@ fn idiomatic_rusk(lines: Vec<String>, aggressive: bool) -> Vec<String> {
                     let mut trial = accepted.clone();
                     let at = trial.partition_point(|kept| kept.start < rewrite.start);
                     trial.insert(at, rewrite);
-                    let rust = transpile(&apply_rewrites(&lines, &trial).0.join("\n"));
+                    let rust = transpile_source(&apply_rewrites(&lines, &trial).0.join("\n"));
                     if rust.is_ok_and(|output| {
                         rust_tokens(&canonical_format_macros(&output.rust)) == expected_tokens
                     }) {
@@ -858,7 +891,7 @@ fn equivalent_rewrites(
     let mut rejected = Vec::new();
     while !rewrites.is_empty() {
         let (candidate, origins) = apply_rewrites(lines, &rewrites);
-        let rejected_lines = match transpile(&candidate.join("\n")) {
+        let rejected_lines = match transpile_source(&candidate.join("\n")) {
             Ok(output) => {
                 let actual = canonical_format_macros(&output.rust);
                 if actual == expected {
@@ -6977,6 +7010,22 @@ fn ensure_trailing_newline(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deep_block_argument_chains_convert_on_a_small_stack() {
+        let links = (0..2_000)
+            .map(|n| format!("        .a(|y| {{\n            y + {n}\n        }})\n"))
+            .collect::<String>();
+        let rust = format!("fn main() {{\n    x\n{links}        .z();\n}}\n");
+        // WebAssembly runs on a 1 MiB stack without the conversion thread; a recursive walk or
+        // drop of the tree overflows it.
+        std::thread::Builder::new()
+            .stack_size(256 << 10)
+            .spawn(move || with_value_scopes(|| convert_rust_lines(&rust, false)).unwrap())
+            .unwrap()
+            .join()
+            .unwrap();
+    }
 
     fn rust(source: &str) -> String {
         transpile(source).unwrap().rust

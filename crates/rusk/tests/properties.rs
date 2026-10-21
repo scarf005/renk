@@ -172,21 +172,6 @@ fn long_block_argument_chains_convert_in_linear_time() {
 }
 
 #[test]
-fn deep_block_argument_chains_convert_on_a_small_stack() {
-    let links = (0..2_000)
-        .map(|n| format!("        .a(|y| {{\n            y + {n}\n        }})\n"))
-        .collect::<String>();
-    let rust = format!("fn main() {{\n    x\n{links}        .z();\n}}\n");
-    // WebAssembly runs on a 1 MiB stack; a recursive walk or drop of the tree overflows it.
-    std::thread::Builder::new()
-        .stack_size(256 << 10)
-        .spawn(move || rust_to_rusk(&rust).unwrap())
-        .unwrap()
-        .join()
-        .unwrap();
-}
-
-#[test]
 fn deep_nesting_converts_on_a_small_caller_stack() {
     let parens = 5_000;
     let parens = format!(
