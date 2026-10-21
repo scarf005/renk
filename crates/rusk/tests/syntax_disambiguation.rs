@@ -14,9 +14,9 @@ fn bracket_calls_and_uppercase_paths_are_generic_application() {
     assert!(output.contains("let size = size_of::<u8>();"), "{output}");
     assert!(output.contains("serde_json::from_str::<Config>(raw);"), "{output}");
     assert!(output.contains("let length = xs[i].len();"), "{output}");
-    assert!(output.contains("let row = (TABLE)[i].len();"), "{output}");
+    assert!(output.contains("let row = TABLE[i].len();"), "{output}");
     assert!(output.contains("let rows = TABLE[i][0].len();"), "{output}");
-    assert!(output.contains("let item = (config::TABLE)[i].len();"), "{output}");
+    assert!(output.contains("let item = config::TABLE[i].len();"), "{output}");
     assert!(output.contains("let made = config::Type::<u8>::new();"), "{output}");
 
     let output = rust(
@@ -33,7 +33,7 @@ fn explicit_paths_and_parentheses_bound_dot_inference() {
     let output = rust(
         "fn demo():\n    let length = (TEXT).len()\n    let default_len = Config::DEFAULT.len()\n    let typed = Foo[String]::DEFAULT.len()\n",
     );
-    assert!(output.contains("(TEXT).len()"));
+    assert!(output.contains("let length = TEXT.len();"), "{output}");
     assert!(output.contains("Config::DEFAULT.len()"));
     assert!(output.contains("Foo::<String>::DEFAULT.len()"));
     assert!(!output.contains("DEFAULT::len"));
@@ -52,7 +52,7 @@ fn camel_case_segments_of_explicit_paths_lower_dot_calls() {
         "Foo::<u8>::Inner::new();",
         "Config::DEFAULT.len();",
         "i32::MAX.count_ones();",
-        "(std::cmp::Ordering::Less).reverse();",
+        "let order = std::cmp::Ordering::Less.reverse();",
         "std::cmp::Ordering::Less::reverse(order);",
         "module::value.len();",
         "\"regex::Regex.new(\"",
@@ -68,12 +68,13 @@ fn rust_conversion_parenthesizes_camel_case_path_value_receivers() {
         "fn f() -> u32 {\n    let order = std::cmp::Ordering::Less.reverse();\n    let less = Ordering::Less.is_lt();\n    let made = String::new().len();\n    i32::MAX.count_ones()\n}\n",
     )
     .unwrap();
-    let roundtrip = rust(&output);
-    assert!(roundtrip.contains("Ordering::Less).reverse()"), "{output}");
-    assert!(roundtrip.contains("(Ordering::Less).is_lt()"), "{output}");
-    assert!(roundtrip.contains("String::new().len()"), "{output}");
-    assert!(roundtrip.contains("i32::MAX.count_ones()"), "{output}");
     assert!(!output.contains("(i32::MAX)"), "{output}");
+    // The parentheses Rusk needs to read a value receiver are not written back to Rust.
+    assert_eq!(
+        rust(&output),
+        "fn f() -> u32 {\n    let order = std::cmp::Ordering::Less.reverse();\n    let less = Ordering::Less.is_lt();\n    let made = String::new().len();\n    i32::MAX.count_ones()\n}\n",
+        "{output}"
+    );
 }
 
 #[test]
@@ -105,7 +106,7 @@ fn type_lowering_reenters_expression_context_for_consts() {
     let output = rust(
         "fn bytes() -> [u8; (TABLE)[N].len()] = todo!()\nfn array() -> Array[u8, { size_of[T]() }] = todo!()\n",
     );
-    assert!(output.contains("fn bytes() -> [u8; (TABLE)[N].len()]"), "{output}");
+    assert!(output.contains("fn bytes() -> [u8; TABLE[N].len()]"), "{output}");
     assert!(output.contains("fn array() -> Array<u8, { size_of::<T>() }>"), "{output}");
     assert!(!output.contains("TABLE<N>"));
     assert!(!output.contains("TABLE::"));
@@ -580,7 +581,7 @@ fn rust_conversion_keeps_std_macro_argument_receivers() {
         "assert!(TEXT.len() > 0);",
         "vec![TEXT.len(); 2];",
         "vec![(xs[0])()];",
-        "dbg!((std::cmp::Ordering::Less).reverse());",
+        "dbg!(std::cmp::Ordering::Less.reverse());",
     ] {
         assert!(output.contains(expected), "missing {expected}\nRusk:\n{rusk}\n{output}");
     }
@@ -597,7 +598,7 @@ fn names_not_bound_as_values_are_paths() {
         "let input = io::stdin();",
         "let map = coll::HashMap::<u8, u8>::new();",
         "let one = util::one();",
-        "let env_len = (env).len();",
+        "let env_len = env.len();",
         "let text = \"env.args()\"; // env.args(",
         "let re = regex::Regex::new(\"a\");",
         "let null = serde_json::Value::Null;",
@@ -1307,14 +1308,10 @@ fn where_clauses_keep_one_comma_before_a_trailing_block_comment() {
 fn rust_conversion_keeps_unbound_receivers_values() {
     let source = "fn f(point: P) -> u8 {\n    x.y = items.a(|d| d) + point.x;\n    x.y\n}\n";
     let rusk = rust_to_rusk(source).unwrap();
-    assert_eq!(
-        rust(&rusk),
-        "fn f(point: P) -> u8 {\n    (x).y = (items).a(|d| d) + point.x;\n    (x).y\n}\n",
-        "{rusk}"
-    );
-    // A bound receiver beside a path ending in its name, as in `foo_x::y`, stays as written; an
-    // unbound raw identifier is parenthesized whole; a macro body, whose parameters are not
-    // bindings, stays as written.
+    assert!(rusk.contains("(x).y = (items).a(|d| d) + point.x"), "{rusk}");
+    assert_eq!(rust(&rusk), source, "{rusk}");
+    // A bound receiver beside a path ending in its name, as in `foo_x::y`, an unbound raw
+    // identifier, and a macro body, whose parameters are not bindings, all round-trip as written.
     for (source, expected) in [
         (
             "fn f(x: S) -> u8 {\n    x.y + foo_x::y() + self::x::y()\n}\n",
@@ -1326,7 +1323,7 @@ fn rust_conversion_keeps_unbound_receivers_values() {
         ),
         (
             "fn f() -> usize {\n    r#type.len()\n}\n",
-            "fn f() -> usize {\n    (r#type).len()\n}\n",
+            "fn f() -> usize {\n    r#type.len()\n}\n",
         ),
         (
             "m! {\n    fn f(o: Option<S>) -> u8 {\n        o.map(|state| state.x)\n    }\n\n    fn g(s: S) -> u8 {\n        s.x\n    }\n}\n",
@@ -1479,19 +1476,19 @@ fn rust_conversion_reads_receivers_after_multi_line_literals_and_comments() {
     for (source, expected) in [
         (
             "fn f() -> u8 {\n    let s = \"\n    z::y\"; z.y\n}\n",
-            "fn f() -> u8 {\n    let s = \"\n    z::y\"; (z).y\n}\n",
+            "fn f() -> u8 {\n    let s = \"\n    z::y\"; z.y\n}\n",
         ),
         (
             "fn f() -> u8 {\n    let s = \"a\n    \"; z.y\n}\n",
-            "fn f() -> u8 {\n    let s = \"a\n    \"; (z).y\n}\n",
+            "fn f() -> u8 {\n    let s = \"a\n    \"; z.y\n}\n",
         ),
         (
             "fn f() -> u8 {\n    /* a\n    \" */ z.y\n}\n",
-            "fn f() -> u8 {\n    /* a\n    \" */ (z).y\n}\n",
+            "fn f() -> u8 {\n    /* a\n    \" */ z.y\n}\n",
         ),
         (
             "fn f() -> u8 {\n    let s = r#\"a\n    \" z.y\"#; z.y\n}\n",
-            "fn f() -> u8 {\n    let s = r#\"a\n    \" z.y\"#; (z).y\n}\n",
+            "fn f() -> u8 {\n    let s = r#\"a\n    \" z.y\"#; z.y\n}\n",
         ),
         (
             "fn f() -> usize {\n    let s = \"a\n    z.y\"; s.len()\n}\n",
@@ -1501,6 +1498,18 @@ fn rust_conversion_reads_receivers_after_multi_line_literals_and_comments() {
         let rusk = rust_to_rusk(source).unwrap();
         assert_eq!(rust(&rusk), expected, "{rusk}");
     }
+}
+
+#[test]
+fn rust_output_drops_parentheses_around_lone_path_receivers() {
+    // Calls, macro delimiters and bodies, groups of more than a path, and literals keep theirs.
+    let output = rust(
+        "fn f(x: &mut S, a: A) -> u8:\n    let p = (x).y + (A::B).c() + (T)[0] + (r#type).len() + (x)..2\n    let q = g(x).y + h!(x).y + (x)(1) + (x + 1).y + (a.b).c + [(x)][0] + h!((x).y)\n    let s = \"(x).y\" // (x).y\n    let t = &mut (x).y\n    if (x).y > 0:\n        return (x).y\n    0\n",
+    );
+    assert_eq!(
+        output,
+        "fn f(x: &mut S, a: A) -> u8 {\n    let p = x.y + A::B.c() + T[0] + r#type.len() + x..2;\n    let q = g(x).y + h!(x).y + (x)(1) + (x + 1).y + (a.b).c + [(x)][0] + h!((x).y);\n    let s = \"(x).y\"; // (x).y\n    let t = &mut x.y;\n    if x.y > 0 {\n        return x.y;\n    }\n    0\n}\n"
+    );
 }
 
 #[test]

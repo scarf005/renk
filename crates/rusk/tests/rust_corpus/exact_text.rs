@@ -224,3 +224,15 @@ pub fn around(o: Option<u8>) -> Option<u8> {
     let v = keep![o.map(|s| s * 2)];
     v.map(|s| keep!(s + 1))
 }
+
+use std::cmp::Ordering;
+
+pub const TABLE: [&str; 2] = ["a", "bc"];
+
+pub fn lone_path_receivers(i: usize) -> u8 {
+    let row = TABLE[i].len() as u8;
+    let order = Ordering::Less.reverse() as u8;
+    let text = format!("{}", z.y);
+    dbg!(z.y);
+    row + order + z.y + text.len() as u8
+}
