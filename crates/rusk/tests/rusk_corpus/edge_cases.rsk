@@ -296,3 +296,16 @@ pub fn chain_closing_lines(c: bool):
         r
     }).sum[usize]()
     std.mem.drop(n)
+
+pub struct Z:
+    pub y: u8
+
+fn pass_on(a: u8) -> u8 = a
+
+pub fn tail_after_statement(z: Z) -> u8:
+    let _s = "a;
+    b"; z.y + 1
+
+pub fn tail_after_assignment(z: Z) -> u8:
+    let mut v = 0
+    v = pass_on(*&{ pass_on(v); z.y }); v // v;

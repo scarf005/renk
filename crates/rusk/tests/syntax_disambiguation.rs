@@ -1388,3 +1388,36 @@ fn rust_conversion_reads_patterns_over_several_header_lines() {
         assert_eq!(rust(&rusk), source, "{rusk}");
     }
 }
+
+#[test]
+fn tail_value_after_a_statement_on_its_line_keeps_no_semicolon() {
+    // The statement after a line's last `;` decides its `;`, past `;` in literals and groups.
+    for (source, expected) in [
+        (
+            "fn f(z: S) -> u8:\n    let s = 1; z.y\n",
+            "fn f(z: S) -> u8 {\n    let s = 1; z.y\n}\n",
+        ),
+        (
+            "fn f(z: S) -> usize:\n    let s = \"a;\n    b\"; z.len()\n",
+            "fn f(z: S) -> usize {\n    let s = \"a;\n    b\"; z.len()\n}\n",
+        ),
+        (
+            "fn f(z: S) -> u8:\n    z.x = g(|a| { h(a); a }); z.y // z;\n",
+            "fn f(z: S) -> u8 {\n    z.x = g(|a| { h(a); a }); z.y // z;\n}\n",
+        ),
+        (
+            "fn f(z: S) -> u8:\n    let s = 1; z.y;\n",
+            "fn f(z: S) -> u8 {\n    let s = 1; z.y;\n}\n",
+        ),
+        (
+            "fn f(z: S):\n    g(); let s = 1\n",
+            "fn f(z: S) {\n    g(); let s = 1;\n}\n",
+        ),
+        (
+            "fn f(z: S) -> u8:\n    let s = 1; z.y\n    s\n",
+            "fn f(z: S) -> u8 {\n    let s = 1; z.y;\n    s\n}\n",
+        ),
+    ] {
+        assert_eq!(rust(source), expected, "{source}");
+    }
+}
