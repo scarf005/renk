@@ -236,3 +236,28 @@ pub fn lone_path_receivers(i: usize) -> u8 {
     dbg!(z.y);
     row + order + z.y + text.len() as u8
 }
+
+pub fn value_match_plus(x: u8) -> u8 {
+    let n = match x {
+        0 => 1,
+        _ => 2,
+    } + 1;
+    n
+}
+
+pub fn value_if_times(c: bool) -> u8 {
+    let w = if c {
+        1 // 1 +
+    } else {
+        2
+    } * 2;
+    w
+}
+
+pub fn value_match_compare(x: u8) -> bool {
+    let b = match x {
+        0 => 1,
+        _ => 2,
+    } == 1;
+    b
+}

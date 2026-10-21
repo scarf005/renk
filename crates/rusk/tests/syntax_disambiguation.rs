@@ -1545,3 +1545,15 @@ fn one_line_else_of_a_match_arm_keeps_the_arm_comma() {
         "fn f(c: bool, o: Option<u8>) -> u8 {\n    let a = match o {\n        Some(x) => if c {\n            x\n        } else { 2 },\n        None => g(if c {\n            1\n        } else { 2 }, 3),\n    };\n    a\n}\n"
     );
 }
+
+#[test]
+fn rust_conversion_keeps_operators_after_value_blocks() {
+    for source in [
+        "fn f(x: u8) -> u8 {\n    let z = match x {\n        0 => 1,\n        _ => 2,\n    } + 1;\n    z\n}\n",
+        "fn f(c: bool) -> u8 {\n    let z = if c {\n        1\n    } else {\n        2\n    } * 2;\n    z\n}\n",
+        "fn f(x: u8) -> bool {\n    match x {\n        0 => 1,\n        _ => 2,\n    } == 1\n}\n",
+    ] {
+        let rusk = rust_to_rusk(source).unwrap();
+        assert_eq!(rust(&rusk), source, "{rusk}");
+    }
+}
