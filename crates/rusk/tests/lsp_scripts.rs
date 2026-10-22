@@ -42,19 +42,22 @@ fn read_message(reader: &mut impl BufRead) -> Option<Value> {
     serde_json::from_slice(&body).ok()
 }
 
-#[test]
-fn script_hover_comes_from_rust_analyzer_over_the_scripts_generated_rust() {
+const SCRIPT: &str = "#!/usr/bin/env -S rusk script\n---\n[package]\nedition = \"2024\"\n---\nlet name = String.from(\"a\")\nprintln!(\"{name}\")\n";
+
+/// Opens a script with the first text, sends the rest as edits right away, and hovers
+/// `String.from` in `SCRIPT`, which the last text must be. `None` without rust-analyzer.
+fn hover_after_edits(name: &str, texts: &[&str]) -> Option<Value> {
     if Command::new("rust-analyzer")
         .arg("--version")
         .output()
         .is_err()
     {
         eprintln!("skipped: rust-analyzer is not installed");
-        return;
+        return None;
     }
-    let dir = temp_dir("lsp-script");
+    let dir = temp_dir(name);
     let script = dir.join("tool.rsk");
-    let text = "#!/usr/bin/env -S rusk script\n---\n[package]\nedition = \"2024\"\n---\nlet name = String.from(\"a\")\nprintln!(\"{name}\")\n";
+    let text = texts.last().copied().unwrap();
     fs::write(&script, text).unwrap();
     let uri = format!("file://{}", script.display());
 
@@ -98,9 +101,18 @@ fn script_hover_comes_from_rust_analyzer_over_the_scripts_generated_rust() {
     send(
         &mut stdin,
         json!({"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {
-            "textDocument": {"uri": uri, "languageId": "rusk", "version": 1, "text": text},
+            "textDocument": {"uri": uri, "languageId": "rusk", "version": 1, "text": texts[0]},
         }}),
     );
+    for (version, text) in texts.iter().enumerate().skip(1) {
+        send(
+            &mut stdin,
+            json!({"jsonrpc": "2.0", "method": "textDocument/didChange", "params": {
+                "textDocument": {"uri": uri, "version": version + 1},
+                "contentChanges": [{"text": text}],
+            }}),
+        );
+    }
 
     // rust-analyzer answers hovers once it has loaded the script's generated cargo-script file.
     let column = "let name = String.from".len() - 2;
@@ -126,7 +138,23 @@ fn script_hover_comes_from_rust_analyzer_over_the_scripts_generated_rust() {
     let _ = server.kill();
     let _ = server.wait();
     let _ = fs::remove_dir_all(&dir);
+    Some(hover)
+}
 
+#[test]
+fn script_hover_comes_from_rust_analyzer_over_the_scripts_generated_rust() {
+    let Some(hover) = hover_after_edits("lsp-script", &[SCRIPT]) else {
+        return;
+    };
     assert!(hover["contents"].to_string().contains("fn from"), "{hover}");
     assert_eq!(hover["range"]["start"]["line"], 5, "{hover}");
+}
+
+#[test]
+fn script_edits_sent_while_rust_analyzer_starts_reach_it_in_order() {
+    let draft = SCRIPT.replace("String.from(\"a\")", "1");
+    let Some(hover) = hover_after_edits("lsp-script-edit", &[&draft, SCRIPT]) else {
+        return;
+    };
+    assert!(hover["contents"].to_string().contains("fn from"), "{hover}");
 }
