@@ -1920,7 +1920,8 @@ fn source_lines(source: &str) -> Result<Vec<SourceLine>, TranspileError> {
                 });
         let braced;
         let (without_comment, trimmed) = if closes_group_block {
-            braced = format!("{}}}{trimmed}", spaces(indent));
+            let leading = without_comment.len() - without_comment.trim_start().len();
+            braced = format!("{}}}{trimmed}", &without_comment[..leading]);
             (braced.as_str(), braced.trim())
         } else {
             (without_comment, trimmed)
