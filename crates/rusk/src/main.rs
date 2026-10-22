@@ -173,6 +173,7 @@ fn run_script(raw_args: Vec<String>) -> Result<i32, Box<dyn std::error::Error>> 
     let diagnostic = ScriptDiagnostic {
         rust_path: &rust_path,
         script: &script_path.display().to_string(),
+        package: script.named_package.then_some(script.package.as_str()),
         script_source: &source,
         rust: &script.rust,
         source_lines: &script.source_lines,
@@ -246,8 +247,21 @@ fn build_script(
                 .is_none()
                 .then(|| rust_path.with_extension("target")),
         )
+        .arg(if diagnostic.styled {
+            "--color=always"
+        } else {
+            "--color=never"
+        })
         .stdout(process::Stdio::piped())
+        .stderr(process::Stdio::piped())
         .spawn()?;
+    // Cargo's stderr is read apart from its stdout so a full pipe cannot stall either.
+    let mut stderr = cargo.stderr.take().ok_or("cargo has no stderr")?;
+    let stderr = std::thread::spawn(move || {
+        let mut text = String::new();
+        let _ = stderr.read_to_string(&mut text);
+        text
+    });
     let mut executable = None;
     // Cargo replays the warnings of a fresh package on every build, so a package's warnings wait
     // for its artifact and print only when it was compiled, or before its first error.
@@ -289,6 +303,17 @@ fn build_script(
         eprint!("{rendered}");
     }
     let status = cargo.wait()?;
+    // Cargo names the package rusk generated, which the user never wrote.
+    let mut summary = stderr.join().unwrap_or_default();
+    if let Some(package) = diagnostic.package {
+        summary = summary
+            .replace(
+                &format!("`{package}` (bin \"{package}\")"),
+                &format!("`{}`", diagnostic.script),
+            )
+            .replace(&format!("`{package}`"), &format!("`{}`", diagnostic.script));
+    }
+    eprint!("{summary}");
     if !status.success() {
         return Ok(Err(status.code().unwrap_or(1)));
     }
@@ -301,6 +326,8 @@ fn build_script(
 struct ScriptDiagnostic<'a> {
     rust_path: &'a Path,
     script: &'a str,
+    /// The package name rusk generated for the script, which cargo's own messages show.
+    package: Option<&'a str>,
     script_source: &'a str,
     rust: &'a str,
     /// The script line of each 1-based Rust line and whether rusk synthesized it.
@@ -858,7 +885,7 @@ fn source_syntax(path: Option<&Path>) -> SourceSyntax {
 
 fn print_help() {
     println!(
-        "rusk - indentation-based Rust syntax transpiler\n\nUSAGE:\n    rusk [transpile] [INPUT.rsk] [-o OUTPUT.rs] [--source-map SOURCE_MAP]\n    rusk from-rust [INPUT.rs] [-o OUTPUT.rsk] [--aggressive]\n    rusk fmt [INPUT.rsk] [-o INPUT] [--line-width N]\n    rusk [cargo] <CARGO_COMMAND> [CARGO_ARGS...]\n    rusk script [--cargo] <SCRIPT.rsk> [ARGS...]\n\nScripts keep their cargo-script frontmatter (defaulting package.edition to 2024), are transpiled to $XDG_CACHE_HOME/rusk/scripts, built with cargo +nightly -Zscript in the shared $XDG_CACHE_HOME/rusk/build (scripts that set package.name build apart), and run with RUSK_SCRIPT set to the script path; scripts without a top-level fn main run their lines in a fn main returning Result (anyhow::Result and the like when the script depends on anyhow, eyre, or color-eyre), so they can use ?; compiler diagnostics point at script lines; use #!/usr/bin/env -S rusk script as the shebang. Scripts exec the binary cached next to the generated Rust, building it with cargo only when the Rust changed, so dependency and toolchain updates need an edit to the script or --cargo, which builds through cargo's resolution and freshness checks on every run.\n\nCargo wrapper commands transpile Cargo source roots (*.rsk under src, examples, tests, benches, plus build.rsk) to cached generated .rs files, then run cargo.\n\nExamples:\n    rusk from-rust src/main.rs -o src/main.rsk\n    rusk fmt src/main.rsk -o src/main.rsk\n    rusk run\n    rusk cargo fmt\n    rusk cargo test\n\nIf INPUT is omitted, rusk reads source from stdin when stdin is piped; otherwise it prints this help."
+        "rusk - indentation-based Rust syntax transpiler\n\nUSAGE:\n    rusk [transpile] [INPUT.rsk] [-o OUTPUT.rs] [--source-map SOURCE_MAP]\n    rusk from-rust [INPUT.rs] [-o OUTPUT.rsk] [--aggressive]\n    rusk fmt [INPUT.rsk] [-o INPUT] [--line-width N]\n    rusk [cargo] <CARGO_COMMAND> [CARGO_ARGS...]\n    rusk script [--cargo] <SCRIPT.rsk> [ARGS...]\n\nScripts keep their cargo-script frontmatter (defaulting package.edition to 2024), are transpiled to $XDG_CACHE_HOME/rusk/scripts, built with cargo +nightly -Zscript in the shared $XDG_CACHE_HOME/rusk/build (scripts that set package.name build apart), and run with RUSK_SCRIPT set to the script path; scripts without a top-level fn main run their lines in a fn main returning Result (anyhow::Result and the like when the script depends on anyhow, eyre, or color-eyre), so they can use ?; compiler diagnostics point at script lines and cargo's failure summary names the script; use #!/usr/bin/env -S rusk script as the shebang. Scripts exec the binary cached next to the generated Rust, building it with cargo only when the Rust changed, so dependency and toolchain updates need an edit to the script or --cargo, which builds through cargo's resolution and freshness checks on every run.\n\nCargo wrapper commands transpile Cargo source roots (*.rsk under src, examples, tests, benches, plus build.rsk) to cached generated .rs files, then run cargo.\n\nExamples:\n    rusk from-rust src/main.rs -o src/main.rsk\n    rusk fmt src/main.rsk -o src/main.rsk\n    rusk run\n    rusk cargo fmt\n    rusk cargo test\n\nIf INPUT is omitted, rusk reads source from stdin when stdin is piped; otherwise it prints this help."
     );
 }
 
