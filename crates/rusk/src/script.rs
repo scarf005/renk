@@ -301,6 +301,18 @@ mod tests {
     }
 
     #[test]
+    fn script_rust_maps_the_main_wrapper_lines_inside_the_script() {
+        let source = "#!/usr/bin/env -S rusk script\nlet x = 1\nprintln!(\"{x}\")\n";
+        let script = script_rust(source, SourceSyntax::Rusk, "tool").unwrap();
+        assert!(script.rust.contains("Ok(())"), "{}", script.rust);
+        assert!(
+            script.source_lines.iter().all(|&(line, _)| (1..=3).contains(&line)),
+            "{:?}",
+            script.source_lines
+        );
+    }
+
+    #[test]
     fn script_rust_treats_inner_attributes_and_later_dashes_as_body() {
         let source = "#![allow(unused)]\nfn main():\n    let s = \"\n---\n\"\n    print!(\"{s}\")\n";
 
