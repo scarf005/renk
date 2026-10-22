@@ -907,6 +907,39 @@ mod tests {
     }
 
     #[test]
+    fn script_top_level_main_returns_the_result_of_the_error_crate_it_depends_on() {
+        let main = |dependencies: &str| {
+            let source = format!("---\n[dependencies]\n{dependencies}---\nanyhow::bail!(\"no\")\n");
+            let rust = script_rust(&source, SourceSyntax::Rusk, "tool")
+                .unwrap()
+                .rust;
+            rust.lines()
+                .find(|line| line.starts_with("fn main()"))
+                .unwrap()
+                .to_string()
+        };
+
+        assert_eq!(main("anyhow = \"1\"\n"), "fn main() -> anyhow::Result<()> {");
+        assert_eq!(main("eyre = \"0.6\"\n"), "fn main() -> eyre::Result<()> {");
+        assert_eq!(
+            main("color-eyre = \"0.6\"\n"),
+            "fn main() -> color_eyre::Result<()> {"
+        );
+        assert_eq!(
+            main("oops = { package = \"anyhow\", version = \"1\" }\n"),
+            "fn main() -> oops::Result<()> {"
+        );
+        assert_eq!(
+            main("anyhow-ext = \"1\"\nregex = \"1\"\n"),
+            "fn main() -> Result<(), Box<dyn std::error::Error>> {"
+        );
+        assert_eq!(
+            main("[dev-dependencies]\nanyhow = \"1\"\n"),
+            "fn main() -> Result<(), Box<dyn std::error::Error>> {"
+        );
+    }
+
+    #[test]
     fn script_rust_treats_inner_attributes_and_later_dashes_as_body() {
         let source = "#![allow(unused)]\nfn main():\n    let s = \"\n---\n\"\n    print!(\"{s}\")\n";
 
