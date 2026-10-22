@@ -54,19 +54,19 @@ rusk from-rust input.rs -o output.rsk
 cat input.rsk | rusk
 ```
 
-See [Getting started](https://scarf005.github.io/rusk/getting-started.html) for more commands and the [syntax](https://scarf005.github.io/rusk/syntax/index.html).
+[Getting started](https://scarf005.github.io/rusk/getting-started.html) lists the commands. [Syntax](https://scarf005.github.io/rusk/syntax/index.html) describes the language.
 
 ## Formatter
 
-`rusk fmt` trims trailing whitespace and validates indentation without reflowing. The only option is `--line-width`.
+`rusk fmt` checks that the file parses and trims trailing whitespace. It does not reflow expressions.
 
 ```sh
-rusk fmt src/main.rsk -o src/main.rsk --line-width 100
+rusk fmt src/main.rsk -o src/main.rsk
 ```
 
 ## Cargo wrapper
 
-`rusk run`, `rusk check`, and `rusk cargo ...` transpile `.rsk` files under Cargo source roots into `.rs` files, then run Cargo. [Details](https://scarf005.github.io/rusk/tools.html#cargo-wrapper).
+`rusk build`, `rusk run`, `rusk test`, and `rusk cargo ...` transpile `.rsk` files under Cargo source roots into `.rs` files, then run Cargo. [Details](https://scarf005.github.io/rusk/cargo.html).
 
 ```sh
 rusk cargo test
@@ -74,7 +74,7 @@ rusk cargo test
 
 ## Scripts
 
-`rusk script` builds and runs a single-file script with `cargo +nightly -Zscript`. Dependencies go in `---` frontmatter, and `rusk add` edits it. [Details](https://scarf005.github.io/rusk/tools.html#scripts).
+`rusk script` builds and runs a single-file script with `cargo +nightly -Zscript`. Dependencies go in `---` frontmatter, and `rusk add` edits it. [Details](https://scarf005.github.io/rusk/scripts.html).
 
 ```rsk
 #!/usr/bin/env -S rusk script
@@ -94,7 +94,7 @@ rusk add tool.rsk regex
 
 ## Language server
 
-`rusk-lsp` is a stdio language server. It reports diagnostics and symbols for `.rsk` files and proxies `rust-analyzer` through the generated Rust. [Details](https://scarf005.github.io/rusk/tools.html#language-server).
+`rusk-lsp` is a stdio language server. It reports syntax errors and symbols for `.rsk` files and forwards hover, definition, and completion to `rust-analyzer` on the generated Rust. [Editor setup](https://scarf005.github.io/rusk/editors.html).
 
 ## Web runner
 
