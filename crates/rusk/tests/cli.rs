@@ -47,6 +47,20 @@ fn transpiles_stdin_to_stdout() {
     let _ = fs::remove_dir_all(dir);
 }
 
+#[test]
+fn transpiles_a_script_as_rusk_script_builds_it() {
+    let dir = temp_dir("script");
+    let script = "#!/usr/bin/env -S rusk script\n---\n[dependencies]\nregex = \"1\"\n---\nprintln!(\"hi\")\n";
+    fs::write(dir.join("tool.rsk"), script).unwrap();
+    let output = rusk(&["tool.rsk"], "", &dir);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
+    let rust = text(&output.stdout);
+    assert!(rust.starts_with("---\n[dependencies]\nregex = \"1\"\n"), "{rust}");
+    assert!(!rust.contains("#!"), "{rust}");
+    assert!(rust.contains("fn main() -> Result<(), Box<dyn std::error::Error>> {"), "{rust}");
+    let _ = fs::remove_dir_all(dir);
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn transpiles_when_the_process_limit_refuses_threads() {
