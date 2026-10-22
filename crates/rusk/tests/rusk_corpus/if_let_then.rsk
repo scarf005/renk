@@ -1,0 +1,32 @@
+pub fn tail(x: Option[Vec[u8]]) -> usize:
+    if let Some(v) = x then v.len() else 0
+
+pub fn tail_after_let(x: Option[Vec[u8]]) -> usize:
+    let n = 1
+    if let Some(v) = x then v.len() + n else n
+
+pub fn tail_with_comment(x: Option[Vec[u8]]) -> usize:
+    if let Some(v) = x then v.len() else 0 // a = b
+
+pub fn nested_tail(x: Option[Option[u8]]) -> u8:
+    if let Some(Some(V)) = x then V else 0
+
+pub fn assigned(x: Option[Vec[u8]]) -> usize:
+    let mut n = 0
+    n = if let Some(v) = x then v.len() else 0
+    n
+
+pub fn statement(x: Option[Vec[u8]]):
+    if let Some(v) = x then v.len() else 0;
+    println!("done")
+
+pub fn arm(x: Result[Option[u8], u8]) -> u8:
+    match x:
+        Ok(o) => if let Some(v) = o then v else 0
+        Err(e) => e
+
+pub fn closure(xs: Vec[Option[u8]]) -> u32:
+    xs.iter().map(|o| if let Some(v) = o then *v as u32 else 0).sum()
+
+pub fn comparison(a: u8, b: u8) -> u8:
+    if a == b then 1 else 0

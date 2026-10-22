@@ -66,6 +66,7 @@ const RUSK_CORPUS: &[(&str, &str)] = &[
         include_str!("rusk_corpus/closing_lines.rsk"),
     ),
     ("headers", include_str!("rusk_corpus/headers.rsk")),
+    ("if_let_then", include_str!("rusk_corpus/if_let_then.rsk")),
 ];
 
 #[test]
