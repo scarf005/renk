@@ -41,6 +41,6 @@ pub fn main() {
 }
 ```
 
-Rusk is a syntax layer only: types, borrowing, macros, and crates are Rust's. Everything the
-transpiler does not rewrite passes through as Rust tokens, so Rust syntax is always available
-as an escape hatch.
+Rusk changes syntax only: types, borrowing, macros, and crates are Rust's. Whatever the
+transpiler does not rewrite passes through as Rust tokens. A Rust `{ ... }` block, a `::` path,
+or a `::<T>` turbofish is always accepted; the code inside a `{ ... }` block is still Rusk.

@@ -18,7 +18,9 @@ pub fn area(shape: &Shape) -> f64:
         Shape.Square(side) => side * side
 ```
 
-A Rust `{` block is still accepted, for example to keep a one-line body:
+A `:` block may also keep Rust's opening brace, as in `fn main() {` or `fn main() {:`
+followed by indented lines; no closing `}` is needed. A Rust `{` block is still accepted, for
+example to keep a one-line body:
 
 ```rsk
 pub fn main():
@@ -77,7 +79,8 @@ pub fn check(a: bool, b: bool) -> bool:
 ```
 
 A bound that rustfmt continues on a deeper line, as in `Self::Item:` / `    Clone + Default:`,
-ends the header on that deeper line.
+ends the header on that deeper line. A `where` clause of an item without a body ends at its
+last bound.
 
 ## Groups
 

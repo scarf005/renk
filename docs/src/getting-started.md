@@ -10,13 +10,19 @@ cargo install --path crates/rusk --bin rusk --bin rusk-lsp
 
 ```sh
 rusk input.rsk -o output.rs                     # Rusk to Rust
-rusk transpile input.rsk --source-map out.json  # with a JSON source map
+rusk transpile input.rsk --source-map out.json  # with a hierarchical JSON source map
 rusk from-rust input.rs -o output.rsk           # Rust to Rusk
 rusk from-rust input.rs -o output.rsk --aggressive
 rusk fmt input.rsk -o input.rsk --line-width 100
 cat input.rsk | rusk                            # stdin to stdout
 rusk run                                        # cargo run on a Rusk crate
+rusk check                                      # cargo check
+rusk cargo test                                 # any cargo command
 rusk script tool.rsk arg                        # single-file script
+rusk script --cargo tool.rsk arg                # rebuild through cargo
+rusk add tool.rsk regex                         # add a script dependency
+rusk-lsp                                        # language server on stdio
+just web                                        # web editor dev server
 ```
 
 Without `-o`, output goes to stdout.

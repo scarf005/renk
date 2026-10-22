@@ -10,7 +10,8 @@ pub fn clamp(total: i32) -> i32 = if total < 0 then 0 else total
 
 An `if` that opens blocks can stand where a value goes, as in `let x = if c:`, `x += if c:`,
 `return if c:`, `max(if c:`, or `.map(|x| if c:`, with `else if d:` and `else:` lines at the
-`if`'s indent. A `match` can stand there too, as in `[match x:`.
+`if`'s indent. A `match` can stand there too, as in `let x = match y:`, `.filter(|v| match v:`,
+or `[match x:`; so can `else` branches after `f(if c {`.
 
 ```rsk
 pub fn sign(value: i32) -> i32:
@@ -45,7 +46,8 @@ pub fn first(values: &[i32]) -> i32:
 
 ## Closures
 
-A closure head can open a block. A block whose head leaves `(` or `[` open ends with a line
+A closure head can open a block, as in `let f = |n: u8| -> String:`, `move ||:`, or
+`xs.sort_by(|a, b|:`. A block whose head leaves `(` or `[` open ends with a line
 at the head's indent that closes them, and the rest of that line continues the expression:
 
 ```rsk
@@ -61,8 +63,10 @@ pub fn total(values: &[i32]) -> i32:
     ).sum()
 ```
 
-A `{` head closes the same way with `})`. A last `else` on one line ends the chain with what
-closes the group, as in `else { floor })`:
+A `{` head closes the same way with `})`. A closing line such as `})?` or `}).method()` keeps
+its suffix after a `{` block, a trailing `match` head, or the last `else` of a chain whose head
+ends with `{`. A last `else` on one line ends the chain with what closes the group, as in
+`else { floor })`:
 
 ```rsk
 pub fn raised(values: &[i32], floor: i32) -> i32:
@@ -85,7 +89,7 @@ pub fn size(value: Option[usize]) -> usize:
 ## Match arms
 
 A match arm body that opens a block owns the indented lines after it, as in
-`Some(x) => match x:` or `Ok(v) => unsafe:`.
+`Some(x) => match x:`, `Ok(v) => unsafe:`, or `None => Ok(unsafe:`.
 
 ```rsk
 pub fn describe(value: Option[i32]) -> &'static str:

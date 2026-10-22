@@ -1,6 +1,6 @@
 # Limits
 
-Rusk is a syntax front end, not a Rust replacement. It reads text, not types, so:
+Rusk is a syntax front end. It reads text, not types, so:
 
 - `a.b` is decided by name binding, not by type. A misread name usually fails to compile; use
   `foo::new()` to force a path, or `(Unit).method()` to force a value receiver.

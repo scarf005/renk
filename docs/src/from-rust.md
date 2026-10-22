@@ -10,7 +10,12 @@ rusk from-rust src/lib.rs -o src/lib.rsk --aggressive
 The output uses dotted paths, `[T]` generics, `fn f() -> T = expr`, inferred `;`, and
 `if c then a else b` only where the result transpiles back to the same Rust tokens. Format
 arguments that each fill one placeholder in order are inlined: `format!("{}", cli.url)` becomes
-`format!("{cli.url}")`. Explicit `::` paths and other turbofish calls are kept.
+`format!("{cli.url}")`. `::` paths become dotted paths where that reads back the same:
+`std::env::args()` becomes `std.env.args()`, while `Config::DEFAULT.len()` keeps its `::`. A
+turbofish call becomes `name[...](`, as in `s.parse[i32]()`, and a turbofish on a CamelCase path
+becomes `Name[...]`, as in `Vec[String].new()`; other turbofish stays Rust.
+Index-then-call receivers and path value receivers are parenthesized, as in `(handlers[i])()`
+and `(std.cmp.Ordering.Less).reverse()`.
 
 `--aggressive` also accepts rewrites that keep the Rust tokens but not their line layout, such
 as multi-line `if`/`else` value chains.

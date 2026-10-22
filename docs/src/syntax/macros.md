@@ -28,4 +28,4 @@ macro_rules! make_message:
 ```
 
 A multi-line `pattern =>:` arm keeps every indented body line. Other macro invocations and
-attribute payloads are opaque Rust tokens.
+the payloads of `#[...]` and `#![...]` attributes are opaque Rust tokens.
