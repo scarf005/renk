@@ -5213,14 +5213,16 @@ fn lower_format_invocation(arguments: &str, prefix: usize) -> Option<String> {
     let format_literal = arguments.get(prefix)?.trim();
     let (content_start, content_end) = format_literal_bounds(format_literal)?;
     let content = &format_literal[content_start..content_end];
-    let (lowered, expressions) = lower_format_string(content, false)?;
+    // A placeholder in a literal that is not raw writes its strings' quotes as `\"`.
+    let escaped = !format_literal[..content_start].contains('r');
+    let (lowered, expressions) = lower_format_string(content, false, escaped)?;
     if expressions.is_empty() {
         return None;
     }
     // Without explicit arguments, captures such as `{pos}` become arguments too, so
     // `"{QuotedChar(*ch)} {pos}"` keeps the argument order of `"{} {}", QuotedChar(*ch), pos`.
     let (content, expressions) = if arguments.len() == prefix + 1 {
-        lower_format_string(content, true)?
+        lower_format_string(content, true, escaped)?
     } else {
         (lowered, expressions)
     };
@@ -5257,7 +5259,11 @@ fn lower_format_invocation(arguments: &str, prefix: usize) -> Option<String> {
 
 /// Lowers `{expr}` placeholders to positional markers; plain identifiers other than `self` stay as
 /// Rust's captured or named arguments unless `captures` lowers them too.
-fn lower_format_string(content: &str, captures: bool) -> Option<(String, Vec<String>)> {
+fn lower_format_string(
+    content: &str,
+    captures: bool,
+    escaped: bool,
+) -> Option<(String, Vec<String>)> {
     let mut lowered = String::with_capacity(content.len());
     let mut expressions = Vec::new();
     let mut index = 0usize;
@@ -5269,8 +5275,7 @@ fn lower_format_string(content: &str, captures: bool) -> Option<(String, Vec<Str
                 index += 2;
                 continue;
             }
-            let close = find_format_placeholder_end(content, index + 1)?;
-            let body = &content[index + 1..close];
+            let (close, body) = read_format_placeholder(content, index + 1, escaped)?;
             let body = body.trim();
             let expression = split_format_specifier(body).0;
             if is_standard_format_placeholder(body)
@@ -5449,27 +5454,91 @@ fn split_format_specifier(body: &str) -> (&str, Option<&str>) {
     (body.trim(), None)
 }
 
-fn find_format_placeholder_end(text: &str, start: usize) -> Option<usize> {
+/// The `}` closing the placeholder opened before `start`.
+fn find_format_placeholder_end(text: &str, start: usize, escaped: bool) -> Option<usize> {
+    read_format_placeholder(text, start, escaped).map(|(end, _)| end)
+}
+
+/// The `}` closing the placeholder opened before `start`, and the placeholder's code. With
+/// `escaped`, the literal is not raw, so a string in the placeholder may be written with its
+/// escapes, as `\"-\"` in `"{v.join(\"-\")}"`, besides plain quotes, as in `"{v.join("-")}"`.
+fn read_format_placeholder(text: &str, start: usize, escaped: bool) -> Option<(usize, String)> {
+    #[derive(PartialEq)]
+    enum Mode {
+        Code,
+        Plain,
+        Escaped,
+    }
+    let mut mode = Mode::Code;
     let mut depth = 1usize;
+    let mut body = String::new();
     let mut index = start;
     while index < text.len() {
         let character = text[index..].chars().next()?;
-        match character {
-            '{' => depth += 1,
-            '}' => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(index);
-                }
+        let next = text[index + character.len_utf8()..].chars().next();
+        let escape = escaped && character == '\\';
+        match mode {
+            Mode::Code if escape && next == Some('"') => {
+                body.push('"');
+                mode = Mode::Escaped;
+                index += 2;
+                continue;
             }
-            '"' | '\'' => index = quoted_string_end(text, index),
-            _ => {}
+            Mode::Code => match character {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some((index, body));
+                    }
+                }
+                '"' => mode = Mode::Plain,
+                '\'' => {
+                    let end = quoted_string_end(text, index);
+                    body.push_str(text.get(index..=end)?);
+                    index = end + 1;
+                    continue;
+                }
+                _ => {}
+            },
+            Mode::Plain if character == '\\' => {
+                body.push(character);
+                body.extend(next);
+                index += 1 + next.map_or(0, char::len_utf8);
+                continue;
+            }
+            Mode::Plain if character == '"' => mode = Mode::Code,
+            Mode::Escaped if escape && next == Some('"') => {
+                body.push('"');
+                mode = Mode::Code;
+                index += 2;
+                continue;
+            }
+            // `\\` is the escape of the string's own escape, as in `\"\\n\"` for `"\n"`, and
+            // takes the unit after it.
+            Mode::Escaped if escape && next == Some('\\') => {
+                body.push('\\');
+                index += 2;
+                let unit = text[index..].chars().next()?;
+                match text[index + unit.len_utf8()..].chars().next() {
+                    Some(quoted @ ('"' | '\\')) if unit == '\\' => {
+                        body.push(quoted);
+                        index += 2;
+                    }
+                    _ => {
+                        body.push(unit);
+                        index += unit.len_utf8();
+                    }
+                }
+                continue;
+            }
+            Mode::Plain | Mode::Escaped => {}
         }
+        body.push(character);
         index += character.len_utf8();
     }
     None
 }
-
 fn format_literal_bounds(text: &str) -> Option<(usize, usize)> {
     let quote = text.find('"')?;
     if text[..quote]
@@ -5478,42 +5547,31 @@ fn format_literal_bounds(text: &str) -> Option<(usize, usize)> {
     {
         return None;
     }
-    let raw_hashes = text[..quote]
-        .chars()
-        .filter(|character| *character == '#')
-        .count();
-    let end = if raw_hashes > 0 {
-        let closing = format!("\"{}", "#".repeat(raw_hashes));
-        text[quote + 1..].find(&closing)? + quote + 1
+    // A raw literal ends at its first `"` with as many `#`s as it opened with.
+    let (end, closing) = if text[..quote].contains('r') {
+        let closing = format!("\"{}", "#".repeat(text[..quote].matches('#').count()));
+        (text[quote + 1..].find(&closing)? + quote + 1, closing.len())
     } else {
-        format_string_end(text, quote)?
+        (format_string_end(text, quote)?, 1)
     };
-    if !text[end + 1..].trim().is_empty() {
+    if !text[end + closing..].trim().is_empty() {
         return None;
     }
     Some((quote + 1, end))
 }
 
 fn format_string_end(text: &str, start: usize) -> Option<usize> {
-    let mut placeholder_depth = 0usize;
     let mut escaped = false;
     let mut index = start + 1;
     while index < text.len() {
         let character = text[index..].chars().next()?;
-        if placeholder_depth > 0 {
-            match character {
-                '"' | '\'' => index = quoted_string_end(text, index),
-                '{' => placeholder_depth += 1,
-                '}' => placeholder_depth -= 1,
-                _ => {}
-            }
-        } else if escaped {
+        if escaped {
             escaped = false;
         } else {
             match character {
                 '\\' => escaped = true,
                 '{' if text[index + 1..].starts_with('{') => index += 1,
-                '{' => placeholder_depth = 1,
+                '{' => index = find_format_placeholder_end(text, index + 1, true)?,
                 '"' => return Some(index),
                 '}' if text[index + 1..].starts_with('}') => index += 1,
                 _ => {}
@@ -6648,7 +6706,7 @@ fn format_placeholder_bindings(chars: &[char]) -> Vec<String> {
         };
         if chars[index] == '"' {
             let content = chars[index + 1..end].iter().collect::<String>();
-            for expression in lower_format_string(&content, true).map_or(Vec::new(), |(_, e)| e) {
+            for expression in lower_format_string(&content, true, true).map_or(Vec::new(), |(_, e)| e) {
                 names.extend(closure_parameter_bindings(
                     &expression.chars().collect::<Vec<_>>(),
                 ));
