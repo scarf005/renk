@@ -140,7 +140,7 @@ fn source_maps_point_inside_both_files() {
 }
 
 #[test]
-fn source_map_lines_carry_their_source_text() {
+fn source_tree_nodes_start_at_their_source_text() {
     for (path, source) in rusk_sources() {
         let output = transpile(&source).unwrap();
         let lines = source.lines().collect::<Vec<_>>();
@@ -148,11 +148,13 @@ fn source_map_lines_carry_their_source_text() {
         while let Some(node) = stack.pop() {
             let line = lines[node.source_line - 1];
             let text = node.source_text.lines().next().unwrap_or_default().trim();
+            let at = line.chars().skip(node.source_indent).collect::<String>();
             assert!(
-                !text.is_empty() && line.contains(text),
-                "{} line {}: {line:?} does not contain {text:?}",
+                !text.is_empty() && at.starts_with(text),
+                "{} line {}: {line:?} does not have {text:?} at column {}",
                 path.display(),
-                node.source_line
+                node.source_line,
+                node.source_indent
             );
             stack.extend(&node.children);
         }
