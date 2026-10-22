@@ -1605,6 +1605,23 @@ mod tests {
         assert_eq!(error.line, 2);
     }
 
+    #[test]
+    fn script_rust_analyzers_keep_the_editors_options_and_link_the_script() {
+        let path = Path::new("/cache/rusk/lsp/abc/tool.rs");
+        let options = script_initialization_options(
+            Some(serde_json::json!({"cargo": {"features": "all"}, "linkedProjects": ["x"]})),
+            path,
+        );
+        assert_eq!(
+            options,
+            serde_json::json!({"cargo": {"features": "all"}, "linkedProjects": [path]})
+        );
+        assert_eq!(
+            script_initialization_options(None, path),
+            serde_json::json!({"linkedProjects": [path]})
+        );
+    }
+
     #[tokio::test]
     async fn rust_analyzer_requests_get_answers_instead_of_resolving_our_requests() {
         let (mut server, client) = tokio::io::duplex(4096);
@@ -1612,10 +1629,19 @@ mod tests {
         let (ours, response) = oneshot::channel();
         pending.lock().await.insert(1, ours);
         let (replies, mut answered) = mpsc::unbounded_channel();
-        let reader = tokio::spawn(read_rust_analyzer_messages(client, pending, replies));
+        let config = serde_json::json!({"cargo": {"features": "all"}});
+        let reader = tokio::spawn(read_rust_analyzer_messages(
+            client,
+            pending,
+            replies,
+            config.clone(),
+        ));
 
         for message in [
-            serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "workspace/configuration", "params": {}}),
+            serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "workspace/configuration", "params": {
+                "items": [{"section": "rust-analyzer"}],
+            }}),
+            serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "client/registerCapability", "params": {}}),
             serde_json::json!({"jsonrpc": "2.0", "id": 1, "result": "hover"}),
         ] {
             write_lsp_message(&mut server, &message).await.unwrap();
@@ -1624,6 +1650,9 @@ mod tests {
         assert_eq!(response.await.unwrap(), "hover");
         let answer = answered.recv().await.unwrap();
         assert_eq!(answer["id"], 1);
+        assert_eq!(answer["result"], serde_json::json!([config]));
+        let answer = answered.recv().await.unwrap();
+        assert_eq!(answer["id"], 2);
         assert!(answer["result"].is_null());
         drop(server);
         reader.await.unwrap();
