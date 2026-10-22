@@ -149,7 +149,7 @@ The service binds to `127.0.0.1:8080` on the host for local use or a local Cloud
 
 ## Language Server
 
-`rusk-lsp` is a standard stdio Language Server Protocol server. It reports diagnostics and document symbols for `.rsk` files and proxies Rust features through generated Rust when `rust-analyzer` is available.
+`rusk-lsp` is a standard stdio Language Server Protocol server. It reports diagnostics and document symbols for `.rsk` files and proxies Rust features through generated Rust when `rust-analyzer` is available. A script, a `.rsk` file with a `#!` line or frontmatter or outside a Cargo package, transpiles as `rusk script` does and gets a `rust-analyzer` of its own over its generated cargo-script file in `$XDG_CACHE_HOME/rusk/lsp/`, so its frontmatter dependencies resolve.
 
 ```sh
 cargo install --path crates/rusk --bin rusk-lsp

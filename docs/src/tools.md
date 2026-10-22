@@ -61,7 +61,9 @@ fn main():
 
 `rusk-lsp` is a stdio Language Server Protocol server. It reports diagnostics and document
 symbols for `.rsk` files, and proxies Rust features through the generated Rust when
-`rust-analyzer` is available. A Zed extension lives in
+`rust-analyzer` is available. A script, a `.rsk` file with a `#!` line or frontmatter or
+outside a Cargo package, gets a `rust-analyzer` of its own over its generated cargo-script file,
+so its frontmatter dependencies resolve. A Zed extension lives in
 [`editors/zed`](https://github.com/scarf005/rusk/tree/main/editors/zed).
 
 ## Web runner

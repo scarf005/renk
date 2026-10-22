@@ -108,17 +108,12 @@ pub fn script_rust(
     };
     let (rust, body_lines) = if syntax == SourceSyntax::Rusk {
         let output = transpile(&body).map_err(error_line)?;
-        let lines = (1..=output.rust.lines().count())
-            .map(|line| {
-                let written = output
-                    .source_map
-                    .iter()
-                    .any(|entry| entry.generated_line == line);
-                let source = output.source_line(line).unwrap_or(line);
-                match script_line(source) {
-                    Some(source) => (source, !written),
-                    None => (source, true),
-                }
+        let lines = output
+            .line_origins()
+            .into_iter()
+            .map(|(source, synthesized)| match script_line(source) {
+                Some(source) => (source, synthesized),
+                None => (source, true),
             })
             .collect::<Vec<_>>();
         (output.rust, lines)
@@ -129,8 +124,12 @@ pub fn script_rust(
             .collect();
         (rust, lines)
     };
+    // A frontmatter rusk wrote for a script without one has no script lines.
     let source_lines = (0..frontmatter.lines().count())
-        .map(|offset| ((frontmatter_line + offset).min(body_start.max(1)), false))
+        .map(|offset| {
+            let line = (frontmatter_line + offset).min(body_start.max(1));
+            (line, parts.frontmatter.is_none())
+        })
         .chain(body_lines)
         .collect();
     Ok(ScriptRust {
@@ -203,6 +202,14 @@ pub fn script_package(rust_path: &Path) -> String {
     format!("{name}-{}", hash.to_string_lossy())
 }
 
+/// rusk's cache directory, `$XDG_CACHE_HOME/rusk` or `~/.cache/rusk`.
+pub fn cache_root() -> Option<PathBuf> {
+    std::env::var_os("XDG_CACHE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache")))
+        .map(|cache| cache.join("rusk"))
+}
+
 /// The generated Rust file of the script at `source_path` under `cache_root`.
 pub fn script_cache_path(cache_root: &Path, source_path: &Path) -> PathBuf {
     use std::hash::{DefaultHasher, Hash, Hasher};
@@ -236,6 +243,15 @@ pub fn script_column(script: &str, rust: &str, column: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn script_body_blanks_the_shebang_and_frontmatter_but_keeps_their_lines() {
+        let source = "#!/usr/bin/env -S rusk script\n---\n[package]\n---\nfn helper() = 1\n";
+        assert_eq!(script_body(source).unwrap(), "\n\n\n\nfn helper() = 1\n");
+        let output = transpile(&script_body(source).unwrap()).unwrap();
+        assert_eq!(output.source_tree[0].source_line, 5);
+        assert_eq!(script_body("let x = 1\n").unwrap(), "let x = 1\n");
+    }
 
     #[test]
     fn script_rust_keeps_frontmatter_first_and_drops_the_shebang() {

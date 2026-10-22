@@ -39,6 +39,20 @@ impl TranspileOutput {
             .map(|entry| entry.source_line)
             .or_else(|| deepest_source_line(&self.source_tree, generated_line))
     }
+
+    /// For each 1-based generated line, its source line and whether rusk synthesized it, like a
+    /// closing brace.
+    pub fn line_origins(&self) -> Vec<(usize, bool)> {
+        (1..=self.rust.lines().count())
+            .map(|line| {
+                let written = self
+                    .source_map
+                    .iter()
+                    .any(|entry| entry.generated_line == line);
+                (self.source_line(line).unwrap_or(line), !written)
+            })
+            .collect()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

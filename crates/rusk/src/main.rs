@@ -10,7 +10,7 @@ use rusk::{
     FormatOptions, SourceSyntax, TranspileError, format_source, rust_to_rusk,
     rust_to_rusk_aggressive,
     script::{
-        SCRIPT_EDITION, script_cache_path, script_column, script_package, script_parts,
+        SCRIPT_EDITION, cache_root, script_cache_path, script_column, script_package, script_parts,
         script_rust,
     },
     source_map_json, to_rust, transpile,
@@ -161,11 +161,7 @@ fn run_script(raw_args: Vec<String>) -> Result<i32, Box<dyn std::error::Error>> 
         return Err("script requires an input path".into());
     };
     let source = fs::read_to_string(&script_path)?;
-    let cache_root = env::var_os("XDG_CACHE_HOME")
-        .map(PathBuf::from)
-        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache")))
-        .ok_or("script requires XDG_CACHE_HOME or HOME")?
-        .join("rusk");
+    let cache_root = cache_root().ok_or("script requires XDG_CACHE_HOME or HOME")?;
     let source_path = fs::canonicalize(&script_path)?;
     let rust_path = script_cache_path(&cache_root.join("scripts"), &source_path);
     let script = script_rust(
