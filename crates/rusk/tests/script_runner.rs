@@ -160,6 +160,79 @@ fn script_failure_summary_names_the_script_not_the_generated_package() {
 }
 
 #[test]
+fn script_missing_crate_hint_points_at_rusk_add() {
+    let dir = temp_dir("script-missing-crate");
+    let script = dir.join("tool.rsk");
+    fs::write(&script, "let r = regex::Regex::new(\"a\")?\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_rusk"))
+        .args(["script", script.to_str().unwrap()])
+        .env("XDG_CACHE_HOME", dir.join("cache"))
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let hint = format!(
+        "if you wanted to use a crate named `regex`, add it with `rusk add {} regex`",
+        script.display()
+    );
+    assert!(stderr.contains(&hint), "{stderr}");
+    assert!(!stderr.contains("Cargo.toml"), "{stderr}");
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn add_writes_dependencies_into_the_script_frontmatter_and_keeps_the_rest() {
+    let dir = temp_dir("script-add");
+    fs::create_dir_all(dir.join("dep/src")).unwrap();
+    fs::write(
+        dir.join("dep/Cargo.toml"),
+        "[package]\nname = \"dep\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )
+    .unwrap();
+    fs::write(dir.join("dep/src/lib.rs"), "").unwrap();
+    let bare = dir.join("bare.rsk");
+    let framed = dir.join("framed.rsk");
+    let shebang = "#!/usr/bin/env -S rusk script\n";
+    let body = "\nfn main():\n    println!(\"hi\")\n";
+    fs::write(&bare, format!("{shebang}{body}")).unwrap();
+    fs::write(
+        &framed,
+        format!("{shebang}---\n[package]\nedition = \"2021\"\n---\n{body}"),
+    )
+    .unwrap();
+
+    for script in [&bare, &framed] {
+        let output = Command::new(env!("CARGO_BIN_EXE_rusk"))
+            .args(["add", script.to_str().unwrap(), "--offline", "--path"])
+            .arg(dir.join("dep"))
+            .env("XDG_CACHE_HOME", dir.join("cache"))
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let bare = fs::read_to_string(bare).unwrap();
+    let (head, rest) = bare.split_once("---\n").unwrap();
+    assert_eq!(head, shebang);
+    let (manifest, rest) = rest.split_once("---\n").unwrap();
+    assert!(manifest.starts_with("[dependencies]\ndep = "), "{manifest}");
+    assert!(!manifest.contains("edition"), "{manifest}");
+    assert_eq!(rest, body);
+
+    let framed = fs::read_to_string(framed).unwrap();
+    let kept = format!("{shebang}---\n[package]\nedition = \"2021\"\n");
+    assert!(framed.starts_with(&kept), "{framed}");
+    assert!(framed.contains("[dependencies]\ndep = "), "{framed}");
+    assert!(framed.ends_with(&format!("---\n{body}")), "{framed}");
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
 fn script_execs_the_cached_binary_and_rebuilds_after_edits_unless_told_to_run_cargo() {
     let dir = temp_dir("script-cached");
     let script = dir.join("greet.rsk");
