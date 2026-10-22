@@ -1,5 +1,5 @@
 use proptest::prelude::*;
-use rusk::{FormatOptions, format_source, rust_to_rusk, rust_to_rusk_aggressive, transpile};
+use rusk::{format_source, rust_to_rusk, rust_to_rusk_aggressive, transpile};
 
 const FRAGMENTS: &[&str] = &[
     "fn ",
@@ -106,7 +106,7 @@ proptest! {
     #[test]
     fn conversions_never_panic_on_token_soup(source in rusk_like()) {
         let _ = transpile(&source);
-        let _ = format_source(&source, FormatOptions::default());
+        let _ = format_source(&source);
         let _ = rust_to_rusk(&source);
         let _ = rust_to_rusk_aggressive(&source);
     }
@@ -114,7 +114,7 @@ proptest! {
     #[test]
     fn conversions_never_panic_on_arbitrary_text(source in any::<String>()) {
         let _ = transpile(&source);
-        let _ = format_source(&source, FormatOptions::default());
+        let _ = format_source(&source);
         let _ = rust_to_rusk(&source);
     }
 
@@ -134,10 +134,10 @@ proptest! {
     #[test]
     fn accepted_sources_keep_their_rust_after_formatting(source in rusk_like()) {
         if let Ok(output) = transpile(&source) {
-            let formatted = format_source(&source, FormatOptions::default());
+            let formatted = format_source(&source);
             prop_assert!(formatted.is_ok(), "fmt rejected a transpilable source {source:?}: {formatted:?}");
             let formatted = formatted.unwrap();
-            prop_assert_eq!(&format_source(&formatted, FormatOptions::default()).unwrap(), &formatted);
+            prop_assert_eq!(&format_source(&formatted).unwrap(), &formatted);
             prop_assert_eq!(transpile(&formatted).map(|o| o.rust), Ok(output.rust));
         }
     }
@@ -163,7 +163,7 @@ fn deep_nesting_converts_on_a_small_caller_stack() {
             for rust in [parens, closures] {
                 let rusk = rust_to_rusk(&rust).unwrap();
                 assert_eq!(transpile(&rusk).unwrap().rust, rust);
-                format_source(&rusk, FormatOptions::default()).unwrap();
+                format_source(&rusk).unwrap();
             }
         })
         .unwrap()

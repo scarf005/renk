@@ -118,7 +118,7 @@ fn writes_output_and_a_json_source_map() {
 fn reports_errors_on_stderr_with_exit_code_one() {
     let dir = temp_dir("errors");
     fs::write(dir.join("bad.rsk"), "fn main():\n\tx\n").unwrap();
-    let cases: [(&[&str], &str); 9] = [
+    let cases: [(&[&str], &str); 8] = [
         (&["bad.rsk"], "rusk: line 2: tabs are not supported"),
         (&["missing.rsk"], "rusk: "),
         (&["--bogus"], "rusk: unknown option: --bogus"),
@@ -127,10 +127,6 @@ fn reports_errors_on_stderr_with_exit_code_one() {
             "rusk: only one input path is supported",
         ),
         (&["bad.rsk", "-o"], "rusk: --output requires a path"),
-        (
-            &["fmt", "bad.rsk", "--line-width", "wide"],
-            "rusk: --line-width requires a number",
-        ),
         (
             &["fmt", "bad.rsk", "--source-map", "x.json"],
             "rusk: --source-map is not supported with fmt",
@@ -158,9 +154,6 @@ fn reports_errors_on_stderr_with_exit_code_one() {
             text(&output.stderr)
         );
     }
-    let output = rusk(&["fmt", "--line-width", "0"], "fn main() = ()\n", &dir);
-    assert_eq!(output.status.code(), Some(1));
-    assert!(text(&output.stderr).contains("line width must be greater than zero"));
     let _ = fs::remove_dir_all(dir);
 }
 

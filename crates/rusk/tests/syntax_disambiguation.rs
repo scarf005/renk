@@ -1,4 +1,4 @@
-use rusk::{FormatOptions, format_source, rust_to_rusk, transpile};
+use rusk::{format_source, rust_to_rusk, transpile};
 
 fn rust(source: &str) -> String {
     transpile(source).unwrap().rust
@@ -280,7 +280,7 @@ fn multiline_string_contents_survive_every_conversion() {
     let expected = format!("fn main() {{\n    let s = {literal};\n    println!(\"{{s}}\");\n}}\n");
 
     assert_eq!(rust(&rusk), expected);
-    assert_eq!(format_source(&rusk, FormatOptions::default()).unwrap(), rusk);
+    assert_eq!(format_source(&rusk).unwrap(), rusk);
     assert!(rust_to_rusk(&expected).unwrap().contains(literal));
 }
 
@@ -309,15 +309,15 @@ fn block_headers_without_a_body_emit_an_empty_block() {
 
 #[test]
 fn formatting_drops_trailing_blank_lines() {
-    let once = format_source("fn main():\n    f()\n\n    \n", FormatOptions::default()).unwrap();
+    let once = format_source("fn main():\n    f()\n\n    \n").unwrap();
     assert_eq!(once, "fn main():\n    f()\n");
-    assert_eq!(format_source(&once, FormatOptions::default()).unwrap(), once);
+    assert_eq!(format_source(&once).unwrap(), once);
 }
 
 #[test]
 fn raw_strings_stay_open_until_their_closing_hashes() {
     let source = "fn main():\n    let s = r#\"say \"\" \nhi\"#\n    print!(\"{s}\")\n";
-    assert_eq!(format_source(source, FormatOptions::default()).unwrap(), source);
+    assert_eq!(format_source(source).unwrap(), source);
     assert!(rust(source).contains("r#\"say \"\" \nhi\"#;"), "{}", rust(source));
 }
 
@@ -342,7 +342,7 @@ fn inline_function_bodies_can_open_a_block() {
     let block = "impl A:\n    fn f(x: i32) -> i32:\n        match x:\n            1 => 2\n            _ =>:\n                let y = x\n                y * 3\n";
     assert_eq!(rust(inline), rust(block));
     assert_eq!(
-        format_source(inline, FormatOptions::default()).unwrap(),
+        format_source(inline).unwrap(),
         inline
     );
 }

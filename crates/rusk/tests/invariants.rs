@@ -3,7 +3,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use rusk::{FormatOptions, SourceMapNode, format_source, rust_to_rusk, transpile};
+use rusk::{SourceMapNode, format_source, rust_to_rusk, transpile};
 
 fn sources(dirs: &[&str], extension: &str) -> Vec<(PathBuf, String)> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -39,8 +39,8 @@ fn line_count(text: &str) -> usize {
 #[test]
 fn formatting_is_idempotent_and_keeps_the_generated_rust() {
     for (path, source) in rusk_sources() {
-        let once = format_source(&source, FormatOptions::default()).unwrap();
-        let twice = format_source(&once, FormatOptions::default()).unwrap();
+        let once = format_source(&source).unwrap();
+        let twice = format_source(&once).unwrap();
         assert_eq!(once, twice, "{}", path.display());
         assert_eq!(
             transpile(&once).unwrap().rust,
@@ -240,7 +240,7 @@ fn malformed_sources_fail_at_the_offending_line() {
         let error = transpile(source).expect_err(source);
         assert_eq!(error.line, line, "{source:?}: {error}");
         assert!(!error.message.is_empty(), "{source:?}");
-        let formatted = format_source(source, FormatOptions::default()).expect_err(source);
+        let formatted = format_source(source).expect_err(source);
         assert_eq!(formatted, error, "fmt and transpile disagree on {source:?}");
     }
 }

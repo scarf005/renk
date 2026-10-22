@@ -55,17 +55,6 @@ impl TranspileOutput {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct FormatOptions {
-    pub line_width: usize,
-}
-
-impl Default for FormatOptions {
-    fn default() -> Self {
-        Self { line_width: 100 }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TranspileError {
     pub line: usize,
@@ -85,12 +74,12 @@ mod wasm_api {
     use wasm_bindgen::prelude::*;
 
     use super::{
-        FormatOptions, TranspileError, format_source, rust_to_rusk, source_map_json, transpile,
+        TranspileError, format_source, rust_to_rusk, source_map_json, transpile,
     };
 
     #[wasm_bindgen]
-    pub fn format_rusk(source: &str, line_width: usize) -> Result<String, JsValue> {
-        format_source(source, FormatOptions { line_width }).map_err(error_to_js_value)
+    pub fn format_rusk(source: &str) -> Result<String, JsValue> {
+        format_source(source).map_err(error_to_js_value)
     }
 
     #[wasm_bindgen]
@@ -240,18 +229,11 @@ fn transpile_lines(source: &str) -> Result<TranspileOutput, TranspileError> {
     })
 }
 
-pub fn format_source(source: &str, options: FormatOptions) -> Result<String, TranspileError> {
-    on_large_stack(|| format_lines(source, options))
+pub fn format_source(source: &str) -> Result<String, TranspileError> {
+    on_large_stack(|| format_lines(source))
 }
 
-fn format_lines(source: &str, options: FormatOptions) -> Result<String, TranspileError> {
-    if options.line_width == 0 {
-        return Err(TranspileError {
-            line: 1,
-            message: "line width must be greater than zero".to_string(),
-        });
-    }
-
+fn format_lines(source: &str) -> Result<String, TranspileError> {
     let lines = source_lines(source)?;
     parse_source_lines(&lines)?;
 
@@ -7885,11 +7867,11 @@ pub fn normalized_names(lines: Vec<String>) -> Vec<String> {
         let broken = "pub fn even_squares(values: Vec[i32]) -> Vec[i32] = values\n    .into_iter()\n    .filter(|value| value % 2 == 0)\n    .map(|value| value * value)\n    .collect[Vec[i32]]()\n";
 
         assert_eq!(
-            format_source(inline, FormatOptions { line_width: 80 }).unwrap(),
+            format_source(inline).unwrap(),
             inline
         );
         assert_eq!(
-            format_source(broken, FormatOptions { line_width: 80 }).unwrap(),
+            format_source(broken).unwrap(),
             broken
         );
     }
@@ -7992,7 +7974,6 @@ pub fn normalized_names(lines: Vec<String>) -> Vec<String> {
     fn format_rejects_unsupported_blocks() {
         let error = format_source(
             "fn main():\n    println!(\"first\")\n        println!(\"nested\")\n",
-            FormatOptions::default(),
         )
         .unwrap_err();
         assert_eq!(error.line, 2);

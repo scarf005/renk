@@ -246,7 +246,7 @@ export function App() {
     setTimeout(() => copied.value = false, 900)
   }
 
-  const formatInput = () => setSourceCode(format_rusk(sourceCode.value, 100))
+  const formatInput = () => setSourceCode(format_rusk(sourceCode.value))
 
   const runRust = async () => {
     if (converted.value.error || runState.value === "running") return

@@ -4,7 +4,7 @@
 
 `rusk fmt` checks that the file parses, trims trailing whitespace, empties whitespace-only
 lines, and ends the file with one newline. It does not reflow expressions or change
-indentation. `--line-width N` is accepted and has no effect on the output.
+indentation.
 
 ```sh
 rusk fmt src/main.rsk -o src/main.rsk

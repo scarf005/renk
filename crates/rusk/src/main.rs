@@ -7,7 +7,7 @@ use std::{
 };
 
 use rusk::{
-    FormatOptions, SourceSyntax, TranspileError, format_source, rust_to_rusk,
+    SourceSyntax, TranspileError, format_source, rust_to_rusk,
     rust_to_rusk_aggressive,
     script::{
         SCRIPT_EDITION, cache_root, script_cache_path, script_column, script_package, script_parts,
@@ -28,7 +28,6 @@ struct Args {
     format: bool,
     reverse: bool,
     aggressive: bool,
-    line_width: usize,
 }
 
 impl Default for Args {
@@ -40,7 +39,6 @@ impl Default for Args {
             format: false,
             reverse: false,
             aggressive: false,
-            line_width: FormatOptions::default().line_width,
         }
     }
 }
@@ -77,12 +75,7 @@ fn run(raw_args: Vec<String>) -> Result<i32, Box<dyn std::error::Error>> {
         if args.source_map.is_some() {
             return Err("--source-map is not supported with fmt".into());
         }
-        let formatted = format_source(
-            &source,
-            FormatOptions {
-                line_width: args.line_width,
-            },
-        )?;
+        let formatted = format_source(&source)?;
         if let Some(path) = args.output {
             fs::write(path, &formatted)?;
         } else {
@@ -775,15 +768,6 @@ fn parse_args(raw_args: Vec<String>) -> Result<Args, String> {
                 args.source_map = Some(PathBuf::from(value));
             }
             "--aggressive" => args.aggressive = true,
-            "--line-width" => {
-                index += 1;
-                let Some(value) = raw_args.get(index) else {
-                    return Err("--line-width requires a number".to_string());
-                };
-                args.line_width = value
-                    .parse()
-                    .map_err(|_| "--line-width requires a number".to_string())?;
-            }
             value if value.starts_with('-') => return Err(format!("unknown option: {value}")),
             value => {
                 if args.input.is_some() {
@@ -824,7 +808,7 @@ fn source_syntax(path: Option<&Path>) -> SourceSyntax {
 
 fn print_help() {
     println!(
-        "rusk - indentation-based Rust syntax transpiler\n\nUSAGE:\n    rusk [transpile] [INPUT.rsk] [-o OUTPUT.rs] [--source-map SOURCE_MAP]\n    rusk from-rust [INPUT.rs] [-o OUTPUT.rsk] [--aggressive]\n    rusk fmt [INPUT.rsk] [-o INPUT] [--line-width N]\n    rusk [cargo] <CARGO_COMMAND> [CARGO_ARGS...]\n    rusk script [--cargo] <SCRIPT.rsk> [ARGS...]\n    rusk add <SCRIPT.rsk> [CARGO_ADD_ARGS...]\n\nScripts keep their cargo-script frontmatter (defaulting package.edition to 2024), are transpiled to $XDG_CACHE_HOME/rusk/scripts, built with cargo +nightly -Zscript in the shared $XDG_CACHE_HOME/rusk/build (scripts that set package.name build apart), and run with RUSK_SCRIPT set to the script path; scripts without a top-level fn main run their lines in a fn main returning Result (anyhow::Result and the like when the script depends on anyhow, eyre, or color-eyre), so they can use ?; compiler diagnostics point at script lines and cargo's failure summary names the script; use #!/usr/bin/env -S rusk script as the shebang. Scripts exec the binary cached next to the generated Rust, building it with cargo only when the Rust changed, so dependency and toolchain updates need an edit to the script or --cargo, which builds through cargo's resolution and freshness checks on every run.\n\nrusk add runs cargo add on the script frontmatter (creating it when missing), so rusk add tool.rsk regex adds a dependency; it is the fix for a missing-crate error.\n\nCargo wrapper commands transpile Cargo source roots (*.rsk under src, examples, tests, benches, plus build.rsk) to cached generated .rs files, then run cargo.\n\nExamples:\n    rusk from-rust src/main.rs -o src/main.rsk\n    rusk fmt src/main.rsk -o src/main.rsk\n    rusk run\n    rusk cargo fmt\n    rusk cargo test\n\nIf INPUT is omitted, rusk reads source from stdin when stdin is piped; otherwise it prints this help."
+        "rusk - indentation-based Rust syntax transpiler\n\nUSAGE:\n    rusk [transpile] [INPUT.rsk] [-o OUTPUT.rs] [--source-map SOURCE_MAP]\n    rusk from-rust [INPUT.rs] [-o OUTPUT.rsk] [--aggressive]\n    rusk fmt [INPUT.rsk] [-o INPUT]\n    rusk [cargo] <CARGO_COMMAND> [CARGO_ARGS...]\n    rusk script [--cargo] <SCRIPT.rsk> [ARGS...]\n    rusk add <SCRIPT.rsk> [CARGO_ADD_ARGS...]\n\nScripts keep their cargo-script frontmatter (defaulting package.edition to 2024), are transpiled to $XDG_CACHE_HOME/rusk/scripts, built with cargo +nightly -Zscript in the shared $XDG_CACHE_HOME/rusk/build (scripts that set package.name build apart), and run with RUSK_SCRIPT set to the script path; scripts without a top-level fn main run their lines in a fn main returning Result (anyhow::Result and the like when the script depends on anyhow, eyre, or color-eyre), so they can use ?; compiler diagnostics point at script lines and cargo's failure summary names the script; use #!/usr/bin/env -S rusk script as the shebang. Scripts exec the binary cached next to the generated Rust, building it with cargo only when the Rust changed, so dependency and toolchain updates need an edit to the script or --cargo, which builds through cargo's resolution and freshness checks on every run.\n\nrusk add runs cargo add on the script frontmatter (creating it when missing), so rusk add tool.rsk regex adds a dependency; it is the fix for a missing-crate error.\n\nCargo wrapper commands transpile Cargo source roots (*.rsk under src, examples, tests, benches, plus build.rsk) to cached generated .rs files, then run cargo.\n\nExamples:\n    rusk from-rust src/main.rs -o src/main.rsk\n    rusk fmt src/main.rsk -o src/main.rsk\n    rusk run\n    rusk cargo fmt\n    rusk cargo test\n\nIf INPUT is omitted, rusk reads source from stdin when stdin is piped; otherwise it prints this help."
     );
 }
 
