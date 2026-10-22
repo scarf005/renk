@@ -3,9 +3,9 @@
 ## Indentation
 
 A line ending with `:` opens a block that holds the more indented lines after it. This works
-for `struct`, `enum`, `trait`, `impl`, `mod`, `macro_rules!`, `fn`, `if`, `else`, `match`,
-loops, `unsafe`, and `async`. Rusk writes the braces, the `,` after fields and arms, and the `;`
-after statements.
+for `struct`, `enum`, `union`, `trait`, `impl`, `mod`, `macro_rules!`, `fn`, `if`, `else`,
+`match`, `loop`, `while`, `for`, `unsafe`, and `async`. Rusk writes the braces, the `,` after
+fields and arms, and the `;` after statements.
 
 ```rsk
 pub enum Shape:
@@ -18,9 +18,15 @@ pub fn area(shape: &Shape) -> f64:
         Shape.Square(side) => side * side
 ```
 
-A `:` block may also keep Rust's opening brace, as in `fn main() {` or `fn main() {:`
-followed by indented lines; no closing `}` is needed. A Rust `{` block is still accepted, for
-example to keep a one-line body:
+Any number of spaces is one level, as long as a block's lines agree. Tabs are an error.
+
+`unsafe:`, `async:`, and `loop:` open a block as a statement or a match arm body. As a `let`
+value or a call argument they need Rust braces, as in `let task = async move { ... }`. An
+`extern` block also needs braces.
+
+A `:` block may keep Rust's opening brace, as in `fn main() {` or `fn main() {:` followed by
+indented lines; no closing `}` is needed. A Rust `{` block is accepted anywhere, for example to
+keep a one-line body:
 
 ```rsk
 pub fn main():
@@ -32,7 +38,7 @@ pub fn main():
 
 A statement ends at the end of its line. Rusk infers the `;` from the signature: a function
 returning a value keeps its last expression as the value, and a unit function ends it with
-`;`. Write `;` yourself only to discard a value inference keeps.
+`;`. Write `;` yourself only to discard a value that inference keeps.
 
 Tails selected by `#[cfg(...)]` are each a value. One that is not already a block becomes one,
 since Rust takes attributes only on statements and blocks:
@@ -86,7 +92,7 @@ last bound.
 
 A line ending with `(` or `[`, a struct literal or `use` tree ending with `{`, an unterminated
 string, or a trailing `=` continues until the group closes. The group's contents are Rust
-syntax, and `.method()` or `?` lines at the same indent after it extend the expression.
+syntax. `.method()` or `?` lines at the same indent after it extend the expression.
 
 ```rsk
 pub fn total(values: &[i32]) -> i32:

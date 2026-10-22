@@ -41,6 +41,6 @@ pub fn main() {
 }
 ```
 
-Rusk changes syntax only: types, borrowing, macros, and crates are Rust's. Whatever the
-transpiler does not rewrite passes through as Rust tokens. A Rust `{ ... }` block, a `::` path,
-or a `::<T>` turbofish is always accepted.
+Rusk changes syntax only. Types, borrowing, macros, and crates are Rust's, and tokens the
+transpiler does not rewrite pass through as Rust. A Rust `{ ... }` block, a `::` path, or a
+`::<T>` turbofish is always accepted.

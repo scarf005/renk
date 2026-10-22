@@ -1,31 +1,15 @@
 # Getting started
 
+## Install
+
 Install the CLI and the language server from a checkout:
 
 ```sh
 cargo install --path crates/rusk --bin rusk --bin rusk-lsp
 ```
 
-## Commands
-
-```sh
-rusk input.rsk -o output.rs                     # Rusk to Rust
-rusk transpile input.rsk --source-map out.json  # with a hierarchical JSON source map
-rusk from-rust input.rs -o output.rsk           # Rust to Rusk
-rusk from-rust input.rs -o output.rsk --aggressive
-rusk fmt input.rsk -o input.rsk --line-width 100
-cat input.rsk | rusk                            # stdin to stdout
-rusk run                                        # cargo run on a Rusk crate
-rusk check                                      # cargo check
-rusk cargo test                                 # any cargo command
-rusk script tool.rsk arg                        # single-file script
-rusk script --cargo tool.rsk arg                # rebuild through cargo
-rusk add tool.rsk regex                         # add a script dependency
-rusk-lsp                                        # language server on stdio
-just web                                        # web editor dev server
-```
-
-Without `-o`, output goes to stdout.
+[Scripts](scripts.md) also need a nightly toolchain (`rustup toolchain install nightly`). The
+[language server](editors.md) uses `rust-analyzer` from `PATH` when it is installed.
 
 ## A first program
 
@@ -48,3 +32,21 @@ Then run `rusk hello.rsk -o hello.rs && rustc --edition 2024 hello.rs && ./hello
 `3`.
 
 The [examples](https://github.com/scarf005/rusk/tree/main/examples) directory has more programs.
+
+## Commands
+
+```sh
+rusk input.rsk -o output.rs                     # Rusk to Rust
+rusk transpile input.rsk --source-map out.json  # also write a JSON source map
+cat input.rsk | rusk                            # stdin to stdout
+rusk from-rust input.rs -o output.rsk           # Rust to Rusk
+rusk fmt input.rsk -o input.rsk                 # format
+rusk run                                        # transpile a crate, then cargo run
+rusk cargo test                                 # any cargo command
+rusk script tool.rsk arg                        # run a single-file script
+rusk add tool.rsk regex                         # add a script dependency
+rusk-lsp                                        # language server on stdio
+```
+
+Without `-o`, output goes to stdout. Run without an input while stdin is a terminal, `rusk`
+prints its help.

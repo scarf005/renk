@@ -10,8 +10,8 @@ pub fn clamp(total: i32) -> i32 = if total < 0 then 0 else total
 
 An `if` that opens blocks can stand where a value goes, as in `let x = if c:`, `x += if c:`,
 `return if c:`, `max(if c:`, or `.map(|x| if c:`, with `else if d:` and `else:` lines at the
-`if`'s indent. A `match` can stand there too, as in `let x = match y:`, `.filter(|v| match v:`,
-or `[match x:`; so can `else` branches after `f(if c {`.
+`if`'s indent. So can a `match`, as in `let x = match y:`, `.filter(|v| match v:`, or
+`[match x:`, and `else:` branches after `f(if c {`.
 
 ```rsk
 pub fn sign(value: i32) -> i32:

@@ -23,10 +23,10 @@ as multi-line `if`/`else` value chains.
 Comments, string literals, and macro bodies are kept as written. Anything Rusk has no
 indentation form for, such as a `{` block holding a `match` scrutinee, stays Rust syntax.
 
-## Round-trip guarantee
+## Round-trip tests
 
-The repository tests the round trip `Rust -> Rusk -> Rust` against a corpus of Rust files and
-against pinned real crates. For each real crate, the round-tripped crate must compile, keep
+The repository tests the round trip `Rust -> Rusk -> Rust` on a corpus of Rust files and on
+pinned real crates. For each real crate, the round-tripped crate must compile, keep
 every comment, and produce the same MIR as the original after normalizing source locations,
 local and basic block numbering, and unit temporaries. MIR is compared with default features,
 with every feature, and for the unit tests, wherever the original builds that way.

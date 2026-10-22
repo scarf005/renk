@@ -22,7 +22,7 @@ After an explicit `::` path, a CamelCase last segment makes the following `.` a 
 `Config::DEFAULT.len()` keeps its value receiver.
 
 A `let env = load()` makes a later `env.len()` a method call. Parentheses keep a value receiver
-the rule misses, as in `(env).len()`. Unicode identifiers follow Rust's XID rules, e.g.
+the rule misses, as in `(env).len()`. Unicode identifiers follow Rust's XID rules, as in
 `목록.변환[Vec[i32]]()`.
 
 ## Generics
@@ -43,7 +43,7 @@ pub fn parse(raw: &str) -> Result[Boxed[i32], std.num.ParseIntError]:
 
 | Rusk | Rust |
 | --- | --- |
-| `iter.collect[Vec[i32]]()` | `iter.collect::<Vec<i32>>()` |
+| `values.iter().collect[Vec[i32]]()` | `values.iter().collect::<Vec<i32>>()` |
 | `size_of[T]()` | `size_of::<T>()` |
 | `serde_json::from_str[T](s)` | `serde_json::from_str::<T>(s)` |
 | `Vec[String].new()` | `Vec::<String>::new()` |
