@@ -1,0 +1,10 @@
+[book]
+title = "Rusk"
+authors = ["scarf"]
+language = "ko"
+src = "src"
+
+[output.html]
+additional-js = ["rusk-highlight.js"]
+git-repository-url = "https://github.com/scarf005/rusk"
+edit-url-template = "https://github.com/scarf005/rusk/edit/main/docs/ko/{path}"

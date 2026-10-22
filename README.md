@@ -4,7 +4,7 @@
 
 Rusk is an alternative syntax for [Rust](https://rust-lang.org) inspired by [Rust's Ugly Syntax](https://matklad.github.io/2023/01/26/rusts-ugly-syntax.html).
 
-Documentation: <https://scarf005.github.io/rusk/>
+Documentation: <https://scarf005.github.io/rusk/> ([한국어](https://scarf005.github.io/rusk/ko/))
 
 ## Example
 

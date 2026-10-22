@@ -1,5 +1,7 @@
 # Introduction
 
+[한국어](ko/index.html)
+
 Rusk is an indentation-based syntax for [Rust](https://rust-lang.org), inspired by
 [Rust's Ugly Syntax](https://matklad.github.io/2023/01/26/rusts-ugly-syntax.html). `rusk`
 transpiles `.rsk` files to Rust and converts Rust back to Rusk.

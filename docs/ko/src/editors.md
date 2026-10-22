@@ -1,0 +1,37 @@
+# 에디터 설정
+
+`rusk-lsp`는 `.rsk` 파일용 stdio Language Server Protocol 서버다.
+`cargo install --path crates/rusk --bin rusk-lsp`로 설치한다. 제공하는 기능은 다음과 같다:
+
+- Rusk 문법 오류 진단. 타입 오류는 `rusk check`나 `rusk script`에서 나온다.
+- 문서 심볼.
+- `PATH`에 `rust-analyzer`가 있으면, 생성된 Rust에 대한 `rust-analyzer`의 hover, 정의로 이동,
+  자동 완성.
+
+`#!` 줄이나 frontmatter가 있거나 Cargo 패키지 밖에 있는 `.rsk` 파일은 스크립트로 보고
+`rusk script`와 같은 방식으로 트랜스파일한다. 스크립트는 `$XDG_CACHE_HOME/rusk/lsp/`에 생성된
+cargo-script 파일을 대상으로 자기 전용 `rust-analyzer`를 띄우므로 frontmatter 의존성이 해석된다.
+
+## Zed
+
+[`editors/zed`](https://github.com/scarf005/rusk/tree/main/editors/zed)의 확장은 Rusk 언어를
+등록하고 `rusk-lsp`를 실행하며 Tree-sitter로 하이라이트한다. Zed 확장 페이지의
+**Install Dev Extension**에서 `editors/zed`를 선택해 설치한다.
+
+## Neovim
+
+Neovim 0.11 이상:
+
+```lua
+vim.filetype.add({ extension = { rsk = "rusk" } })
+vim.lsp.config("rusk", {
+  cmd = { "rusk-lsp" },
+  filetypes = { "rusk" },
+  root_markers = { "Cargo.toml", ".git" },
+})
+vim.lsp.enable("rusk")
+```
+
+## 다른 에디터
+
+`.rsk`로 끝나는 파일에 대해 인자 없는 `rusk-lsp` 명령을 stdio 언어 서버로 설정한다.
