@@ -4600,8 +4600,11 @@ fn extract_argument_inline_ifs(text: &str) -> (String, Vec<String>) {
             && chars[..index]
                 .iter()
                 .rfind(|character| !character.is_whitespace())
-                // A closure body, as in `.map(|x| if c then a else b)`, too.
-                .is_some_and(|character| matches!(character, '(' | '[' | ',' | '|'));
+                // A closure body, as in `.map(|x| if c then a else b)`, or an operand, as in
+                // `n + if c then a else b`, too.
+                .is_some_and(|character| {
+                    matches!(character, '(' | '[' | ',' | '|' | '+' | '-' | '*' | '/' | '%' | '&' | '^' | '!' | '<')
+                });
         if is_argument {
             let end = argument_end(&chars, index);
             let inline_if = chars[index..end].iter().collect::<String>();
