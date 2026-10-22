@@ -139,28 +139,25 @@ fn script_reports_transpile_errors_with_the_script_path_and_line() {
 }
 
 #[test]
-fn script_no_cargo_execs_the_cached_binary_and_rebuilds_after_edits() {
+fn script_execs_the_cached_binary_and_rebuilds_after_edits_unless_told_to_run_cargo() {
     let dir = temp_dir("script-no-cargo");
     let script = dir.join("greet.rsk");
     let body = |greeting: &str| {
         format!(
-            "#!/usr/bin/env -S rusk script --no-cargo\n---\n[package]\nedition = \"2024\"\n---\n\nfn main():\n    let args = std::env::args().skip(1).collect[Vec[String]]()\n    println!(\"{greeting} {{}}\", args.join(\"|\"))\n    println!(\"{{}}\", std::env::var(\"RUSK_SCRIPT\").unwrap())\n    std::process::exit(4)\n"
+            "#!/usr/bin/env -S rusk script\n---\n[package]\nedition = \"2024\"\n---\n\nfn main():\n    let args = std::env::args().skip(1).collect[Vec[String]]()\n    println!(\"{greeting} {{}}\", args.join(\"|\"))\n    println!(\"{{}}\", std::env::var(\"RUSK_SCRIPT\").unwrap())\n    std::process::exit(4)\n"
         )
     };
-    let run = |path: &str| {
+    let run_with = |flags: &[&str], path: &str| {
         Command::new(env!("CARGO_BIN_EXE_rusk"))
-            .args([
-                "script",
-                "--no-cargo",
-                script.to_str().unwrap(),
-                "a b",
-                "--flag",
-            ])
+            .arg("script")
+            .args(flags)
+            .args([script.to_str().unwrap(), "a b", "--flag"])
             .env("XDG_CACHE_HOME", dir.join("cache"))
             .env("PATH", path)
             .output()
             .unwrap()
     };
+    let run = |path: &str| run_with(&[], path);
     let expected = |greeting: &str| {
         format!(
             "{greeting} a b|--flag\n{}\n",
@@ -182,6 +179,11 @@ fn script_no_cargo_execs_the_cached_binary_and_rebuilds_after_edits() {
         );
         assert_eq!(output.status.code(), Some(4));
     }
+    assert_ne!(
+        run_with(&["--cargo"], no_cargo.to_str().unwrap()).status.code(),
+        Some(4)
+    );
+    assert_eq!(run_with(&["--cargo"], &path).status.code(), Some(4));
 
     fs::write(&script, body("bye")).unwrap();
     assert_ne!(run(no_cargo.to_str().unwrap()).status.code(), Some(4));
