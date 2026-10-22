@@ -6443,8 +6443,9 @@ fn node_bindings(text: &str, context: Context, has_block: bool) -> NodeBindings 
                     .extend(pattern_bindings(without_type(parameter)));
             }
         }
-        // The `let`s of a shorthand body, as in `fn f(x: T) -> U = if let Some(v) = x then`.
-        if let Some((_, body)) = split_function_body(text) {
+        // The `let`s of a one-line shorthand body, as in
+        // `fn f(x: T) -> U = if let Some(v) = x then`; a body opening a block binds them there.
+        if !has_block && let Some((_, body)) = split_function_body(text) {
             let body = body.chars().collect::<Vec<_>>();
             bindings.own.extend(let_pattern_bindings(&body, true));
         }
