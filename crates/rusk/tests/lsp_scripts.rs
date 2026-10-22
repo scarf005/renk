@@ -1,6 +1,9 @@
+#![cfg(unix)]
+
 use std::{
     env, fs,
     io::{BufRead, BufReader, Write},
+    os::unix::fs::PermissionsExt,
     path::PathBuf,
     process::{Command, Stdio},
     sync::mpsc,
@@ -9,6 +12,20 @@ use std::{
 };
 
 use serde_json::{Value, json};
+
+/// The rust-analyzer on `PATH`, or `None` after saying the test is skipped.
+fn rust_analyzer() -> Option<PathBuf> {
+    let found = env::split_paths(&env::var_os("PATH").unwrap_or_default())
+        .map(|dir| dir.join("rust-analyzer"))
+        .find(|path| {
+            fs::metadata(path)
+                .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+        });
+    if found.is_none() {
+        eprintln!("skipped: rust-analyzer is not installed");
+    }
+    found
+}
 
 fn temp_dir(name: &str) -> PathBuf {
     let path = env::temp_dir().join(format!("rusk-{name}-{}", std::process::id()));
@@ -45,23 +62,34 @@ fn read_message(reader: &mut impl BufRead) -> Option<Value> {
 const SCRIPT: &str = "#!/usr/bin/env -S rusk script\n---\n[package]\nedition = \"2024\"\n---\nlet name = String.from(\"a\")\nprintln!(\"{name}\")\n";
 
 /// Opens a script with the first text, sends the rest as edits right away, and hovers
-/// `String.from` in `SCRIPT`, which the last text must be. `None` without rust-analyzer.
+/// `String.from` in `SCRIPT`, which the last text must be. The first rust-analyzer starts two
+/// seconds late, so the edits reach rusk-lsp while it waits for it, and any second one would be
+/// ready first. `None` without rust-analyzer.
 fn hover_after_edits(name: &str, texts: &[&str]) -> Option<Value> {
-    if Command::new("rust-analyzer")
-        .arg("--version")
-        .output()
-        .is_err()
-    {
-        eprintln!("skipped: rust-analyzer is not installed");
-        return None;
-    }
+    let rust_analyzer = rust_analyzer()?;
     let dir = temp_dir(name);
+    let bin = dir.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let slow = bin.join("rust-analyzer");
+    fs::write(
+        &slow,
+        "#!/bin/sh\nif mkdir \"$RUSK_TEST_STARTED\" 2>/dev/null; then sleep 2; fi\nexec \"$RUSK_TEST_RUST_ANALYZER\" \"$@\"\n",
+    )
+    .unwrap();
+    fs::set_permissions(&slow, fs::Permissions::from_mode(0o755)).unwrap();
+    let path = env::join_paths(
+        std::iter::once(bin).chain(env::split_paths(&env::var_os("PATH").unwrap_or_default())),
+    )
+    .unwrap();
     let script = dir.join("tool.rsk");
     let text = texts.last().copied().unwrap();
     fs::write(&script, text).unwrap();
     let uri = format!("file://{}", script.display());
 
     let mut server = Command::new(env!("CARGO_BIN_EXE_rusk-lsp"))
+        .env("PATH", &path)
+        .env("RUSK_TEST_STARTED", dir.join("started"))
+        .env("RUSK_TEST_RUST_ANALYZER", &rust_analyzer)
         .env("XDG_CACHE_HOME", dir.join("cache"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -178,12 +206,7 @@ fn rust_analyzer_children(pid: u32) -> usize {
 #[cfg(target_os = "linux")]
 #[test]
 fn a_script_that_becomes_a_module_leaves_its_own_rust_analyzer() {
-    if Command::new("rust-analyzer")
-        .arg("--version")
-        .output()
-        .is_err()
-    {
-        eprintln!("skipped: rust-analyzer is not installed");
+    if rust_analyzer().is_none() {
         return;
     }
     let dir = temp_dir("lsp-script-to-module");
