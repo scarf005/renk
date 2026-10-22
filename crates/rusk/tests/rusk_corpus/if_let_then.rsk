@@ -30,3 +30,30 @@ pub fn closure(xs: Vec[Option[u8]]) -> u32:
 
 pub fn comparison(a: u8, b: u8) -> u8:
     if a == b then 1 else 0
+
+pub fn shorthand(x: Option[String]) -> usize = if let Some(v) = x then v.len() else 0
+
+pub fn shorthand_paths(x: Option[&str]) -> String = if let Some(v) = x then String.from(v.trim()) else String.new()
+
+pub fn shorthand_comment(x: Option[String]) -> usize = if let Some(v) = x then v.len() else 0 // v = w
+
+pub fn multi_line(x: Option[u8]) -> u8:
+    if let Some(v) = std::convert::identity(
+        x,
+    ) then v else 0
+
+pub fn else_if_chain(x: Option[u8], y: Option[u8]) -> u8:
+    if let Some(v) = x then v else if let Some(w) = y then w else 0
+
+pub fn in_arm_block(x: Result[Option[u8], u8]) -> u8:
+    match x:
+        Ok(o) =>:
+            let n = 1
+            if let Some(v) = o then v + n else n
+        Err(e) => e
+
+pub fn in_closure_block(xs: Vec[Option[u8]]) -> u32:
+    xs.iter().map(|o|:
+        let n = 1
+        if let Some(v) = o then *v as u32 + n else n
+    ).sum()
