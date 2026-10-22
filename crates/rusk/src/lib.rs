@@ -1666,8 +1666,42 @@ fn parse_source_tree(lines: &[SourceLine]) -> Result<Vec<Node>, TranspileError> 
             message: "unexpected indentation".to_string(),
         });
     }
+    let nodes = absorb_function_branches(nodes);
     validate_nodes(&nodes, Context::Root)?;
     Ok(nodes)
+}
+
+/// Moves the `else` branches after a shorthand body that opens a block, as in
+/// `fn f(c: bool) -> u8 = if c:` / `    1` / `else:` / `    2`, into the function's children at
+/// its indent, where `inline_block_body` takes them.
+fn absorb_function_branches(nodes: Vec<Node>) -> Vec<Node> {
+    let mut nodes = nodes.into_iter().peekable();
+    let mut absorbed = Vec::new();
+    while let Some(mut node) = nodes.next() {
+        node.children = absorb_function_branches(std::mem::take(&mut node.children));
+        if !is_function(strip_block_marker(node.text.trim()).0) || inline_block_body(&node).is_none() {
+            absorbed.push(node);
+            continue;
+        }
+        let mut branches = Vec::new();
+        while let Some(next) = nodes.next_if(|next| {
+            let next = next.text.trim();
+            is_branch(next) || is_comment(next)
+        }) {
+            branches.push(next);
+        }
+        // Comments after the last branch stay after the function.
+        let trailing = branches
+            .iter()
+            .rev()
+            .take_while(|branch| is_comment(branch.text.trim()))
+            .count();
+        let after = branches.split_off(branches.len() - trailing);
+        node.children.extend(absorb_function_branches(branches));
+        absorbed.push(node);
+        absorbed.extend(after);
+    }
+    absorbed
 }
 
 pub fn source_map_json(output: &TranspileOutput) -> String {
@@ -3088,32 +3122,38 @@ fn require_block_opener(node: &Node) -> Result<(), TranspileError> {
 }
 
 /// `fn f() = match x:` owns its block like `fn f():` whose only body line is `match x:`.
-fn inline_block_body(node: &Node) -> Option<Node> {
+fn inline_block_body(node: &Node) -> Option<Vec<Node>> {
     let (text, has_block) = strip_block_marker(node.text.trim());
     let (_, body) = split_function_body(text)?;
     let body = body.trim();
-    (has_block
-        && !body.is_empty()
-        && !node.children.is_empty()
-        && !are_continuations(&node.children))
-    .then(|| Node {
-        line: node.line,
-        indent: node.indent + 4,
-        text: format!("{body}:"),
-        children: node
-            .children
-            .iter()
-            .map(|child| offset_node_indent(child, 4))
-            .collect(),
-        closing: node.closing.clone(),
-        comment: None,
-        closing_comment: None,
+    // Children at the function's indent are the body's `else` branches.
+    let split = node
+        .children
+        .iter()
+        .position(|child| child.indent == node.indent)
+        .unwrap_or(node.children.len());
+    let (children, branches) = node.children.split_at(split);
+    (has_block && !body.is_empty() && !children.is_empty() && !are_continuations(children)).then(|| {
+        std::iter::once(Node {
+            line: node.line,
+            indent: node.indent + 4,
+            text: format!("{body}:"),
+            children: children
+                .iter()
+                .map(|child| offset_node_indent(child, 4))
+                .collect(),
+            closing: node.closing.clone(),
+            comment: None,
+            closing_comment: None,
+        })
+        .chain(branches.iter().map(|branch| offset_node_indent(branch, 4)))
+        .collect()
     })
 }
 
 fn validate_function_node(node: &Node) -> Result<(), TranspileError> {
     if let Some(body) = inline_block_body(node) {
-        return validate_nodes(&[body], Context::Block);
+        return validate_nodes(&body, Context::Block);
     }
     let (text, _) = strip_block_marker(node.text.trim());
     let Some((_, body)) = split_function_body(text) else {
@@ -3793,7 +3833,7 @@ fn emit_function(node: &Node, emitter: &mut Emitter) {
     {
         let signature = signature.trim();
         emitter.push(node, format!("{}{} {{", indent, lower_signature(signature)));
-        emit_function_body(&[body], function_returns_value(signature), emitter);
+        emit_function_body(&body, function_returns_value(signature), emitter);
         emitter.push_generated(format!("{}}}", indent));
         return;
     }
