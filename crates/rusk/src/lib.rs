@@ -2675,6 +2675,8 @@ fn opens_struct_literal(text: &str) -> bool {
         return false;
     };
     let head = head.trim_end();
+    // A turbofish after the type, as in `Pair::<(i32, i32)> {`, is part of the path.
+    let head = strip_trailing_turbofish(head);
     let path_start = head
         .char_indices()
         .rfind(|&(_, character)| !is_ident_continue(character) && character != ':')
@@ -2706,6 +2708,27 @@ fn opens_struct_literal(text: &str) -> bool {
         ]
         .iter()
         .any(|keyword| header.starts_with(keyword))
+}
+
+/// `head` without the `::<...>` it ends with.
+fn strip_trailing_turbofish(head: &str) -> &str {
+    let Some(inner) = head.strip_suffix('>') else {
+        return head;
+    };
+    let mut depth = 1usize;
+    for (at, character) in inner.char_indices().rev() {
+        match character {
+            '>' => depth += 1,
+            '<' => {
+                depth -= 1;
+                if depth == 0 {
+                    return inner[..at].strip_suffix("::").unwrap_or(head);
+                }
+            }
+            _ => {}
+        }
+    }
+    head
 }
 
 /// Whether `head` ends inside an `if`/`while`/`match`/`for ... in` condition, where Rust reads a
@@ -4360,7 +4383,22 @@ fn emit_raw_macro_nodes(nodes: &[Node], emitter: &mut Emitter) {
 fn emit_struct_literal_expr(node: &Node, text: &str, emitter: &mut Emitter, is_last: bool) {
     let indent = spaces(node.indent);
     let (text, _) = strip_block_marker(text);
-    emitter.push(node, format!("{}{} {{", indent, lower_expr(text)));
+    // A generic head, as in `Pair[i32]:`, takes its generics as a turbofish.
+    let chars = text.trim_end().chars().collect::<Vec<_>>();
+    let head = (0..chars.len())
+        .find(|&open| {
+            chars[open] == '['
+                && matching_bracket(&chars, open, '[', ']').is_some_and(|close| close + 1 == chars.len())
+        })
+        .map_or_else(
+            || lower_expr(text),
+            |open| {
+                let name = chars[..open].iter().collect::<String>();
+                let content = chars[open + 1..chars.len() - 1].iter().collect::<String>();
+                format!("{}::<{}>", lower_expr(&name), lower_generic_content(&content))
+            },
+        );
+    emitter.push(node, format!("{indent}{head} {{"));
     emit_nodes(&node.children, Context::StructLiteral, emitter);
     emitter.push_generated(format!("{}}}{}", indent, if is_last { "" } else { ";" }));
 }
@@ -7127,13 +7165,14 @@ fn looks_like_struct_literal(node: &Node) -> bool {
     !node.children.is_empty()
         && !node.text.trim_end().ends_with('{')
         && head.chars().next().is_some_and(char::is_uppercase)
-        && !head.contains(['(', '|'])
+        && !head.contains('|')
         && node.children.iter().all(|child| {
             split_once_top_level(child.text.trim(), '=').is_some_and(|(field, value)| {
                 let field = field.trim();
                 let field = field.strip_prefix("r#").unwrap_or(field);
+                // A tuple struct's fields are numbered, as in `0 = 1`.
                 !value.starts_with('=')
-                    && field.starts_with(is_ident_start)
+                    && field.starts_with(|c: char| is_ident_start(c) || c.is_ascii_digit())
                     && field.chars().all(is_ident_continue)
             })
         })
