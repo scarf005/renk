@@ -82,3 +82,11 @@ impl Gauge:
     // after
 
     pub fn after(&self) -> u8 = self.level
+
+mod shadowed:
+    pub fn f() -> u8 = 1
+
+pub fn shorthand_block_scope(x: Option[u8]) -> u8 = if let Some(shadowed) = x:
+    shadowed.max(1)
+else:
+    shadowed.f()
