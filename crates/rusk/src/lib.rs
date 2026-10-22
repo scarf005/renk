@@ -7120,19 +7120,22 @@ fn is_assignment(text: &str) -> bool {
 }
 
 fn looks_like_struct_literal(node: &Node) -> bool {
-    // `TABLE.with(|slot| {` opens a closure body rather than fields.
+    // `TABLE.with(|slot| {` and `Foo.new().map(|a|:` open a closure body rather than fields, and
+    // `a == 2` or `let b = a` is no `field = value`.
+    let head = strip_block_marker(node.text.trim()).0;
     !node.children.is_empty()
         && !node.text.trim_end().ends_with('{')
-        && node
-            .text
-            .trim()
-            .chars()
-            .next()
-            .is_some_and(char::is_uppercase)
-        && node
-            .children
-            .iter()
-            .all(|child| split_once_top_level(child.text.trim(), '=').is_some())
+        && head.chars().next().is_some_and(char::is_uppercase)
+        && !head.contains(['(', '|'])
+        && node.children.iter().all(|child| {
+            split_once_top_level(child.text.trim(), '=').is_some_and(|(field, value)| {
+                let field = field.trim();
+                let field = field.strip_prefix("r#").unwrap_or(field);
+                !value.starts_with('=')
+                    && field.starts_with(is_ident_start)
+                    && field.chars().all(is_ident_continue)
+            })
+        })
 }
 
 fn is_inline_struct_literal(text: &str) -> bool {
