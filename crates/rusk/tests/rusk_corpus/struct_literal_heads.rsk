@@ -30,3 +30,24 @@ pub fn point() -> Point:
 
 pub fn main():
     println!("{has_two()} {all_large()} {point().x} {each_shifted():?}")
+
+pub struct Pair[T]:
+    pub a: T
+    pub b: T
+
+pub struct W(pub i32, pub i32)
+
+pub fn tuple_pair() -> Pair[(i32, i32)]:
+    Pair::<(i32, i32)>:
+        a = (1, 2)
+        b = (3, 4)
+
+pub fn generic_pair() -> Pair[i32]:
+    Pair[i32]:
+        a = 1
+        b = 2
+
+pub fn numbered() -> W:
+    W:
+        0 = 1
+        1 = 2

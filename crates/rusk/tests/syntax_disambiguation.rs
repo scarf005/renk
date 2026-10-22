@@ -921,6 +921,14 @@ fn inline_macro_arms_without_a_closing_brace_do_not_panic() {
 }
 
 #[test]
+fn unclosed_raw_strings_ending_in_a_multibyte_char_do_not_panic() {
+    for source in ["#[r#\"éé", "#[derive(r\"é", "fn f():\n    m!(r#\"é"] {
+        let _ = transpile(source);
+        let _ = format_source(source);
+    }
+}
+
+#[test]
 fn inline_macro_arms_before_a_block_comment_keep_the_comment_closed() {
     let output = rust_to_rusk("macro_rules! m {() => {\n    1\n}} /* end */\n").unwrap();
     assert_lines(&output, &["/* end */"]);

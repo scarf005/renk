@@ -18,3 +18,9 @@ pub fn main():
     let v = ["a", "b"]
     println!("{joined(&v)} {plain(&v)} {padded(&v)} {chosen(true)} {lines(\"x\\ny\")} {braces(\"}\")}")
     println!("{escaped_backslash(\"x\\\\\")} {raw(&v)}")
+
+pub fn raw_hashes(v: &[&str]) -> String = format!(r##"{v.join("-")} "# "##)
+
+pub fn raw_inside(v: &[&str]) -> String = format!(r##"{v.join(r#"""#)}"##)
+
+pub fn lifetime() -> String = format!("{std.any.type_name::<&'static str>()}")

@@ -187,6 +187,12 @@ fn source_tree_columns_are_where_the_source_text_starts() {
         "        f()",
         "    \u{3000}} else:",
         "        g()",
+        "fn k2():",
+        "    k(|a|:",
+        "        a",
+        "    \u{3000}, |b|:",
+        "        b",
+        "    )",
     ]
     .join("\n");
     let source = source.as_str();
@@ -207,6 +213,7 @@ fn source_tree_columns_are_where_the_source_text_starts() {
         (15, "fn f() -> u8 = 1", 4),
         (17, "let y = 2", 5),
         (20, "else:", 7),
+        (25, ", |b|:", 5),
     ] {
         assert!(columns.contains(&expected), "{expected:?} not in {columns:?}");
     }
