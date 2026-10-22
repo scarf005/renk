@@ -109,7 +109,28 @@ fn run(raw_args: Vec<String>) -> Result<i32, Box<dyn std::error::Error>> {
     }
 
     let syntax = source_syntax(args.input.as_deref());
-    let output = if syntax == SourceSyntax::Rusk {
+    // A script, with a `#!` line or frontmatter, prints the Rust `rusk script` builds.
+    let is_script =
+        syntax == SourceSyntax::Rusk && script_parts(&source).is_ok_and(|parts| parts.body_start > 0);
+    let output = if is_script {
+        if args.source_map.is_some() {
+            return Err("--source-map is not supported for scripts".into());
+        }
+        let package = args
+            .input
+            .as_ref()
+            .and_then(|path| {
+                let scripts = cache_root()?.join("scripts");
+                let rust_path = script_cache_path(&scripts, &fs::canonicalize(path).ok()?);
+                Some(script_package(&rust_path))
+            })
+            .unwrap_or_else(|| "script".to_string());
+        rusk::TranspileOutput {
+            rust: script_rust(&source, syntax, &package)?.rust,
+            source_map: Vec::new(),
+            source_tree: Vec::new(),
+        }
+    } else if syntax == SourceSyntax::Rusk {
         transpile(&source)?
     } else {
         rusk::TranspileOutput {
