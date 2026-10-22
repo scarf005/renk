@@ -46,8 +46,12 @@ struct Backend {
     client: Client,
     documents: Arc<RwLock<HashMap<Url, String>>>,
     rust_analyzer: Arc<RwLock<Option<Arc<RustAnalyzerClient>>>>,
-    /// A rust-analyzer per open script, linked to the script's generated cargo-script file.
-    scripts: Arc<RwLock<HashMap<Url, Arc<RustAnalyzerClient>>>>,
+    /// The rust-analyzer each open document's generated Rust is open in, and that Rust's URI.
+    /// A script's own rust-analyzer lives only here, so it exits when its entry goes.
+    opened: Arc<RwLock<HashMap<Url, (Arc<RustAnalyzerClient>, Url)>>>,
+    /// Serializes document syncs: tower-lsp runs notifications concurrently, which would start
+    /// two rust-analyzers for one script or reorder its `didOpen` and `didChange`.
+    sync: Arc<Mutex<()>>,
     initialize_params: Arc<RwLock<Option<InitializeParams>>>,
 }
 
@@ -94,6 +98,7 @@ impl LanguageServer for Backend {
     }
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
+        let _sync = self.sync.lock().await;
         let uri = params.text_document.uri;
         let version = params.text_document.version;
         let text = params.text_document.text;
@@ -101,11 +106,12 @@ impl LanguageServer for Backend {
             .write()
             .await
             .insert(uri.clone(), text.clone());
-        self.open_rust_document(&uri, &text, version).await;
+        self.sync_rust_document(&uri, &text, version).await;
         self.publish_diagnostics(uri, text).await;
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
+        let _sync = self.sync.lock().await;
         let uri = params.text_document.uri;
         let version = params.text_document.version;
         let text = params
@@ -118,19 +124,17 @@ impl LanguageServer for Backend {
             .write()
             .await
             .insert(uri.clone(), text.clone());
-        self.change_rust_document(&uri, &text, version).await;
+        self.sync_rust_document(&uri, &text, version).await;
         self.publish_diagnostics(uri, text).await;
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
-        let text = self
-            .documents
+        let _sync = self.sync.lock().await;
+        self.documents
             .write()
             .await
-            .remove(&params.text_document.uri)
-            .unwrap_or_default();
-        self.close_rust_document(&params.text_document.uri, &text)
-            .await;
+            .remove(&params.text_document.uri);
+        self.close_rust_document(&params.text_document.uri).await;
         self.client
             .publish_diagnostics(params.text_document.uri, Vec::new(), None)
             .await;
@@ -179,7 +183,7 @@ impl LanguageServer for Backend {
         };
 
         let mut rust_params = params.clone();
-        if let Some((rust_analyzer, rust_uri)) = self.rust_analyzer(&uri, text).await
+        if let Some((rust_analyzer, rust_uri)) = self.rust_analyzer(&uri).await
             && let Some(position) = source_position_to_rust_position(&uri, text, position)
         {
             rust_params.text_document_position_params.text_document.uri = rust_uri;
@@ -215,7 +219,7 @@ impl LanguageServer for Backend {
         };
 
         let mut rust_params = params.clone();
-        if let Some((rust_analyzer, rust_uri)) = self.rust_analyzer(&uri, text).await
+        if let Some((rust_analyzer, rust_uri)) = self.rust_analyzer(&uri).await
             && let Some(position) = source_position_to_rust_position(&uri, text, position)
         {
             rust_params.text_document_position_params.text_document.uri = rust_uri.clone();
@@ -249,7 +253,7 @@ impl LanguageServer for Backend {
         };
 
         let mut rust_params = params.clone();
-        if let Some((rust_analyzer, rust_uri)) = self.rust_analyzer(&uri, text).await
+        if let Some((rust_analyzer, rust_uri)) = self.rust_analyzer(&uri).await
             && let Some(position) =
                 source_position_to_rust_position(&uri, text, params.text_document_position.position)
         {
@@ -269,14 +273,9 @@ impl LanguageServer for Backend {
 }
 
 impl Backend {
-    /// The running rust-analyzer for a document and the URI of the document's generated Rust.
-    async fn rust_analyzer(&self, uri: &Url, text: &str) -> Option<(Arc<RustAnalyzerClient>, Url)> {
-        let rust_analyzer = if is_script(uri, text) {
-            self.scripts.read().await.get(uri).cloned()
-        } else {
-            self.rust_analyzer.read().await.as_ref().cloned()
-        };
-        Some((rust_analyzer?, self.rust_uri_for_rusk_uri(uri, text).await?))
+    /// The rust-analyzer a document's generated Rust is open in, and that Rust's URI.
+    async fn rust_analyzer(&self, uri: &Url) -> Option<(Arc<RustAnalyzerClient>, Url)> {
+        self.opened.read().await.get(uri).cloned()
     }
 
     /// Starts the rust-analyzer for a document: one over the generated workspace mirror, or for a
@@ -284,10 +283,18 @@ impl Backend {
     /// frontmatter dependencies of.
     async fn ensure_rust_analyzer(&self, uri: &Url, text: &str) -> Option<Arc<RustAnalyzerClient>> {
         let script = is_script(uri, text);
+        let workspace = self.rust_analyzer.read().await.as_ref().cloned();
         let existing = if script {
-            self.scripts.read().await.get(uri).cloned()
+            self.rust_analyzer(uri)
+                .await
+                .map(|(rust_analyzer, _)| rust_analyzer)
+                .filter(|rust_analyzer| {
+                    !workspace
+                        .as_ref()
+                        .is_some_and(|workspace| Arc::ptr_eq(workspace, rust_analyzer))
+                })
         } else {
-            self.rust_analyzer.read().await.as_ref().cloned()
+            workspace
         };
         if existing.is_some() {
             return existing;
@@ -310,12 +317,7 @@ impl Backend {
                 rust_analyzer
                     .notify("initialized", InitializedParams {})
                     .await;
-                if script {
-                    self.scripts
-                        .write()
-                        .await
-                        .insert(uri.clone(), rust_analyzer.clone());
-                } else {
+                if !script {
                     self.rust_analyzer
                         .write()
                         .await
@@ -335,7 +337,10 @@ impl Backend {
         }
     }
 
-    async fn open_rust_document(&self, uri: &Url, text: &str, version: i32) {
+    /// Sends a document's generated Rust to its rust-analyzer: a change when that rust-analyzer
+    /// already has it open, otherwise an open, after closing it where it was open before (the
+    /// document may have become a script or stopped being one).
+    async fn sync_rust_document(&self, uri: &Url, text: &str, version: i32) {
         let Some(rust_uri) = self.rust_uri_for_rusk_uri(uri, text).await else {
             return;
         };
@@ -352,73 +357,57 @@ impl Backend {
             return;
         };
 
-        rust_analyzer
-            .notify(
-                "textDocument/didOpen",
-                DidOpenTextDocumentParams {
-                    text_document: TextDocumentItem {
-                        uri: rust_uri,
-                        language_id: "rust".to_string(),
-                        version,
-                        text: rust,
-                    },
-                },
-            )
-            .await;
+        let previous = self
+            .opened
+            .write()
+            .await
+            .insert(uri.clone(), (rust_analyzer.clone(), rust_uri.clone()));
+        match previous {
+            Some((previous, previous_uri))
+                if Arc::ptr_eq(&previous, &rust_analyzer) && previous_uri == rust_uri =>
+            {
+                rust_analyzer
+                    .notify(
+                        "textDocument/didChange",
+                        DidChangeTextDocumentParams {
+                            text_document: VersionedTextDocumentIdentifier {
+                                uri: rust_uri,
+                                version,
+                            },
+                            content_changes: vec![TextDocumentContentChangeEvent {
+                                range: None,
+                                range_length: None,
+                                text: rust,
+                            }],
+                        },
+                    )
+                    .await;
+            }
+            previous => {
+                if let Some((previous, previous_uri)) = previous {
+                    close_in(&previous, previous_uri).await;
+                }
+                rust_analyzer
+                    .notify(
+                        "textDocument/didOpen",
+                        DidOpenTextDocumentParams {
+                            text_document: TextDocumentItem {
+                                uri: rust_uri,
+                                language_id: "rust".to_string(),
+                                version,
+                                text: rust,
+                            },
+                        },
+                    )
+                    .await;
+            }
+        }
     }
 
-    async fn change_rust_document(&self, uri: &Url, text: &str, version: i32) {
-        let Some(rust_uri) = self.rust_uri_for_rusk_uri(uri, text).await else {
-            return;
-        };
-        let Ok(rust) = generated(uri, text).map(|generated| generated.rust) else {
-            return;
-        };
-        if is_script(uri, text) {
-            write_script_rust_file(&rust_uri, &rust);
-        } else {
-            self.copy_generated_cargo_manifests(uri).await;
-            write_generated_rust_file(&rust_uri, &rust);
+    async fn close_rust_document(&self, uri: &Url) {
+        if let Some((rust_analyzer, rust_uri)) = self.opened.write().await.remove(uri) {
+            close_in(&rust_analyzer, rust_uri).await;
         }
-        let Some(rust_analyzer) = self.ensure_rust_analyzer(uri, text).await else {
-            return;
-        };
-
-        rust_analyzer
-            .notify(
-                "textDocument/didChange",
-                DidChangeTextDocumentParams {
-                    text_document: VersionedTextDocumentIdentifier {
-                        uri: rust_uri,
-                        version,
-                    },
-                    content_changes: vec![TextDocumentContentChangeEvent {
-                        range: None,
-                        range_length: None,
-                        text: rust,
-                    }],
-                },
-            )
-            .await;
-    }
-
-    async fn close_rust_document(&self, uri: &Url, text: &str) {
-        // A script's rust-analyzer serves only that script, so it exits as its client drops.
-        if self.scripts.write().await.remove(uri).is_some() {
-            return;
-        }
-        let Some((rust_analyzer, rust_uri)) = self.rust_analyzer(uri, text).await else {
-            return;
-        };
-
-        rust_analyzer
-            .notify(
-                "textDocument/didClose",
-                DidCloseTextDocumentParams {
-                    text_document: tower_lsp::lsp_types::TextDocumentIdentifier { uri: rust_uri },
-                },
-            )
-            .await;
     }
 
     async fn rust_uri_for_rusk_uri(&self, uri: &Url, text: &str) -> Option<Url> {
@@ -557,6 +546,17 @@ impl RustAnalyzerClient {
             .ok()
             .and_then(std::result::Result::ok)
     }
+}
+
+async fn close_in(rust_analyzer: &RustAnalyzerClient, rust_uri: Url) {
+    rust_analyzer
+        .notify(
+            "textDocument/didClose",
+            DidCloseTextDocumentParams {
+                text_document: tower_lsp::lsp_types::TextDocumentIdentifier { uri: rust_uri },
+            },
+        )
+        .await;
 }
 
 /// Hands rust-analyzer's responses to their requests. Its own requests, such as
@@ -1657,7 +1657,8 @@ async fn main() {
         client,
         documents: Arc::new(RwLock::new(HashMap::new())),
         rust_analyzer: Arc::new(RwLock::new(None)),
-        scripts: Arc::new(RwLock::new(HashMap::new())),
+        opened: Arc::new(RwLock::new(HashMap::new())),
+        sync: Arc::new(Mutex::new(())),
         initialize_params: Arc::new(RwLock::new(None)),
     });
     Server::new(stdin, stdout, socket).serve(service).await;
