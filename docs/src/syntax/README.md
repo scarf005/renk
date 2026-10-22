@@ -7,6 +7,4 @@ Rusk changes three things about Rust's surface syntax:
 - [Format strings](macros.md) take inline expressions such as `{user.name()}`.
 
 The rest is Rust. A Rust `{ ... }` block, a `::` path, or a `::<T>` turbofish is always
-accepted. The `::` and `::<T>` are kept as written. Code in an expression block, as in
-`let a = { Foo.new() }`, is still Rusk; the body of a one-line item or `match x { ... }` keeps
-its Rust tokens.
+accepted. The `::` and `::<T>` are kept as written.
