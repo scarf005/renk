@@ -611,7 +611,9 @@ fn script_frontmatter(source: &str) -> Result<String, TranspileError> {
     let lines = source.split_inclusive('\n').collect::<Vec<_>>();
     Ok(script_parts(source)?
         .frontmatter
-        .map_or("---\n---\n".to_string(), |(start, end)| lines[start..=end].concat()))
+        .map_or("---\n---\n".to_string(), |(start, end)| {
+            lines[start..=end].concat().trim_end_matches('\n').to_string() + "\n"
+        }))
 }
 
 fn write_script_cache(path: &Path, rust: &str) -> io::Result<()> {
