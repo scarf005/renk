@@ -1,0 +1,32 @@
+pub struct Foo:
+    pub v: Vec[i32]
+
+impl Foo:
+    pub fn new() -> Self = Self{ v: vec![1, 2] }
+
+pub struct Point:
+    pub x: i32
+    pub y: i32
+
+pub fn has_two() -> bool:
+    Foo.new().v.into_iter().any(|a|:
+        a == 2
+    )
+
+pub fn all_large() -> bool:
+    Foo.new().v.into_iter().all(|a|:
+        a >= 2
+    )
+
+pub fn each_shifted():
+    Foo.new().v.into_iter().for_each(|a|:
+        let b = a + 1
+    )
+
+pub fn point() -> Point:
+    Point:
+        x = 1
+        y = 2
+
+pub fn main():
+    println!("{has_two()} {all_large()} {point().x} {each_shifted():?}")
