@@ -139,6 +139,27 @@ fn script_reports_transpile_errors_with_the_script_path_and_line() {
 }
 
 #[test]
+fn script_failure_summary_names_the_script_not_the_generated_package() {
+    let dir = temp_dir("script-summary");
+    let script = dir.join("tool.rsk");
+    fs::write(&script, "let y: i32 = \"nope\"\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_rusk"))
+        .args(["script", script.to_str().unwrap()])
+        .env("XDG_CACHE_HOME", dir.join("cache"))
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(101), "{stderr}");
+    let summary = format!("could not compile `{}`", script.display());
+    assert!(stderr.contains(&summary), "{stderr}");
+    assert!(!stderr.contains("tool-"), "{stderr}");
+    assert!(!stderr.contains("(bin "), "{stderr}");
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
 fn script_execs_the_cached_binary_and_rebuilds_after_edits_unless_told_to_run_cargo() {
     let dir = temp_dir("script-cached");
     let script = dir.join("greet.rsk");
