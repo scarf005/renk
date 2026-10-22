@@ -58,6 +58,9 @@ fn run(raw_args: Vec<String>) -> Result<i32, Box<dyn std::error::Error>> {
     if raw_args.first().is_some_and(|arg| arg == "script") {
         return run_script(raw_args);
     }
+    if raw_args.first().is_some_and(|arg| arg == "add") {
+        return run_add(raw_args);
+    }
 
     let args = parse_args(raw_args)?;
     if args.input.is_none() && io::stdin().is_terminal() {
@@ -212,6 +215,80 @@ fn run_script(raw_args: Vec<String>) -> Result<i32, Box<dyn std::error::Error>> 
     return Err(std::os::unix::process::CommandExt::exec(&mut command).into());
     #[cfg(not(unix))]
     return Ok(command.status()?.code().unwrap_or(1));
+}
+
+/// Adds dependencies to a script's frontmatter with `cargo add`, which only edits `.rs`
+/// manifests: the frontmatter goes to a scratch `.rs` beside the script, so relative `--path`
+/// dependencies resolve the same, and comes back into the script with the rest left as it was.
+fn run_add(raw_args: Vec<String>) -> Result<i32, Box<dyn std::error::Error>> {
+    let mut raw_args = raw_args.into_iter().skip(1);
+    let Some(script_path) = raw_args.next().map(PathBuf::from) else {
+        return Err("add requires a script path".into());
+    };
+    let source = fs::read_to_string(&script_path)?;
+    // The scratch manifest names an edition, so cargo does not warn about its missing one.
+    let mut pinned = false;
+    let frontmatter = edit_manifest(&script_frontmatter(&source)?, |document| {
+        let package = document.entry("package").or_insert(toml_edit::table());
+        if let Some(package) = package
+            .as_table_like_mut()
+            .filter(|package| !package.contains_key("edition"))
+        {
+            package.insert("edition", toml_edit::value(SCRIPT_EDITION));
+            pinned = true;
+        }
+    });
+    let scratch = script_path.with_file_name(format!(".rusk-add-{}.rs", process::id()));
+    fs::write(&scratch, frontmatter + "fn main() {}\n")?;
+    let status = Command::new("cargo")
+        .args(["+nightly", "-Zscript", "add", "--manifest-path"])
+        .arg(&scratch)
+        .args(raw_args)
+        .status();
+    let edited = fs::read_to_string(&scratch);
+    let _ = fs::remove_file(&scratch);
+    let status = status?;
+    if !status.success() {
+        return Ok(status.code().unwrap_or(1));
+    }
+    let mut frontmatter = script_frontmatter(&edited?)?;
+    if pinned {
+        frontmatter = edit_manifest(&frontmatter, |document| {
+            if let Some(package) = document
+                .get_mut("package")
+                .and_then(toml_edit::Item::as_table_like_mut)
+            {
+                package.remove("edition");
+                if package.is_empty() {
+                    document.remove("package");
+                }
+            }
+        });
+    }
+    let spliced = splice_frontmatter(&source, &frontmatter)?;
+    if spliced != source {
+        fs::write(&script_path, spliced)?;
+    }
+    Ok(0)
+}
+
+/// Applies `edit` to the manifest between the fences of a frontmatter; invalid TOML stays as is.
+fn edit_manifest(frontmatter: &str, edit: impl FnOnce(&mut toml_edit::DocumentMut)) -> String {
+    let lines = frontmatter.split_inclusive('\n').collect::<Vec<_>>();
+    let last = lines.len() - 1;
+    let manifest = lines[1..last].concat();
+    let Ok(mut document) = manifest.parse::<toml_edit::DocumentMut>() else {
+        return frontmatter.to_string();
+    };
+    edit(&mut document);
+    // Dropping the first table leaves the blank line that separated it from the next one.
+    let edited = document.to_string();
+    let edited = if manifest.starts_with('\n') {
+        &edited
+    } else {
+        edited.trim_start_matches('\n')
+    };
+    lines[0].to_string() + edited + lines[last]
 }
 
 fn is_newer(path: &Path, than: &Path) -> bool {
@@ -369,11 +446,11 @@ impl ScriptDiagnostic<'_> {
             } else {
                 Vec::new()
             };
+            let help = self.add_hint(text(child)).unwrap_or_else(|| text(child).to_string());
             if snippets.is_empty() {
-                notes.push(level.message(text(child)));
+                notes.push(level.message(help));
             } else {
-                sections
-                    .push(Group::with_title(level.secondary_title(text(child))).elements(snippets));
+                sections.push(Group::with_title(level.secondary_title(help)).elements(snippets));
             }
         }
         let main = Group::with_title(title)
@@ -386,6 +463,20 @@ impl ScriptDiagnostic<'_> {
             Renderer::plain()
         };
         renderer.render(&groups) + "\n\n"
+    }
+
+    /// rustc's help for a crate the manifest lacks tells to edit a `Cargo.toml` that a script does
+    /// not have, so it becomes the `rusk add` that edits the frontmatter.
+    fn add_hint(&self, help: &str) -> Option<String> {
+        let (name, rest) = help
+            .strip_prefix("if you wanted to use a crate named `")?
+            .split_once('`')?;
+        rest.contains("`cargo add").then(|| {
+            format!(
+                "if you wanted to use a crate named `{name}`, add it with `rusk add {} {name}`",
+                self.script
+            )
+        })
     }
 
     fn is_script(&self, span: &serde_json::Value) -> bool {
@@ -543,22 +634,12 @@ fn script_rust(
     package: &str,
 ) -> Result<ScriptRust, Box<dyn std::error::Error>> {
     let lines = source.split_inclusive('\n').collect::<Vec<_>>();
-    let mut body_start = usize::from(
-        lines
-            .first()
-            .is_some_and(|line| line.starts_with("#!") && !line.starts_with("#![")),
-    );
+    let mut body_start = shebang_lines(&lines);
     let (manifest, mut named_package, mut package_name) = with_package_defaults("", package);
     let mut frontmatter = format!("---\n{manifest}---\n");
     let mut frontmatter_line = 1;
     let mut result = None;
-    let fence_start = (body_start..lines.len()).find(|&index| !lines[index].trim().is_empty());
-    if let Some(start) = fence_start.filter(|&index| lines[index].starts_with("---")) {
-        let fence = &lines[start][..lines[start].len() - lines[start].trim_start_matches('-').len()];
-        let Some(end) = (start + 1..lines.len()).find(|&index| lines[index].trim_end() == fence)
-        else {
-            return Err(format!("line {}: unclosed frontmatter", start + 1).into());
-        };
+    if let Some((start, end)) = frontmatter_span(&lines)? {
         let written = lines[start + 1..end].concat();
         result = script_result(&written);
         let manifest;
@@ -622,6 +703,47 @@ fn script_rust(
         named_package,
         package: package_name,
     })
+}
+
+/// The number of leading shebang lines of a script: 1 for `#!`, but not for an inner attribute.
+fn shebang_lines(lines: &[&str]) -> usize {
+    usize::from(
+        lines
+            .first()
+            .is_some_and(|line| line.starts_with("#!") && !line.starts_with("#![")),
+    )
+}
+
+/// The line indexes of the opening and closing fence of a script's frontmatter, if it has one.
+fn frontmatter_span(lines: &[&str]) -> Result<Option<(usize, usize)>, String> {
+    let first = shebang_lines(lines);
+    let Some(start) = (first..lines.len())
+        .find(|&index| !lines[index].trim().is_empty())
+        .filter(|&index| lines[index].starts_with("---"))
+    else {
+        return Ok(None);
+    };
+    let fence = &lines[start][..lines[start].len() - lines[start].trim_start_matches('-').len()];
+    (start + 1..lines.len())
+        .find(|&index| lines[index].trim_end() == fence)
+        .map(|end| Some((start, end)))
+        .ok_or_else(|| format!("line {}: unclosed frontmatter", start + 1))
+}
+
+/// Replaces the frontmatter of a script, or puts it after the shebang when there is none.
+fn splice_frontmatter(source: &str, frontmatter: &str) -> Result<String, String> {
+    let lines = source.split_inclusive('\n').collect::<Vec<_>>();
+    let span = frontmatter_span(&lines)?;
+    let start = span.map_or_else(|| shebang_lines(&lines), |(start, _)| start);
+    let rest = span.map_or(start, |(_, end)| end + 1);
+    Ok(lines[..start].concat() + frontmatter + &lines[rest..].concat())
+}
+
+/// The frontmatter of a script with its fences, or an empty one.
+fn script_frontmatter(source: &str) -> Result<String, String> {
+    let lines = source.split_inclusive('\n').collect::<Vec<_>>();
+    Ok(frontmatter_span(&lines)?
+        .map_or("---\n---\n".to_string(), |(start, end)| lines[start..=end].concat()))
 }
 
 /// The edition rusk's generated Rust is written for, pinned in scripts that do not name one so
@@ -885,7 +1007,7 @@ fn source_syntax(path: Option<&Path>) -> SourceSyntax {
 
 fn print_help() {
     println!(
-        "rusk - indentation-based Rust syntax transpiler\n\nUSAGE:\n    rusk [transpile] [INPUT.rsk] [-o OUTPUT.rs] [--source-map SOURCE_MAP]\n    rusk from-rust [INPUT.rs] [-o OUTPUT.rsk] [--aggressive]\n    rusk fmt [INPUT.rsk] [-o INPUT] [--line-width N]\n    rusk [cargo] <CARGO_COMMAND> [CARGO_ARGS...]\n    rusk script [--cargo] <SCRIPT.rsk> [ARGS...]\n\nScripts keep their cargo-script frontmatter (defaulting package.edition to 2024), are transpiled to $XDG_CACHE_HOME/rusk/scripts, built with cargo +nightly -Zscript in the shared $XDG_CACHE_HOME/rusk/build (scripts that set package.name build apart), and run with RUSK_SCRIPT set to the script path; scripts without a top-level fn main run their lines in a fn main returning Result (anyhow::Result and the like when the script depends on anyhow, eyre, or color-eyre), so they can use ?; compiler diagnostics point at script lines and cargo's failure summary names the script; use #!/usr/bin/env -S rusk script as the shebang. Scripts exec the binary cached next to the generated Rust, building it with cargo only when the Rust changed, so dependency and toolchain updates need an edit to the script or --cargo, which builds through cargo's resolution and freshness checks on every run.\n\nCargo wrapper commands transpile Cargo source roots (*.rsk under src, examples, tests, benches, plus build.rsk) to cached generated .rs files, then run cargo.\n\nExamples:\n    rusk from-rust src/main.rs -o src/main.rsk\n    rusk fmt src/main.rsk -o src/main.rsk\n    rusk run\n    rusk cargo fmt\n    rusk cargo test\n\nIf INPUT is omitted, rusk reads source from stdin when stdin is piped; otherwise it prints this help."
+        "rusk - indentation-based Rust syntax transpiler\n\nUSAGE:\n    rusk [transpile] [INPUT.rsk] [-o OUTPUT.rs] [--source-map SOURCE_MAP]\n    rusk from-rust [INPUT.rs] [-o OUTPUT.rsk] [--aggressive]\n    rusk fmt [INPUT.rsk] [-o INPUT] [--line-width N]\n    rusk [cargo] <CARGO_COMMAND> [CARGO_ARGS...]\n    rusk script [--cargo] <SCRIPT.rsk> [ARGS...]\n    rusk add <SCRIPT.rsk> [CARGO_ADD_ARGS...]\n\nScripts keep their cargo-script frontmatter (defaulting package.edition to 2024), are transpiled to $XDG_CACHE_HOME/rusk/scripts, built with cargo +nightly -Zscript in the shared $XDG_CACHE_HOME/rusk/build (scripts that set package.name build apart), and run with RUSK_SCRIPT set to the script path; scripts without a top-level fn main run their lines in a fn main returning Result (anyhow::Result and the like when the script depends on anyhow, eyre, or color-eyre), so they can use ?; compiler diagnostics point at script lines and cargo's failure summary names the script; use #!/usr/bin/env -S rusk script as the shebang. Scripts exec the binary cached next to the generated Rust, building it with cargo only when the Rust changed, so dependency and toolchain updates need an edit to the script or --cargo, which builds through cargo's resolution and freshness checks on every run.\n\nrusk add runs cargo add on the script frontmatter (creating it when missing), so rusk add tool.rsk regex adds a dependency; it is the fix for a missing-crate error.\n\nCargo wrapper commands transpile Cargo source roots (*.rsk under src, examples, tests, benches, plus build.rsk) to cached generated .rs files, then run cargo.\n\nExamples:\n    rusk from-rust src/main.rs -o src/main.rsk\n    rusk fmt src/main.rsk -o src/main.rsk\n    rusk run\n    rusk cargo fmt\n    rusk cargo test\n\nIf INPUT is omitted, rusk reads source from stdin when stdin is piped; otherwise it prints this help."
     );
 }
 
@@ -982,6 +1104,33 @@ mod tests {
             main("[dev-dependencies]\nanyhow = \"1\"\n"),
             "fn main() -> Result<(), Box<dyn std::error::Error>> {"
         );
+    }
+
+    #[test]
+    fn splice_frontmatter_keeps_the_shebang_and_body() {
+        let body = "\nfn main():\n    println!(\"---\")\n";
+        let source = format!("#!/usr/bin/env -S rusk script\n\n---\n[package]\n---\n{body}");
+        let spliced = splice_frontmatter(&source, "---\n[dependencies]\n---\n").unwrap();
+        assert_eq!(
+            spliced,
+            format!("#!/usr/bin/env -S rusk script\n\n---\n[dependencies]\n---\n{body}")
+        );
+        assert_eq!(script_frontmatter(&source).unwrap(), "---\n[package]\n---\n");
+    }
+
+    #[test]
+    fn splice_frontmatter_creates_the_frontmatter_after_the_shebang() {
+        let source = "#!/usr/bin/env -S rusk script\nprintln!(\"hi\")\n";
+        assert_eq!(script_frontmatter(source).unwrap(), "---\n---\n");
+        assert_eq!(
+            splice_frontmatter(source, "---\n[dependencies]\n---\n").unwrap(),
+            "#!/usr/bin/env -S rusk script\n---\n[dependencies]\n---\nprintln!(\"hi\")\n"
+        );
+        assert_eq!(
+            splice_frontmatter("#![allow(unused)]\n", "---\n---\n").unwrap(),
+            "---\n---\n#![allow(unused)]\n"
+        );
+        assert!(splice_frontmatter("---\nx\n", "---\n---\n").is_err());
     }
 
     #[test]

@@ -54,6 +54,8 @@ fn main():
 - Scripts run their cached binary without cargo's freshness checks and rebuild only when the
   generated Rust changes; `rusk script --cargo FILE.rsk` builds through cargo on every run to
   pick up dependency and toolchain updates.
+- `rusk add FILE.rsk [CARGO_ADD_ARGS...]` runs `cargo add` on the script's frontmatter, creating it
+  when missing; the shebang and body stay as they were. A missing-crate error suggests it.
 
 ## Language server
 
