@@ -305,8 +305,10 @@ impl Backend {
             let rust_path = script_rust_path(uri)?;
             let rust_root_uri = Url::from_directory_path(rust_path.parent()?).ok()?;
             params = rust_initialize_params(params, &rust_root_uri);
-            params.initialization_options =
-                Some(serde_json::json!({ "linkedProjects": [rust_path] }));
+            params.initialization_options = Some(script_initialization_options(
+                params.initialization_options.take(),
+                &rust_path,
+            ));
         } else {
             let rust_root_uri = target_rusk_root_uri(&source_root_uri(&params)?)?;
             params = rust_initialize_params(params, &rust_root_uri);
@@ -480,6 +482,10 @@ impl RustAnalyzerClient {
         let pending = Arc::new(Mutex::new(HashMap::new()));
         let reader_pending = pending.clone();
         let replies = sender.clone();
+        let config = params
+            .initialization_options
+            .clone()
+            .unwrap_or(serde_json::Value::Null);
 
         tokio::spawn(async move {
             let mut stdin = stdin;
@@ -490,7 +496,7 @@ impl RustAnalyzerClient {
             }
         });
         tokio::spawn(async move {
-            read_rust_analyzer_messages(stdout, reader_pending, replies).await;
+            read_rust_analyzer_messages(stdout, reader_pending, replies, config).await;
         });
 
         let client = Self {
@@ -559,13 +565,28 @@ async fn close_in(rust_analyzer: &RustAnalyzerClient, rust_uri: Url) {
         .await;
 }
 
-/// Hands rust-analyzer's responses to their requests. Its own requests, such as
-/// `workspace/configuration`, get an empty answer: their ids are rust-analyzer's, which would
-/// otherwise take the place of a response to a request of ours with the same id.
+/// The rust-analyzer settings of a script's rust-analyzer: the editor's, linked to the script's
+/// generated cargo-script file.
+fn script_initialization_options(
+    options: Option<serde_json::Value>,
+    rust_path: &Path,
+) -> serde_json::Value {
+    let mut options = options
+        .filter(serde_json::Value::is_object)
+        .unwrap_or_else(|| serde_json::json!({}));
+    options["linkedProjects"] = serde_json::json!([rust_path]);
+    options
+}
+
+/// Hands rust-analyzer's responses to their requests. Its own requests get an answer here: their
+/// ids are rust-analyzer's, which would otherwise take the place of a response to a request of
+/// ours with the same id. `workspace/configuration` gets `config`, the settings it started with,
+/// once per item; the rest get an empty answer.
 async fn read_rust_analyzer_messages(
     stdout: impl tokio::io::AsyncRead + Unpin,
     pending: Arc<Mutex<HashMap<u64, oneshot::Sender<serde_json::Value>>>>,
     replies: mpsc::UnboundedSender<serde_json::Value>,
+    config: serde_json::Value,
 ) {
     let mut reader = BufReader::new(stdout);
     loop {
@@ -574,10 +595,16 @@ async fn read_rust_analyzer_messages(
         };
         if message.get("method").is_some() {
             if let Some(id) = message.get("id") {
+                let result = if message["method"] == "workspace/configuration" {
+                    let items = message["params"]["items"].as_array().map_or(0, Vec::len);
+                    serde_json::Value::Array(vec![config.clone(); items])
+                } else {
+                    serde_json::Value::Null
+                };
                 let _ = replies.send(serde_json::json!({
                     "jsonrpc": "2.0",
                     "id": id,
-                    "result": null,
+                    "result": result,
                 }));
             }
             continue;
