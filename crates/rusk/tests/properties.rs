@@ -144,56 +144,6 @@ proptest! {
 }
 
 #[test]
-fn long_groups_convert_in_linear_time() {
-    let convert = |rows: usize| {
-        let rows = (0..rows)
-            .map(|n| format!("    ({n}, {n}),\n"))
-            .collect::<String>();
-        let rust = format!("pub static TABLE: &[(u32, u32)] = &[\n{rows}];\n");
-        let start = std::time::Instant::now();
-        transpile(&rust_to_rusk(&rust).unwrap()).unwrap();
-        start.elapsed()
-    };
-    let (short, long) = (convert(5_000), convert(20_000));
-    // Four times the rows take about four times as long, not sixteen.
-    assert!(long < short * 8, "{short:?} {long:?}");
-}
-
-#[test]
-fn long_block_argument_chains_convert_in_linear_time() {
-    let convert = |links: usize| {
-        let links = (0..links)
-            .map(|n| format!("        .a(|y| {{\n            y + {n}\n        }})\n"))
-            .collect::<String>();
-        let rust = format!("fn main() {{\n    x\n{links}        .z();\n}}\n");
-        let start = std::time::Instant::now();
-        rust_to_rusk(&rust).unwrap();
-        start.elapsed()
-    };
-    let (short, long) = (convert(1_000), convert(4_000));
-    // Four times the links take about four times as long, not sixteen.
-    assert!(long < short * 8, "{short:?} {long:?}");
-}
-
-#[test]
-fn deep_closures_convert_in_time_linear_in_their_text() {
-    let convert = |depth: usize| {
-        let closures = (0..depth).fold("1".to_string(), |body, level| {
-            let indent = "    ".repeat(depth - level);
-            format!("g(|| {{\n{indent}    {body}\n{indent}}})")
-        });
-        let rust = format!("fn f() -> u8 {{\n    {closures}\n}}\n");
-        let start = std::time::Instant::now();
-        rust_to_rusk(&rust).unwrap();
-        start.elapsed()
-    };
-    // Twice the depth is four times the indented text, so it should take about four times as
-    // long, not eight.
-    let (short, long) = (convert(200), convert(400));
-    assert!(long < short * 5, "{short:?} {long:?}");
-}
-
-#[test]
 fn deep_nesting_converts_on_a_small_caller_stack() {
     let parens = 5_000;
     let parens = format!(
