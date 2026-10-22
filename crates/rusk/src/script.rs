@@ -113,7 +113,7 @@ pub fn script_rust(
             .into_iter()
             .map(|(source, synthesized)| match script_line(source) {
                 Some(source) => (source, synthesized),
-                None => (source, true),
+                None => (source.min(script_lines.max(1)), true),
             })
             .collect::<Vec<_>>();
         (output.rust, lines)
