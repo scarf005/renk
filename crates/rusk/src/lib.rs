@@ -5508,6 +5508,11 @@ fn read_format_placeholder(text: &str, start: usize, escaped: bool) -> Option<(u
                 index += 2;
                 continue;
             }
+            Mode::Code if let Some(end) = raw_literal_end(text, index) => {
+                body.push_str(&text[index..end]);
+                index = end;
+                continue;
+            }
             Mode::Code => match character {
                 '{' => depth += 1,
                 '}' => {
@@ -5517,11 +5522,15 @@ fn read_format_placeholder(text: &str, start: usize, escaped: bool) -> Option<(u
                     }
                 }
                 '"' => mode = Mode::Plain,
+                // A char literal, such as `'}'`; a lifetime such as `'static` is code.
                 '\'' => {
-                    let end = quoted_string_end(text, index);
-                    body.push_str(text.get(index..=end)?);
-                    index = end + 1;
-                    continue;
+                    let rest = text[index..].chars().collect::<Vec<_>>();
+                    if let Some(end) = char_literal_end(&rest, 0) {
+                        let end = index + rest[..=end].iter().map(|c| c.len_utf8()).sum::<usize>();
+                        body.push_str(&text[index..end]);
+                        index = end;
+                        continue;
+                    }
                 }
                 _ => {}
             },
@@ -5615,6 +5624,10 @@ fn split_macro_arguments(text: &str, format_macro: bool) -> Vec<&str> {
     let mut curly = 0usize;
     while index < text.len() {
         let character = text[index..].chars().next().unwrap();
+        if let Some(end) = raw_literal_end(text, index) {
+            index = end;
+            continue;
+        }
         match character {
             '(' => round += 1,
             ')' => round = round.saturating_sub(1),
@@ -5656,6 +5669,10 @@ fn matching_delimiter(
     let mut index = open;
     while index < text.len() {
         let character = text[index..].chars().next()?;
+        if let Some(end) = raw_literal_end(text, index) {
+            index = end;
+            continue;
+        }
         match character {
             '"' if format_macro => index = format_string_end(text, index)?,
             '"' | '\'' => index = quoted_string_end(text, index),
@@ -6190,6 +6207,22 @@ fn opaque_span_end(chars: &[char], index: usize) -> Option<usize> {
         return char_literal_end(chars, index + 1);
     }
     None
+}
+
+/// The byte index just past the raw string literal starting at byte `index`, as after the `#` of
+/// `r#"a"#`, whose `"` ends no ordinary string.
+fn raw_literal_end(text: &str, index: usize) -> Option<usize> {
+    let rest = text[index..].as_bytes();
+    let prefix = usize::from(matches!(rest.first(), Some(b'b' | b'c')));
+    if rest.get(prefix) != Some(&b'r')
+        || !matches!(rest.get(prefix + 1), Some(b'#' | b'"'))
+        || text[..index].chars().next_back().is_some_and(is_ident_continue)
+    {
+        return None;
+    }
+    let chars = text[index..].chars().collect::<Vec<_>>();
+    let end = raw_string_span_end(&chars, 0)?;
+    Some(index + chars[..=end].iter().map(|c| c.len_utf8()).sum::<usize>())
 }
 
 fn raw_string_span_end(chars: &[char], index: usize) -> Option<usize> {
