@@ -167,7 +167,8 @@ fn docs_examples_transpile_to_compilable_rust() {
     let out_dir = env::temp_dir().join(format!("rusk-docs-{}", std::process::id()));
     let _ = fs::remove_dir_all(&out_dir);
     fs::create_dir_all(&out_dir).unwrap();
-    let mut pages = vec![Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/src")];
+    let docs = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs");
+    let mut pages = vec![docs.join("src"), docs.join("ko/src")];
     let mut examples = 0;
     while let Some(path) = pages.pop() {
         if path.is_dir() {
