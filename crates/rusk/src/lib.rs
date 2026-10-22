@@ -7000,8 +7000,10 @@ fn is_assignment(text: &str) -> bool {
         && !text.contains(" <= ")
         && !text.contains(" >= ")
         && !text.contains(" => ")
-        // The `=` of `if let` / `while let` binds a pattern in a condition.
+        // The `=` of `if let` / `while let` binds a pattern in a condition, also in a one-line
+        // `if let P = e then a else b`.
         && !is_control(text)
+        && !strip_control_label(text).starts_with("if ")
 }
 
 fn looks_like_struct_literal(node: &Node) -> bool {
