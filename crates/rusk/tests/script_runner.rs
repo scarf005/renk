@@ -201,8 +201,10 @@ fn add_writes_dependencies_into_the_script_frontmatter_and_keeps_the_rest() {
         format!("{shebang}---\n[package]\nedition = \"2021\"\n---\n{body}"),
     )
     .unwrap();
+    let unterminated = dir.join("unterminated.rsk");
+    fs::write(&unterminated, "---\n[package]\nedition = \"2024\"\n---").unwrap();
 
-    for script in [&bare, &framed] {
+    for script in [&bare, &framed, &unterminated] {
         let output = Command::new(env!("CARGO_BIN_EXE_rusk"))
             .args(["add", script.to_str().unwrap(), "--offline", "--path"])
             .arg(dir.join("dep"))
@@ -229,6 +231,9 @@ fn add_writes_dependencies_into_the_script_frontmatter_and_keeps_the_rest() {
     assert!(framed.starts_with(&kept), "{framed}");
     assert!(framed.contains("[dependencies]\ndep = "), "{framed}");
     assert!(framed.ends_with(&format!("---\n{body}")), "{framed}");
+
+    let unterminated = fs::read_to_string(unterminated).unwrap();
+    assert!(unterminated.contains("[dependencies]\ndep = "), "{unterminated}");
     let _ = fs::remove_dir_all(dir);
 }
 
