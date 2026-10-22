@@ -4,8 +4,7 @@
 
 The std format macros take inline expressions. `{expr}` and `{expr:spec}` become positional
 arguments. A string inside a placeholder uses the literal's escapes, as in
-`"{if c then \"a\" else \"b\"}"`; in a raw literal its quotes are plain, as in
-`r#"{v.join("-")}"#`.
+`"{tags.join(\", \")}"`; in a raw literal its quotes are plain, as in `r#"{v.join("-")}"#`.
 
 ```rsk
 pub fn report(name: &str, values: &[i32], tags: &[&str]):
