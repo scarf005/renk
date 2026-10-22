@@ -260,8 +260,14 @@ fn format_lines(source: &str, options: FormatOptions) -> Result<String, Transpil
 
 /// A script without a top-level `fn main` with its lines wrapped in a `fn main` returning
 /// `Result`, so top-level statements run in order and can use `?`, and the 1-based line of the
-/// inserted header. Leading blank, comment, and `#![...]` lines stay in front of the header.
-pub fn wrap_script_statements(source: &str, syntax: SourceSyntax) -> Option<(String, usize)> {
+/// inserted header. `result` names a `Result` alias with a default error type, such as
+/// `anyhow::Result`, to return instead of `Result<(), Box<dyn std::error::Error>>`. Leading blank,
+/// comment, and `#![...]` lines stay in front of the header.
+pub fn wrap_script_statements(
+    source: &str,
+    syntax: SourceSyntax,
+    result: Option<&str>,
+) -> Option<(String, usize)> {
     let lines = source.lines().collect::<Vec<_>>();
     let in_literal = lines_ending_in_literal(source);
     let starts_code = |index: usize| index == 0 || !in_literal[index - 1];
@@ -280,13 +286,15 @@ pub fn wrap_script_statements(source: &str, syntax: SourceSyntax) -> Option<(Str
             !(line.is_empty() || line.starts_with("//") || line.starts_with("#!["))
         })
         .unwrap_or(lines.len());
-    let (open, close) = match syntax {
-        SourceSyntax::Rusk => ("fn main() -> Result[(), Box[dyn std.error.Error]]:", ""),
-        _ => (
-            "fn main() -> Result<(), Box<dyn std::error::Error>> {",
-            "\n}",
-        ),
+    let (left, right, open, close) = match syntax {
+        SourceSyntax::Rusk => ("[", "]", ":", ""),
+        _ => ("<", ">", " {", "\n}"),
     };
+    let returns = result.map_or_else(
+        || format!("Result{left}(), Box{left}dyn std::error::Error{right}{right}"),
+        |result| format!("{result}{left}(){right}"),
+    );
+    let open = format!("fn main() -> {returns}{open}");
     let body = (header..lines.len()).map(|index| {
         if starts_code(index) && !lines[index].is_empty() {
             format!("    {}", lines[index])
@@ -297,7 +305,7 @@ pub fn wrap_script_statements(source: &str, syntax: SourceSyntax) -> Option<(Str
     let wrapped = lines[..header]
         .iter()
         .map(|line| line.to_string())
-        .chain([open.to_string()])
+        .chain([open])
         .chain(body)
         .chain([format!("    Ok(()){close}")])
         .collect::<Vec<_>>()

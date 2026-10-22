@@ -44,7 +44,9 @@ fn main():
   once. A script's package is named `<stem>-<hash>` unless it sets `package.name`; a script
   with its own name builds in a target directory of its own instead.
 - A script without a top-level `fn main` runs its top-level lines in order inside
-  `fn main() -> Result<(), Box<dyn std::error::Error>>`, so they can use `?`.
+  `fn main() -> Result<(), Box<dyn std::error::Error>>`, so they can use `?`. A script that
+  depends on `anyhow`, `eyre`, or `color-eyre` returns that crate's `Result<()>` instead, so
+  its `bail!` works.
 - `RUSK_SCRIPT` holds the script's absolute path, `CARGO_MANIFEST_DIR` and `CARGO_PKG_NAME`
   are set as `cargo run` sets them, and the script's exit code is rusk's.
 - Compiler diagnostics point at the script's lines and quote its source.
