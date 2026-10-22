@@ -16,7 +16,7 @@ pub struct SourceMapEntry {
 pub struct SourceMapNode {
     pub kind: String,
     pub source_line: usize,
-    pub source_indent: usize,
+    pub source_column: usize,
     pub source_text: String,
     pub generated_start_line: usize,
     pub generated_end_line: usize,
@@ -121,6 +121,8 @@ mod wasm_api {
 struct SourceLine {
     line: usize,
     indent: usize,
+    /// Source line and byte offset `text` starts at.
+    start: (usize, usize),
     text: String,
     /// A line of a multi-line `macro_rules!` arm body, kept as Rust tokens.
     raw: bool,
@@ -136,6 +138,9 @@ struct SourceLine {
 struct Node {
     line: usize,
     indent: usize,
+    /// Source line and byte offset `text` starts at, which `line` and `indent` leave when a
+    /// body is lowered or follows a multi-line attribute.
+    start: (usize, usize),
     text: String,
     children: Vec<Node>,
     /// Source closing line of a `{` head after its `}`, such as `)?` in `})?`.
@@ -164,8 +169,7 @@ struct Emitter {
     tree_stack: Vec<SourceMapNode>,
     /// Trailing source comments by generated line, appended once every line is final.
     comments: Vec<(usize, String)>,
-    /// Whether each source line, numbered from 1, is blank.
-    blank_lines: Vec<bool>,
+    source_lines: Vec<String>,
     /// The last source line a node began on.
     last_node_line: usize,
     /// The source line of the attribute just pushed.
@@ -214,9 +218,7 @@ fn transpile_lines(source: &str) -> Result<TranspileOutput, TranspileError> {
     let nodes = parse_source_tree(&lines)?;
 
     let mut emitter = Emitter {
-        blank_lines: std::iter::once(false)
-            .chain(source.lines().map(|line| line.trim().is_empty()))
-            .collect(),
+        source_lines: source.lines().map(str::to_string).collect(),
         ..Emitter::default()
     };
     let modules = module_names(&nodes);
@@ -1732,10 +1734,10 @@ fn source_map_node_json(node: &SourceMapNode, indent: usize) -> String {
     };
 
     format!(
-        "{pad}{{\n{child_pad}\"kind\": \"{}\",\n{child_pad}\"source\": {{ \"line\": {}, \"indent\": {}, \"text\": \"{}\" }},\n{child_pad}\"generated\": {{ \"start_line\": {}, \"end_line\": {} }},\n{child_pad}\"children\": {}\n{pad}}}",
+        "{pad}{{\n{child_pad}\"kind\": \"{}\",\n{child_pad}\"source\": {{ \"line\": {}, \"column\": {}, \"text\": \"{}\" }},\n{child_pad}\"generated\": {{ \"start_line\": {}, \"end_line\": {} }},\n{child_pad}\"children\": {}\n{pad}}}",
         escape_json(&node.kind),
         node.source_line,
-        node.source_indent,
+        node.source_column,
         escape_json(&node.source_text),
         node.generated_start_line,
         node.generated_end_line,
@@ -1891,6 +1893,7 @@ fn source_lines(source: &str) -> Result<Vec<SourceLine>, TranspileError> {
             lines.push(SourceLine {
                 line,
                 indent: arm + 1,
+                start: (line, arm + 1),
                 text: without_comment[arm + 1..].trim_end().to_string(),
                 raw: true,
                 comment: None,
@@ -1996,12 +1999,16 @@ fn source_lines(source: &str) -> Result<Vec<SourceLine>, TranspileError> {
             macro_indent = None;
         }
         let mut text = without_comment.trim_start().to_string();
+        // Leading whitespace may hold more than spaces, as an IME's `\u{3000}`.
+        let mut start = (line, without_comment.len() - text.len());
         // `} else {` continues a `{` chain whose closing braces the emitter writes itself.
         if let Some(branch) = text
             .strip_prefix('}')
             .map(str::trim_start)
             .filter(|branch| is_branch(branch))
         {
+            // The `}` written before a closing line such as `, |y|:` is not in the source.
+            start.1 += text.len() - branch.len() - usize::from(closes_group_block);
             text = branch.to_string();
         }
         // A `})` line before `.method()` lines takes them as its closing tail.
@@ -2051,17 +2058,21 @@ fn source_lines(source: &str) -> Result<Vec<SourceLine>, TranspileError> {
             lines.push(SourceLine {
                 line,
                 indent,
+                start,
                 text: code[..=close].to_string(),
                 raw: false,
                 comment: None,
                 closing_comment: None,
                 closed: false,
             });
-            code = code[close + 1..].trim_start();
+            let rest = &code[close + 1..];
+            start = text_start(start, code, close + 1 + rest.len() - rest.trim_start().len());
+            code = rest.trim_start();
         }
         lines.push(SourceLine {
             line,
             indent,
+            start,
             text: code.to_string(),
             raw: false,
             comment: (!comment.is_empty()).then(|| comment.to_string()),
@@ -2992,6 +3003,7 @@ fn parse_nodes(
         nodes.push(Node {
             line: line.line,
             indent: line.indent,
+            start: line.start,
             text: line.text.clone(),
             children,
             closing,
@@ -3121,11 +3133,24 @@ fn require_block_opener(node: &Node) -> Result<(), TranspileError> {
     }
 }
 
+/// The source position of byte `at` of `text`, which starts at `start` and may span lines.
+fn text_start(start: (usize, usize), text: &str, at: usize) -> (usize, usize) {
+    match text[..at].rfind('\n') {
+        Some(newline) => (start.0 + text[..at].matches('\n').count(), at - newline - 1),
+        None => (start.0, start.1 + at),
+    }
+}
+
 /// `fn f() = match x:` owns its block like `fn f():` whose only body line is `match x:`.
 fn inline_block_body(node: &Node) -> Option<Vec<Node>> {
     let (text, has_block) = strip_block_marker(node.text.trim());
     let (_, body) = split_function_body(text)?;
     let body = body.trim();
+    let at = (body.as_ptr() as usize)
+        .checked_sub(node.text.as_ptr() as usize)
+        .filter(|&at| node.text.get(at..).is_some_and(|rest| rest.starts_with(body)))
+        .unwrap_or_default();
+    let start = text_start(node.start, &node.text, at);
     // Children at the function's indent are the body's `else` branches.
     let split = node
         .children
@@ -3137,6 +3162,7 @@ fn inline_block_body(node: &Node) -> Option<Vec<Node>> {
         std::iter::once(Node {
             line: node.line,
             indent: node.indent + 4,
+            start,
             text: format!("{body}:"),
             children: children
                 .iter()
@@ -4099,6 +4125,7 @@ fn offset_node_indent(node: &Node, offset: usize) -> Node {
     Node {
         line: node.line,
         indent: node.indent + offset,
+        start: node.start,
         text: node.text.clone(),
         closing: node.closing.clone(),
         comment: node.comment.clone(),
@@ -7085,7 +7112,8 @@ impl Emitter {
     fn begin_node(&mut self, node: &Node, kind: String) {
         // Only the first node on a line, not the body an `= match x:` head lowers to.
         if node.line > self.last_node_line
-            && self.blank_lines.get(node.line - 1) == Some(&true)
+            && node.line > 1
+            && self.source_lines[node.line - 2].trim().is_empty()
             && self
                 .lines
                 .last()
@@ -7094,15 +7122,22 @@ impl Emitter {
             self.lines.push(String::new());
         }
         self.last_node_line = self.last_node_line.max(node.line);
+        let source_column = self.source_column(node);
         self.tree_stack.push(SourceMapNode {
             kind,
-            source_line: node.line,
-            source_indent: node.indent,
+            source_line: node.start.0,
+            source_column,
             source_text: node.text.clone(),
             generated_start_line: self.lines.len() + 1,
             generated_end_line: self.lines.len(),
             children: Vec::new(),
         });
+    }
+
+    /// The UTF-16 column `node`'s text starts at in its source line.
+    fn source_column(&self, node: &Node) -> usize {
+        let (line, at) = node.start;
+        self.source_lines[line - 1][..at].encode_utf16().count()
     }
 
     fn end_node(&mut self) {

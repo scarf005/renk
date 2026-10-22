@@ -148,16 +148,67 @@ fn source_tree_nodes_start_at_their_source_text() {
         while let Some(node) = stack.pop() {
             let line = lines[node.source_line - 1];
             let text = node.source_text.lines().next().unwrap_or_default().trim();
-            let at = line.chars().skip(node.source_indent).collect::<String>();
+            let at = String::from_utf16_lossy(
+                &line.encode_utf16().skip(node.source_column).collect::<Vec<_>>(),
+            );
             assert!(
                 !text.is_empty() && at.starts_with(text),
                 "{} line {}: {line:?} does not have {text:?} at column {}",
                 path.display(),
                 node.source_line,
-                node.source_indent
+                node.source_column
             );
             stack.extend(&node.children);
         }
+    }
+}
+
+#[test]
+fn source_tree_columns_are_where_the_source_text_starts() {
+    let source = [
+        "enum Kind:",
+        "    #[doc = \"Ok\"] Ok",
+        "    #[doc = \"\u{1F600}\"]  #[allow(dead_code)] Err",
+        "fn g(c: bool) -> i32 = if c: // if c:",
+        "    1",
+        "else:",
+        "    2",
+        "fn h(x: i32) -> i32 = match x :",
+        "    _ => 0",
+        "fn long(",
+        "    a: i32,",
+        ") -> i32 = match a:",
+        "    _ => a",
+        "#[doc = \"a",
+        "b\"] fn f() -> u8 = 1",
+        "fn ws(a: bool):",
+        "    \u{a0}let y = 2",
+        "    if a:",
+        "        f()",
+        "    \u{3000}} else:",
+        "        g()",
+    ]
+    .join("\n");
+    let source = source.as_str();
+    let output = transpile(source).unwrap();
+    let mut stack = output.source_tree.iter().collect::<Vec<_>>();
+    let mut columns = Vec::new();
+    while let Some(node) = stack.pop() {
+        columns.push((node.source_line, node.source_text.as_str(), node.source_column));
+        stack.extend(&node.children);
+    }
+    for expected in [
+        (2, "Ok", 18),
+        (3, "#[allow(dead_code)]", 19),
+        (3, "Err", 39),
+        (4, "if c:", 23),
+        (8, "match x:", 22),
+        (12, "match a:", 11),
+        (15, "fn f() -> u8 = 1", 4),
+        (17, "let y = 2", 5),
+        (20, "else:", 7),
+    ] {
+        assert!(columns.contains(&expected), "{expected:?} not in {columns:?}");
     }
 }
 

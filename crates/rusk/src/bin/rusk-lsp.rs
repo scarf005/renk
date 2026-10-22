@@ -1037,11 +1037,11 @@ fn node_range(node: &SourceMapNode) -> Range {
     Range {
         start: Position {
             line,
-            character: node.source_indent as u32,
+            character: node.source_column as u32,
         },
         end: Position {
             line,
-            character: node.source_indent as u32 + utf16_len(first_line),
+            character: node.source_column as u32 + utf16_len(first_line),
         },
     }
 }
