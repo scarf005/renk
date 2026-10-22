@@ -158,3 +158,101 @@ fn script_edits_sent_while_rust_analyzer_starts_reach_it_in_order() {
     };
     assert!(hover["contents"].to_string().contains("fn from"), "{hover}");
 }
+
+/// The live rust-analyzer processes rusk-lsp has started.
+#[cfg(target_os = "linux")]
+fn rust_analyzer_children(pid: u32) -> usize {
+    let children = fs::read_dir(format!("/proc/{pid}/task"))
+        .unwrap()
+        .flat_map(|task| fs::read_to_string(task.unwrap().path().join("children")))
+        .collect::<String>();
+    children
+        .split_whitespace()
+        .filter(|child| {
+            let stat = fs::read_to_string(format!("/proc/{child}/stat")).unwrap_or_default();
+            stat.contains("(rust-analyzer)") && !stat.contains(") Z ")
+        })
+        .count()
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_script_that_becomes_a_module_leaves_its_own_rust_analyzer() {
+    if Command::new("rust-analyzer")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("skipped: rust-analyzer is not installed");
+        return;
+    }
+    let dir = temp_dir("lsp-script-to-module");
+    fs::create_dir_all(dir.join("src")).unwrap();
+    fs::write(
+        dir.join("Cargo.toml"),
+        "[package]\nname = \"tool\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )
+    .unwrap();
+    let module = "fn main():\n    println!(\"hi\")\n";
+    let script = format!("#!/usr/bin/env -S rusk script\n{module}");
+    let path = dir.join("src/main.rsk");
+    fs::write(&path, module).unwrap();
+    let uri = format!("file://{}", path.display());
+
+    let mut server = Command::new(env!("CARGO_BIN_EXE_rusk-lsp"))
+        .env("XDG_CACHE_HOME", dir.join("cache"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut stdin = server.stdin.take().unwrap();
+    let mut stdout = BufReader::new(server.stdout.take().unwrap());
+    send(
+        &mut stdin,
+        json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+            "processId": null,
+            "rootUri": format!("file://{}", dir.display()),
+            "capabilities": {},
+        }}),
+    );
+    while read_message(&mut stdout).unwrap()["id"] != 1 {}
+    send(
+        &mut stdin,
+        json!({"jsonrpc": "2.0", "method": "initialized", "params": {}}),
+    );
+    for (version, text) in [&script, module].into_iter().enumerate() {
+        let message = if version == 0 {
+            json!({"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {
+                "textDocument": {"uri": uri, "languageId": "rusk", "version": 1, "text": text},
+            }})
+        } else {
+            json!({"jsonrpc": "2.0", "method": "textDocument/didChange", "params": {
+                "textDocument": {"uri": uri, "version": version + 1},
+                "contentChanges": [{"text": text}],
+            }})
+        };
+        send(&mut stdin, message);
+    }
+
+    // rusk-lsp publishes a document's diagnostics after syncing it with rust-analyzer.
+    let mut synced = 0;
+    while synced < 2 {
+        if read_message(&mut stdout).unwrap()["method"] == "textDocument/publishDiagnostics" {
+            synced += 1;
+        }
+    }
+    thread::spawn(move || while read_message(&mut stdout).is_some() {});
+
+    // The workspace rust-analyzer now serves the module, and the script's one has exited.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut running = rust_analyzer_children(server.id());
+    while running != 1 && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(200));
+        running = rust_analyzer_children(server.id());
+    }
+    let _ = server.kill();
+    let _ = server.wait();
+    let _ = fs::remove_dir_all(&dir);
+    assert_eq!(running, 1);
+}
