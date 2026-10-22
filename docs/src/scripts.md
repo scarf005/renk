@@ -16,6 +16,10 @@ fn main():
 
 With that `#!` line and `chmod +x tool.rsk`, `./tool.rsk ARGS` runs the script.
 
+`rusk tool.rsk` prints the Rust that `rusk script` builds: the frontmatter is kept and
+top-level lines are wrapped in `fn main`. `--source-map` is rejected for scripts. A file is a
+script when it starts with a `#!` line or `---` frontmatter.
+
 ## Dependencies
 
 Dependencies go in the cargo-script `---` frontmatter, which is a Cargo manifest. A script that

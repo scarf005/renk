@@ -3,12 +3,14 @@
 ## Format strings
 
 The std format macros take inline expressions. `{expr}` and `{expr:spec}` become positional
-arguments. A string literal inside a placeholder is written without escapes.
+arguments. A string inside a placeholder uses the literal's escapes, as in
+`"{if c then \"a\" else \"b\"}"`; in a raw literal its quotes are plain, as in
+`r#"{v.join("-")}"#`.
 
 ```rsk
 pub fn report(name: &str, values: &[i32], tags: &[&str]):
     println!("{name} has {values.len()} values")
-    println!("{tags.join(", ")}")
+    println!("{tags.join(\", \")}")
     assert!(!values.is_empty(), "{values.len():>4}")
 ```
 

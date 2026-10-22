@@ -16,6 +16,10 @@ fn main():
 
 이 `#!` 줄이 있으면 `chmod +x tool.rsk` 후 `./tool.rsk ARGS`로 스크립트를 실행할 수 있다.
 
+`rusk tool.rsk`는 `rusk script`가 빌드하는 Rust를 출력한다. frontmatter는 유지되고 최상위 줄은
+`fn main`으로 감싸진다. 스크립트에는 `--source-map`을 쓸 수 없다. `#!` 줄이나 `---` frontmatter로
+시작하는 파일이 스크립트다.
+
 ## 의존성
 
 의존성은 cargo-script `---` frontmatter에 적는다. frontmatter는 Cargo 매니페스트다. edition을
