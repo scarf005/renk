@@ -1,0 +1,20 @@
+pub fn joined(v: &[&str]) -> String = format!("{v.join(\"-\")}")
+
+pub fn plain(v: &[&str]) -> String = format!("{v.join("-")} {v.join("\\")}")
+
+pub fn padded(v: &[&str]) -> String = format!("[{v.join(\",\"):>8}]")
+
+pub fn chosen(c: bool) -> String = format!("{if c then \"a\" else \"b\"}")
+
+pub fn lines(s: &str) -> String = format!("{s.split(\"\\n\").count()} \"{s.len()}\"")
+
+pub fn braces(s: &str) -> String = format!("{s.matches('}').count()} {{\"}}")
+
+pub fn escaped_backslash(s: &str) -> String = format!("\\{s.trim_end_matches(\"\\\\\")}\\")
+
+pub fn raw(v: &[&str]) -> String = format!(r#"{v.join("-")} "q""#)
+
+pub fn main():
+    let v = ["a", "b"]
+    println!("{joined(&v)} {plain(&v)} {padded(&v)} {chosen(true)} {lines(\"x\\ny\")} {braces(\"}\")}")
+    println!("{escaped_backslash(\"x\\\\\")} {raw(&v)}")
