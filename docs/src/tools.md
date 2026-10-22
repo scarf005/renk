@@ -50,8 +50,9 @@ fn main():
 - `RUSK_SCRIPT` holds the script's absolute path, `CARGO_MANIFEST_DIR` and `CARGO_PKG_NAME`
   are set as `cargo run` sets them, and the script's exit code is rusk's.
 - Compiler diagnostics point at the script's lines and quote its source.
-- `rusk script --no-cargo FILE.rsk` runs the cached binary without cargo's freshness checks
-  and rebuilds only when the generated Rust changes.
+- Scripts run their cached binary without cargo's freshness checks and rebuild only when the
+  generated Rust changes; `rusk script --cargo FILE.rsk` builds through cargo on every run to
+  pick up dependency and toolchain updates.
 
 ## Language server
 

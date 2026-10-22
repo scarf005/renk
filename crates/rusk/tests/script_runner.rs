@@ -91,7 +91,7 @@ fn scripts_see_the_package_environment_cargo_run_sets() {
         "println!(\"{}\", std::env::var(\"CARGO_PKG_NAME\")?)\nprintln!(\"{}\", std::env::var(\"CARGO_MANIFEST_DIR\")?)\n",
     )
     .unwrap();
-    for flags in [&[][..], &["--no-cargo"]] {
+    for flags in [&[][..], &["--cargo"]] {
         let output = Command::new(env!("CARGO_BIN_EXE_rusk"))
             .arg("script")
             .args(flags)
@@ -140,7 +140,7 @@ fn script_reports_transpile_errors_with_the_script_path_and_line() {
 
 #[test]
 fn script_execs_the_cached_binary_and_rebuilds_after_edits_unless_told_to_run_cargo() {
-    let dir = temp_dir("script-no-cargo");
+    let dir = temp_dir("script-cached");
     let script = dir.join("greet.rsk");
     let body = |greeting: &str| {
         format!(
@@ -207,7 +207,7 @@ fn script_without_an_edition_runs_without_the_cargo_edition_warning() {
             format!("{header}fn main():\n    println!(\"{name}\")\n"),
         )
         .unwrap();
-        for mode in [None, Some("--no-cargo")] {
+        for mode in [None, Some("--cargo")] {
             let output = Command::new(env!("CARGO_BIN_EXE_rusk"))
                 .arg("script")
                 .args(mode)
@@ -242,7 +242,7 @@ fn script_compiler_diagnostics_point_at_script_lines() {
         "fn main():\n\n    let unused = 1\n    eprintln!(\"broken.rs:1:1\")\n",
     )
     .unwrap();
-    for mode in [None, Some("--no-cargo")] {
+    for mode in [None, Some("--cargo")] {
         let run = |script: &PathBuf| {
             Command::new(env!("CARGO_BIN_EXE_rusk"))
                 .arg("script")
