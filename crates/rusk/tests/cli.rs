@@ -164,7 +164,7 @@ fn help_exits_successfully() {
         let output = rusk(&[flag], "", &dir);
         assert_eq!(output.status.code(), Some(0));
         assert!(
-            text(&output.stdout).contains("USAGE:"),
+            text(&output.stdout).contains("Usage:"),
             "{}",
             text(&output.stdout)
         );

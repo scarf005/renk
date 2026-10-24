@@ -808,7 +808,35 @@ fn source_syntax(path: Option<&Path>) -> SourceSyntax {
 
 fn print_help() {
     println!(
-        "rusk - indentation-based Rust syntax transpiler\n\nUSAGE:\n    rusk [transpile] [INPUT.rsk] [-o OUTPUT.rs] [--source-map SOURCE_MAP]\n    rusk from-rust [INPUT.rs] [-o OUTPUT.rsk] [--aggressive]\n    rusk fmt [INPUT.rsk] [-o INPUT]\n    rusk [cargo] <CARGO_COMMAND> [CARGO_ARGS...]\n    rusk script [--cargo] <SCRIPT.rsk> [ARGS...]\n    rusk add <SCRIPT.rsk> [CARGO_ADD_ARGS...]\n\nScripts keep their cargo-script frontmatter (defaulting package.edition to 2024), are transpiled to $XDG_CACHE_HOME/rusk/scripts, built with cargo +nightly -Zscript in the shared $XDG_CACHE_HOME/rusk/build (scripts that set package.name build apart), and run with RUSK_SCRIPT set to the script path; scripts without a top-level fn main run their lines in a fn main returning Result (anyhow::Result and the like when the script depends on anyhow, eyre, or color-eyre), so they can use ?; compiler diagnostics point at script lines and cargo's failure summary names the script; use #!/usr/bin/env -S rusk script as the shebang. Scripts exec the binary cached next to the generated Rust, building it with cargo only when the Rust changed, so dependency and toolchain updates need an edit to the script or --cargo, which builds through cargo's resolution and freshness checks on every run.\n\nrusk add runs cargo add on the script frontmatter (creating it when missing), so rusk add tool.rsk regex adds a dependency; it is the fix for a missing-crate error.\n\nCargo wrapper commands transpile Cargo source roots (*.rsk under src, examples, tests, benches, plus build.rsk) to cached generated .rs files, then run cargo.\n\nExamples:\n    rusk from-rust src/main.rs -o src/main.rsk\n    rusk fmt src/main.rsk -o src/main.rsk\n    rusk run\n    rusk cargo fmt\n    rusk cargo test\n\nIf INPUT is omitted, rusk reads source from stdin when stdin is piped; otherwise it prints this help."
+        "\
+rusk - indentation-based Rust syntax
+
+Usage:
+    rusk [transpile] [INPUT.rsk] [-o OUTPUT.rs] [--source-map MAP.json]
+    rusk from-rust [INPUT.rs] [-o OUTPUT.rsk] [--aggressive]
+    rusk fmt [INPUT.rsk] [-o INPUT]
+    rusk [cargo] <CARGO_COMMAND> [CARGO_ARGS...]
+    rusk script [--cargo] <SCRIPT.rsk> [ARGS...]
+    rusk add <SCRIPT.rsk> [CARGO_ADD_ARGS...]
+
+Without INPUT, rusk reads stdin when it is piped and prints this help otherwise.
+
+Cargo commands (build, run, test, ...) first transpile the .rsk files under src,
+examples, tests, and benches, and build.rsk, to cached .rs files.
+
+Scripts need a nightly toolchain and start with #!/usr/bin/env -S rusk script.
+Dependencies go in the --- frontmatter; rusk add edits it. A script without
+fn main runs its top-level lines in a main that returns Result. The script path
+is in RUSK_SCRIPT. Runs reuse the cached binary; --cargo rebuilds through cargo
+to pick up dependency and toolchain updates.
+
+Examples:
+    rusk from-rust src/main.rs -o src/main.rsk
+    rusk fmt src/main.rsk -o src/main.rsk
+    rusk run
+    rusk test
+    rusk script tool.rsk arg
+    rusk add tool.rsk regex"
     );
 }
 
