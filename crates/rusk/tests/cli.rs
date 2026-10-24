@@ -52,12 +52,18 @@ fn transpiles_a_script_as_rusk_script_builds_it() {
     let dir = temp_dir("script");
     let script = "#!/usr/bin/env -S rusk script\n---\n[dependencies]\nregex = \"1\"\n---\nprintln!(\"hi\")\n";
     fs::write(dir.join("tool.rsk"), script).unwrap();
-    let output = rusk(&["tool.rsk"], "", &dir);
+    let output = rusk(&["transpile", "tool.rsk"], "", &dir);
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
     let rust = text(&output.stdout);
-    assert!(rust.starts_with("---\n[dependencies]\nregex = \"1\"\n"), "{rust}");
+    assert!(
+        rust.starts_with("---\n[dependencies]\nregex = \"1\"\n"),
+        "{rust}"
+    );
     assert!(!rust.contains("#!"), "{rust}");
-    assert!(rust.contains("fn main() -> Result<(), Box<dyn std::error::Error>> {"), "{rust}");
+    assert!(
+        rust.contains("fn main() -> Result<(), Box<dyn std::error::Error>> {"),
+        "{rust}"
+    );
     let _ = fs::remove_dir_all(dir);
 }
 
@@ -118,31 +124,47 @@ fn writes_output_and_a_json_source_map() {
 fn reports_errors_on_stderr_with_exit_code_one() {
     let dir = temp_dir("errors");
     fs::write(dir.join("bad.rsk"), "fn main():\n\tx\n").unwrap();
-    let cases: [(&[&str], &str); 8] = [
-        (&["bad.rsk"], "rusk: line 2: tabs are not supported"),
-        (&["missing.rsk"], "rusk: "),
-        (&["--bogus"], "rusk: unknown option: --bogus"),
+    let cases: [(&[&str], i32, &str); 8] = [
         (
-            &["a.rsk", "b.rsk"],
-            "rusk: only one input path is supported",
+            &["transpile", "bad.rsk"],
+            1,
+            "rusk: line 2: tabs are not supported",
         ),
-        (&["bad.rsk", "-o"], "rusk: --output requires a path"),
+        (&["transpile", "missing.rsk"], 1, "rusk: "),
+        (
+            &["missing.rsk"],
+            1,
+            "rusk: not a subcommand or script file: missing.rsk",
+        ),
+        (
+            &["transpile", "--bogus"],
+            2,
+            "error: unexpected argument '--bogus'",
+        ),
+        (
+            &["transpile", "a.rsk", "b.rsk"],
+            2,
+            "error: unexpected argument 'b.rsk'",
+        ),
+        (
+            &["transpile", "bad.rsk", "-o"],
+            2,
+            "error: a value is required for '--output <PATH>'",
+        ),
         (
             &["fmt", "bad.rsk", "--source-map", "x.json"],
-            "rusk: --source-map is not supported with fmt",
-        ),
-        (
-            &["from-rust", "bad.rsk", "--source-map", "x.json"],
-            "rusk: --source-map is not supported with syntax conversion",
+            2,
+            "error: unexpected argument '--source-map'",
         ),
         (
             &["fmt", "bad.rsk", "--aggressive"],
-            "rusk: --aggressive is only supported with from-rust",
+            2,
+            "error: unexpected argument '--aggressive'",
         ),
     ];
-    for (args, expected) in cases {
+    for (args, code, expected) in cases {
         let output = rusk(args, "", &dir);
-        assert_eq!(output.status.code(), Some(1), "{args:?}");
+        assert_eq!(output.status.code(), Some(code), "{args:?}");
         assert!(
             output.stdout.is_empty(),
             "{args:?}: {}",
@@ -169,6 +191,28 @@ fn help_exits_successfully() {
             text(&output.stdout)
         );
     }
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn subcommand_help_describes_its_arguments() {
+    let dir = temp_dir("subcommand-help");
+    for (command, expected) in [
+        ("script", "--cargo"),
+        ("add", "cargo add"),
+        ("from-rust", "--aggressive"),
+    ] {
+        let output = rusk(&[command, "--help"], "", &dir);
+        assert_eq!(output.status.code(), Some(0), "{command}");
+        assert!(
+            text(&output.stdout).contains(expected),
+            "{command}: {}",
+            text(&output.stdout)
+        );
+    }
+    let top = text(&rusk(&["--help"], "", &dir).stdout);
+    assert!(!top.contains("RUSK_SCRIPT"), "{top}");
+    assert!(top.lines().count() < 25, "{top}");
     let _ = fs::remove_dir_all(dir);
 }
 

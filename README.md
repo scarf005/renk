@@ -49,7 +49,7 @@ pub fn main() {
 
 ```sh
 cargo install --path crates/rusk --bin rusk --bin rusk-lsp
-rusk input.rsk -o output.rs
+rusk transpile input.rsk -o output.rs
 rusk from-rust input.rs -o output.rsk
 cat input.rsk | rusk
 ```

@@ -21,8 +21,8 @@ fn main():
     println!("{args.len()} args")
 ```
 
-- Run: `rusk script tool.rsk ARGS`, or `chmod +x tool.rsk && ./tool.rsk ARGS`. Needs nightly.
-- Show the generated Rust: `rusk tool.rsk`.
+- Run: `rusk tool.rsk ARGS` (same as `rusk script tool.rsk ARGS`), or `chmod +x tool.rsk && ./tool.rsk ARGS`. Needs nightly.
+- Show the generated Rust: `rusk transpile tool.rsk`.
 - Add a dependency: `rusk add tool.rsk regex [--features f]`. Do not hand-write versions.
 - Without `fn main`, top-level lines run in a `main` that returns `Result`, so `?` works.
   With `anyhow`, `eyre`, or `color-eyre` in the frontmatter it returns that crate's `Result`.

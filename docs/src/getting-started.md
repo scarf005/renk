@@ -28,7 +28,7 @@ pub fn main():
     println!("{sum_until(&[1, 2, 3], 2)}")
 ```
 
-Then run `rusk hello.rsk -o hello.rs && rustc --edition 2024 hello.rs && ./hello`, which prints
+Then run `rusk transpile hello.rsk -o hello.rs && rustc --edition 2024 hello.rs && ./hello`, which prints
 `3`.
 
 The [examples](https://github.com/scarf005/rusk/tree/main/examples) directory has more programs.
@@ -36,7 +36,7 @@ The [examples](https://github.com/scarf005/rusk/tree/main/examples) directory ha
 ## Commands
 
 ```sh
-rusk input.rsk -o output.rs                     # Rusk to Rust
+rusk transpile input.rsk -o output.rs           # Rusk to Rust
 rusk transpile input.rsk --source-map out.json  # also write a JSON source map
 cat input.rsk | rusk                            # stdin to stdout
 rusk from-rust input.rs -o output.rsk           # Rust to Rusk

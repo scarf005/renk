@@ -1,6 +1,6 @@
 # 스크립트
 
-`rusk script [--cargo] FILE.rsk [ARGS...]`는 단일 파일 스크립트를 트랜스파일하고,
+`rusk script [--cargo] FILE.rsk [ARGS...]`, 줄여서 `rusk FILE.rsk [ARGS...]`는 단일 파일 스크립트를 트랜스파일하고,
 `cargo +nightly -Zscript`로 빌드한 뒤 `ARGS`를 넘겨 실행한다. nightly 툴체인이 필요하다.
 
 ```rsk
@@ -16,7 +16,7 @@ fn main():
 
 이 `#!` 줄이 있으면 `chmod +x tool.rsk` 후 `./tool.rsk ARGS`로 스크립트를 실행할 수 있다.
 
-`rusk tool.rsk`는 `rusk script`가 빌드하는 Rust를 출력한다. frontmatter는 유지되고 최상위 줄은
+`rusk transpile tool.rsk`는 `rusk script`가 빌드하는 Rust를 출력한다. frontmatter는 유지되고 최상위 줄은
 `fn main`으로 감싸진다. 스크립트에는 `--source-map`을 쓸 수 없다. `#!` 줄이나 `---` frontmatter로
 시작하는 파일이 스크립트다.
 

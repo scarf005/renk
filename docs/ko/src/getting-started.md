@@ -28,7 +28,7 @@ pub fn main():
     println!("{sum_until(&[1, 2, 3], 2)}")
 ```
 
-`rusk hello.rsk -o hello.rs && rustc --edition 2024 hello.rs && ./hello`를 실행하면 `3`이
+`rusk transpile hello.rsk -o hello.rs && rustc --edition 2024 hello.rs && ./hello`를 실행하면 `3`이
 출력된다.
 
 [examples](https://github.com/scarf005/rusk/tree/main/examples) 디렉터리에 예제 프로그램이 더 있다.
@@ -36,7 +36,7 @@ pub fn main():
 ## 명령
 
 ```sh
-rusk input.rsk -o output.rs                     # Rusk to Rust
+rusk transpile input.rsk -o output.rs           # Rusk to Rust
 rusk transpile input.rsk --source-map out.json  # also write a JSON source map
 cat input.rsk | rusk                            # stdin to stdout
 rusk from-rust input.rs -o output.rsk           # Rust to Rusk

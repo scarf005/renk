@@ -1,6 +1,6 @@
 # Scripts
 
-`rusk script [--cargo] FILE.rsk [ARGS...]` transpiles a single-file script, builds it with
+`rusk script [--cargo] FILE.rsk [ARGS...]`, or just `rusk FILE.rsk [ARGS...]`, transpiles a single-file script, builds it with
 `cargo +nightly -Zscript`, and runs it with `ARGS`. It needs a nightly toolchain.
 
 ```rsk
@@ -16,7 +16,7 @@ fn main():
 
 With that `#!` line and `chmod +x tool.rsk`, `./tool.rsk ARGS` runs the script.
 
-`rusk tool.rsk` prints the Rust that `rusk script` builds: the frontmatter is kept and
+`rusk transpile tool.rsk` prints the Rust that `rusk script` builds: the frontmatter is kept and
 top-level lines are wrapped in `fn main`. `--source-map` is rejected for scripts. A file is a
 script when it starts with a `#!` line or `---` frontmatter.
 

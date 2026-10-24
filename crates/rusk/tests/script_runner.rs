@@ -37,6 +37,31 @@ fn script_runs_through_cargo_script_with_args_exit_code_and_source_path() {
 }
 
 #[test]
+fn a_script_path_runs_like_rusk_script() {
+    let dir = temp_dir("script-bare");
+    let script = dir.join("hello.rsk");
+    fs::write(
+        &script,
+        "#!/usr/bin/env -S rusk script\nprintln!(\"{}\", std::env::args().skip(1).collect[Vec[String]]().join(\"|\"))\n",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_rusk"))
+        .args([script.to_str().unwrap(), "a", "--help", "-x"])
+        .env("XDG_CACHE_HOME", dir.join("cache"))
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "a|--help|-x\n",
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
 fn scripts_share_one_build_dir_and_each_runs_its_own_binary() {
     let dir = temp_dir("script-shared-build");
     let run = |script: &PathBuf| {
@@ -233,7 +258,10 @@ fn add_writes_dependencies_into_the_script_frontmatter_and_keeps_the_rest() {
     assert!(framed.ends_with(&format!("---\n{body}")), "{framed}");
 
     let unterminated = fs::read_to_string(unterminated).unwrap();
-    assert!(unterminated.contains("[dependencies]\ndep = "), "{unterminated}");
+    assert!(
+        unterminated.contains("[dependencies]\ndep = "),
+        "{unterminated}"
+    );
     let _ = fs::remove_dir_all(dir);
 }
 
@@ -279,7 +307,9 @@ fn script_execs_the_cached_binary_and_rebuilds_after_edits_unless_told_to_run_ca
         assert_eq!(output.status.code(), Some(4));
     }
     assert_ne!(
-        run_with(&["--cargo"], no_cargo.to_str().unwrap()).status.code(),
+        run_with(&["--cargo"], no_cargo.to_str().unwrap())
+            .status
+            .code(),
         Some(4)
     );
     assert_eq!(run_with(&["--cargo"], &path).status.code(), Some(4));
