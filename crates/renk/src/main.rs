@@ -1199,8 +1199,8 @@ type Relay<'a> = &'a mut (dyn FnMut(&[u8], bool) -> Option<Vec<u8>> + Send);
 /// terminal reaches the child as a terminal of its own. When renk's stdout and stderr are one
 /// file, as a shared terminal or `2>&1` makes them, the child gets one stream for both, relayed
 /// to stdout through both relays so their order holds. Until the child exits, renk ignores the
-/// interrupt and quit signals that the terminal sends the child too; on Linux the child dies with
-/// renk, as it would if renk ran it in its place.
+/// interrupt and quit signals that the terminal sends the child too, and resizes on `SIGWINCH`;
+/// on Linux the child dies with renk, as it would if renk ran it in its place.
 fn supervise<'a>(
     mut command: Command,
     mut stdout: Option<Relay<'a>>,
@@ -1208,12 +1208,14 @@ fn supervise<'a>(
 ) -> CliResult<i32> {
     let mut relays = Vec::<(
         _,
-        _,
         Box<dyn FnMut(&[u8], bool) -> Option<Vec<u8>> + Send + 'a>,
         _,
     )>::new();
+    // The pseudo-terminals `resize` resizes, which stay open until it stops.
+    let mut resized = Vec::new();
     if (stdout.is_some() || stderr.is_some()) && same_file(io::stdout(), io::stderr()) {
-        let (reader, writer, resize) = capture(io::stdout())?;
+        let (reader, writer, resizable) = capture(io::stdout())?;
+        resized.extend(resizable);
         command.stdout(writer.try_clone()?).stderr(writer);
         let both = move |line: &[u8], complete| {
             let line = match &mut stdout {
@@ -1227,20 +1229,21 @@ fn supervise<'a>(
         };
         relays.push((
             reader,
-            resize,
             Box::new(both),
             Box::new(io::stdout()) as Box<dyn Write + Send>,
         ));
     } else {
         if let Some(line) = stdout {
-            let (reader, writer, resize) = capture(io::stdout())?;
+            let (reader, writer, resizable) = capture(io::stdout())?;
+            resized.extend(resizable);
             command.stdout(writer);
-            relays.push((reader, resize, Box::new(line), Box::new(io::stdout())));
+            relays.push((reader, Box::new(line), Box::new(io::stdout())));
         }
         if let Some(line) = stderr {
-            let (reader, writer, resize) = capture(io::stderr())?;
+            let (reader, writer, resizable) = capture(io::stderr())?;
+            resized.extend(resizable);
             command.stderr(writer);
-            relays.push((reader, resize, Box::new(line), Box::new(io::stderr())));
+            relays.push((reader, Box::new(line), Box::new(io::stderr())));
         }
     }
     #[cfg(target_os = "linux")]
@@ -1255,15 +1258,23 @@ fn supervise<'a>(
     // The command holds the child ends of the streams, which must close for the relays to end.
     drop(command);
     #[cfg(unix)]
-    // SAFETY: ignoring a signal installs no handler, and the old handlers come back below.
+    // SAFETY: `resize` only makes async-signal-safe calls, and the old handlers come back below.
     let handlers = unsafe {
-        [libc::SIGINT, libc::SIGQUIT].map(|signal| (signal, libc::signal(signal, libc::SIG_IGN)))
+        [
+            (libc::SIGINT, libc::SIG_IGN),
+            (libc::SIGQUIT, libc::SIG_IGN),
+            (
+                libc::SIGWINCH,
+                resize as extern "C" fn(_) as libc::sighandler_t,
+            ),
+        ]
+        .map(|(signal, handler)| (signal, libc::signal(signal, handler)))
     };
     let exited = Arc::new(AtomicBool::new(false));
     let status = std::thread::scope(|scope| {
-        for (reader, resize, line, output) in relays {
+        for (reader, line, output) in relays {
             let exited = exited.clone();
-            scope.spawn(move || relay(reader, resize, output, line, exited));
+            scope.spawn(move || relay(reader, output, line, exited));
         }
         let status = child.wait();
         exited.store(true, Ordering::Relaxed);
@@ -1271,6 +1282,10 @@ fn supervise<'a>(
         for (signal, handler) in handlers {
             // SAFETY: the handler is one `signal` returned.
             unsafe { libc::signal(signal, handler) };
+        }
+        #[cfg(unix)]
+        for [_, pseudo_terminal] in &RESIZED {
+            pseudo_terminal.store(-1, Ordering::Relaxed);
         }
         status
     })?;
@@ -1284,12 +1299,11 @@ fn supervise<'a>(
 /// Copies `input` to `output` a line at a time through `line`, holding a partial line until its
 /// newline comes or 50 ms pass without output. Once `exited` is set, it ends at the first 50 ms
 /// without output, or after a mebibyte more read from `input`, as the child's own children may
-/// hold `input` open; what was read before goes out in full. When
-/// `output` fails, as when its reader closes, `input` closes too, so the child's next write to it
-/// fails. It calls `resize` at least every 50 ms.
+/// hold `input` open; what was read before goes out in full. When `output` fails, as when its
+/// reader closes, `input` closes too, so the child's next write to it fails. It calls `resize` at
+/// least every 50 ms, for a resize that sends renk no signal.
 fn relay(
     mut input: Box<dyn Read + Send>,
-    resize: impl Fn(),
     mut output: impl Write,
     mut line: impl FnMut(&[u8], bool) -> Option<Vec<u8>>,
     exited: Arc<AtomicBool>,
@@ -1320,7 +1334,8 @@ fn relay(
         output.flush()
     };
     loop {
-        resize();
+        #[cfg(unix)]
+        resize(libc::SIGWINCH);
         let done = exited.load(Ordering::Relaxed);
         match chunks.recv_timeout(Duration::from_millis(50)) {
             Ok(chunk) => pending.extend(chunk),
@@ -1345,41 +1360,86 @@ fn relay(
 }
 
 /// The end renk reads and the child's end of a relayed stream: a pseudo-terminal when `stream` is
-/// a terminal, else a pipe. The function it comes with gives a pseudo-terminal the terminal's
-/// current window size.
+/// a terminal, else a pipe. A pseudo-terminal comes with an end of it that `resize` gives the
+/// terminal's window size while it is open.
 #[cfg(unix)]
 fn capture(stream: impl IsTerminal + std::os::fd::AsFd) -> io::Result<Capture> {
     use std::os::fd::AsRawFd;
 
     if stream.is_terminal() {
         let (reader, writer) = pseudo_terminal(stream.as_fd())?;
-        let (terminal, parent) = (stream.as_fd().as_raw_fd(), reader.try_clone()?);
-        let resize = move || copy_size(terminal, parent.as_raw_fd());
-        return Ok((Box::new(reader), writer, Box::new(resize)));
+        let parent = reader.try_clone()?;
+        let pair = RESIZED.iter().find(|[_, pseudo_terminal]| {
+            pseudo_terminal
+                .compare_exchange(-1, parent.as_raw_fd(), Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+        });
+        if let Some([terminal, _]) = pair {
+            terminal.store(stream.as_fd().as_raw_fd(), Ordering::Relaxed);
+        }
+        return Ok((Box::new(reader), writer, Some(parent)));
     }
     let (reader, writer) = io::pipe()?;
     let writer = std::os::fd::OwnedFd::from(writer).into();
-    Ok((Box::new(reader), writer, Box::new(|| ())))
+    Ok((Box::new(reader), writer, None))
 }
 
 #[cfg(not(unix))]
 fn capture(_: impl IsTerminal) -> io::Result<Capture> {
     let (reader, writer) = io::pipe()?;
     let writer = std::os::windows::io::OwnedHandle::from(writer).into();
-    Ok((Box::new(reader), writer, Box::new(|| ())))
+    Ok((Box::new(reader), writer, None))
 }
 
-type Capture = (Box<dyn Read + Send>, fs::File, Box<dyn Fn() + Send>);
+type Capture = (Box<dyn Read + Send>, fs::File, Option<fs::File>);
 
-/// Gives the pseudo-terminal `to` the window size of the terminal `from`.
+/// The terminals and the pseudo-terminals relayed from them that `resize` resizes, as pairs of
+/// descriptors; a pair with -1 is free.
 #[cfg(unix)]
-fn copy_size(from: std::os::fd::RawFd, to: std::os::fd::RawFd) {
-    // SAFETY: the calls get a valid pointer.
+static RESIZED: [[std::sync::atomic::AtomicI32; 2]; 2] =
+    [const { [const { std::sync::atomic::AtomicI32::new(-1) }; 2] }; 2];
+
+/// Gives each relayed pseudo-terminal its terminal's window size. When one changes, it sends
+/// `SIGWINCH` to renk's process group, where the child is: the pseudo-terminal, the controlling
+/// terminal of no process, sends none, and the child may have read the old size when the
+/// terminal's own `SIGWINCH` came. A handler of `SIGWINCH`, it makes only async-signal-safe calls,
+/// and the signal it sends finds no change.
+#[cfg(unix)]
+extern "C" fn resize(_: libc::c_int) {
+    // The interrupted code may read `errno` after the handler returns.
+    #[cfg(target_os = "linux")]
+    // SAFETY: `__errno_location` points at this thread's `errno`.
+    let errno = unsafe { *libc::__errno_location() };
+    let changed = RESIZED
+        .iter()
+        .fold(false, |changed, [terminal, pseudo_terminal]| {
+            let to = pseudo_terminal.load(Ordering::Relaxed);
+            changed | (to >= 0 && copy_size(terminal.load(Ordering::Relaxed), to))
+        });
+    if changed {
+        // SAFETY: `killpg` is async-signal-safe.
+        unsafe { libc::killpg(0, libc::SIGWINCH) };
+    }
+    #[cfg(target_os = "linux")]
+    // SAFETY: as above.
     unsafe {
-        let mut size = std::mem::zeroed::<libc::winsize>();
-        if libc::ioctl(from, libc::TIOCGWINSZ, &mut size) == 0 {
-            libc::ioctl(to, libc::TIOCSWINSZ, &size);
-        }
+        *libc::__errno_location() = errno
+    };
+}
+
+/// Gives the pseudo-terminal `to` the window size of the terminal `from`, and returns whether its
+/// size changed.
+#[cfg(unix)]
+fn copy_size(from: std::os::fd::RawFd, to: std::os::fd::RawFd) -> bool {
+    // SAFETY: the calls get valid pointers.
+    unsafe {
+        let (mut size, mut old) = (std::mem::zeroed(), std::mem::zeroed());
+        let fields =
+            |size: &libc::winsize| (size.ws_row, size.ws_col, size.ws_xpixel, size.ws_ypixel);
+        libc::ioctl(from, libc::TIOCGWINSZ, &mut size) == 0
+            && libc::ioctl(to, libc::TIOCGWINSZ, &mut old) == 0
+            && fields(&size) != fields(&old)
+            && libc::ioctl(to, libc::TIOCSWINSZ, &size) == 0
     }
 }
 
