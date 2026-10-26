@@ -160,27 +160,38 @@ impl LanguageServer for Backend {
 
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
         let _sync = self.sync.lock().await;
-        if let Some((rust_analyzer, uri)) = self.rust_analyzer(&params.text_document.uri).await {
-            // Its check reads the mirror, which files changed or added outside the editor miss.
-            if self
-                .rust_analyzer
-                .read()
-                .await
-                .as_ref()
-                .is_some_and(|workspace| Arc::ptr_eq(workspace, &rust_analyzer))
-            {
-                self.refresh_mirror().await;
+        let uri = params.text_document.uri;
+        let workspace = self.rust_analyzer.read().await.clone();
+        let saved = match self.rust_analyzer(&uri).await {
+            Some(saved) => Some(saved),
+            // The editor's rust-analyzer serves a Rust file, but the workspace check reads its copy.
+            None if is_rust(&uri) => {
+                let copy = |(source_root, rust_root): (PathBuf, PathBuf)| {
+                    let path = uri.to_file_path().ok()?;
+                    Url::from_file_path(rust_root.join(path.strip_prefix(source_root).ok()?)).ok()
+                };
+                workspace
+                    .clone()
+                    .zip(self.origins().await.roots.and_then(copy))
             }
-            rust_analyzer
-                .notify(
-                    "textDocument/didSave",
-                    DidSaveTextDocumentParams {
-                        text_document: TextDocumentIdentifier { uri },
-                        text: None,
-                    },
-                )
-                .await;
+            None => None,
+        };
+        let Some((rust_analyzer, uri)) = saved else {
+            return;
+        };
+        // Its check reads the mirror, which files changed or added outside the editor miss.
+        if workspace.is_some_and(|workspace| Arc::ptr_eq(&workspace, &rust_analyzer)) {
+            self.refresh_mirror().await;
         }
+        rust_analyzer
+            .notify(
+                "textDocument/didSave",
+                DidSaveTextDocumentParams {
+                    text_document: TextDocumentIdentifier { uri },
+                    text: None,
+                },
+            )
+            .await;
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
