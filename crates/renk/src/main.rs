@@ -7,9 +7,11 @@ use std::{
     env,
     ffi::OsString,
     fs,
-    io::{self, IsTerminal, Read},
+    io::{self, IsTerminal, Read, Write},
     path::{Path, PathBuf},
     process::{self, Command},
+    sync::mpsc::{self, RecvTimeoutError},
+    time::Duration,
 };
 
 use renk::{
@@ -332,11 +334,150 @@ fn run_transpile(args: Transpile) -> CliResult<i32> {
     Ok(0)
 }
 
+/// Runs cargo after transpiling the project's `.rk` files. The commands that compile read cargo's
+/// JSON messages and print diagnostics, and panic locations in the output of `run`, `test`, and
+/// `bench`, at the `.rk` sources.
 fn run_cargo_wrapper(cargo_args: Vec<OsString>) -> CliResult<i32> {
-    transpile_cargo_sources(&env::current_dir()?)?;
-    let status = Command::new("cargo").args(&cargo_args).status();
+    let root = env::current_dir()?;
+    let files = transpile_cargo_sources(&root)?;
+    let end = cargo_args
+        .iter()
+        .position(|arg| arg == "--")
+        .unwrap_or(cargo_args.len());
+    let Some(command) = cargo_args[..end]
+        .iter()
+        .position(|arg| CARGO_WRAPPER_COMMANDS.iter().any(|command| arg == command))
+    else {
+        return Ok(Command::new("cargo")
+            .args(&cargo_args)
+            .status()?
+            .code()
+            .unwrap_or(1));
+    };
+    let name = cargo_args[command].to_str();
+    let runs = matches!(name, Some("run" | "test" | "bench"));
+    // libtest prints the captured output of a failed test, panics included, on stdout.
+    let rewrite_stdout = matches!(name, Some("test" | "bench"));
+    let (format, cargo_args) = message_format(cargo_args, command, io::stderr().is_terminal());
+    let mapper = SourceMapper {
+        files: &files,
+        script: None,
+        styled: format.styled,
+    };
+    let mut built = false;
+    // Cargo writes its JSON messages to stdout until the build finishes; the program's output
+    // follows.
+    let mut stdout = |line: &[u8], complete: bool| {
+        if built {
+            return Some(if rewrite_stdout {
+                mapper.locations(line)
+            } else {
+                line.to_vec()
+            });
+        }
+        if !complete {
+            return None;
+        }
+        let Ok(mut message) = serde_json::from_slice::<serde_json::Value>(line) else {
+            return Some(line.to_vec());
+        };
+        built = message["reason"] == "build-finished";
+        if message["reason"] == "compiler-message" {
+            mapper.rewrite(&mut message["message"], format.short);
+            if !format.json {
+                eprint!(
+                    "{}",
+                    message["message"]["rendered"].as_str().unwrap_or_default()
+                );
+            }
+        }
+        if !format.json {
+            return Some(Vec::new());
+        }
+        let mut json = serde_json::to_vec(&message).unwrap_or_default();
+        json.push(b'\n');
+        Some(json)
+    };
+    let mut stderr = |line: &[u8], _| Some(mapper.locations(line));
+    let mut cargo = Command::new("cargo");
+    cargo.args(cargo_args);
+    supervise(
+        cargo,
+        Some(&mut stdout),
+        runs.then_some(&mut stderr as Relay),
+    )
+}
 
-    Ok(status?.code().unwrap_or(1))
+/// How the user asked cargo to print diagnostics, read from the `--message-format` flags.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MessageFormat {
+    /// Print cargo's JSON messages, with their spans mapped, instead of rendered diagnostics.
+    json: bool,
+    /// Render diagnostics on one line, as rustc's `short` format does.
+    short: bool,
+    styled: bool,
+}
+
+/// Reads the user's `--message-format` flags of the cargo command at index `command`. Unless they
+/// ask for JSON, the flags give way to the JSON format renk reads, put after the command.
+fn message_format(
+    args: Vec<OsString>,
+    command: usize,
+    terminal: bool,
+) -> (MessageFormat, Vec<OsString>) {
+    let end = args
+        .iter()
+        .position(|arg| arg == "--")
+        .unwrap_or(args.len());
+    let mut formats = Vec::new();
+    let mut rest = Vec::new();
+    let mut flags = args[command + 1..end].iter();
+    while let Some(arg) = flags.next() {
+        match arg.to_str() {
+            Some("--message-format") => {
+                formats.extend(
+                    flags
+                        .next()
+                        .map(|value| value.to_string_lossy().into_owned()),
+                );
+            }
+            Some(flag) if flag.starts_with("--message-format=") => {
+                formats.push(flag["--message-format=".len()..].to_string());
+            }
+            _ => rest.push(arg.clone()),
+        }
+    }
+    let formats = formats
+        .iter()
+        .flat_map(|value| value.split(','))
+        .collect::<Vec<_>>();
+    if formats.iter().any(|format| format.starts_with("json")) {
+        let format = MessageFormat {
+            json: true,
+            short: formats.contains(&"json-diagnostic-short"),
+            styled: formats.contains(&"json-diagnostic-rendered-ansi"),
+        };
+        return (format, args);
+    }
+    let format = MessageFormat {
+        json: false,
+        short: formats.contains(&"short"),
+        styled: terminal,
+    };
+    let flag = match (format.short, terminal) {
+        (false, false) => "json",
+        (false, true) => "json-diagnostic-rendered-ansi",
+        (true, false) => "json-diagnostic-short",
+        (true, true) => "json-diagnostic-short,json-diagnostic-rendered-ansi",
+    };
+    let args = args[..=command]
+        .iter()
+        .cloned()
+        .chain([format!("--message-format={flag}").into()])
+        .chain(rest)
+        .chain(args[end..].iter().cloned())
+        .collect();
+    (format, args)
 }
 
 fn run_script(
@@ -359,16 +500,21 @@ fn run_script(
     write_script_cache(&rust_path, &script.rust)?;
     let build_dir = cache_root.join("build");
     let build_dir = script.named_package.then_some(build_dir.as_path());
-    let diagnostic = ScriptDiagnostic {
-        rust_path: &rust_path,
-        script: &script_path.display().to_string(),
-        package: script.named_package.then_some(script.package.as_str()),
-        script_source: &source,
-        rust: &script.rust,
-        source_lines: &script.source_lines,
+    let shown = script_path.display().to_string();
+    let files = [Generated {
+        rust_path: rust_path.clone(),
+        path: shown.clone(),
+        source,
+        rust: script.rust,
+        source_lines: script.source_lines,
+    }];
+    let mapper = SourceMapper {
+        files: &files,
+        script: Some(&shown),
         styled: io::stderr().is_terminal(),
     };
-    let build = || build_script(&rust_path, build_dir, &diagnostic);
+    let package = script.named_package.then_some(script.package.as_str());
+    let build = || build_script(&rust_path, build_dir, &mapper, package);
     let binary = if cargo {
         match build()? {
             Ok(executable) => executable,
@@ -397,10 +543,8 @@ fn run_script(
         )
         .env("CARGO_PKG_NAME", &script.package)
         .args(args);
-    #[cfg(unix)]
-    return Err(std::os::unix::process::CommandExt::exec(&mut command).into());
-    #[cfg(not(unix))]
-    return Ok(command.status()?.code().unwrap_or(1));
+    let mut stderr = |line: &[u8], _| Some(mapper.locations(line));
+    supervise(command, None, Some(&mut stderr))
 }
 
 /// Adds dependencies to a script's frontmatter with `cargo add`, which only edits `.rs`
@@ -484,18 +628,20 @@ fn is_newer(path: &Path, than: &Path) -> bool {
 }
 
 /// Builds the cached script with cargo-script and returns its executable, or cargo's exit code.
-/// Runs without `--cargo` copy the executable next to the cached Rust and exec it without cargo
+/// Runs without `--cargo` copy the executable next to the cached Rust and run it without cargo
 /// until the Rust changes; scriptr does the same but ships only as a binary, which would make renk
 /// scripts need a second launcher installed. Compiler diagnostics are printed at script lines.
 /// Scripts that `build_dir` is given for share it, so a dependency compiles once for all of them.
+/// Cargo's failure summary names the script instead of `package`, the package renk named.
 fn build_script(
     rust_path: &Path,
     build_dir: Option<&Path>,
-    diagnostic: &ScriptDiagnostic,
+    mapper: &SourceMapper,
+    package: Option<&str>,
 ) -> Result<Result<PathBuf, i32>, Box<dyn std::error::Error>> {
     let mut cargo = Command::new("cargo")
         .args(["+nightly", "-Zscript", "build", "--quiet"])
-        .arg(if diagnostic.styled {
+        .arg(if mapper.styled {
             "--message-format=json-diagnostic-rendered-ansi"
         } else {
             "--message-format=json"
@@ -511,7 +657,7 @@ fn build_script(
                 .is_none()
                 .then(|| rust_path.with_extension("target")),
         )
-        .arg(if diagnostic.styled {
+        .arg(if mapper.styled {
             "--color=always"
         } else {
             "--color=never"
@@ -539,7 +685,7 @@ fn build_script(
     };
     // Messages are read as cargo writes them so diagnostics precede cargo's own stderr summary.
     let messages = io::BufReader::new(cargo.stdout.take().ok_or("cargo has no stdout")?);
-    for message in io::BufRead::lines(messages)
+    for mut message in io::BufRead::lines(messages)
         .map_while(Result::ok)
         .filter_map(|line| serde_json::from_str::<serde_json::Value>(&line).ok())
     {
@@ -548,7 +694,11 @@ fn build_script(
             .unwrap_or_default()
             .to_string();
         if message["reason"] == "compiler-message" {
-            let rendered = diagnostic.render(&message["message"]);
+            mapper.rewrite(&mut message["message"], false);
+            let rendered = message["message"]["rendered"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string();
             if message["message"]["level"] == "warning" {
                 warnings.push((package.clone(), rendered));
             } else {
@@ -569,13 +719,13 @@ fn build_script(
     let status = cargo.wait()?;
     // Cargo names the package renk generated, which the user never wrote.
     let mut summary = stderr.join().unwrap_or_default();
-    if let Some(package) = diagnostic.package {
+    if let (Some(package), Some(script)) = (package, mapper.script) {
         summary = summary
             .replace(
                 &format!("`{package}` (bin \"{package}\")"),
-                &format!("`{}`", diagnostic.script),
+                &format!("`{script}`"),
             )
-            .replace(&format!("`{package}`"), &format!("`{}`", diagnostic.script));
+            .replace(&format!("`{package}`"), &format!("`{script}`"));
     }
     eprint!("{summary}");
     if !status.success() {
@@ -584,18 +734,64 @@ fn build_script(
     Ok(Ok(executable.ok_or("cargo built no script executable")?))
 }
 
-/// Renders rustc's JSON diagnostics about the generated Rust file at the script's lines and
-/// columns over the script's own source. Suggested replacements are Rust, so they show only their
-/// message; diagnostics about other files print as rustc rendered them.
-struct ScriptDiagnostic<'a> {
-    rust_path: &'a Path,
-    script: &'a str,
-    /// The package name renk generated for the script, which cargo's own messages show.
-    package: Option<&'a str>,
-    script_source: &'a str,
-    rust: &'a str,
-    /// The script line of each 1-based Rust line and whether renk synthesized it.
-    source_lines: &'a [(usize, bool)],
+/// A Rust file renk generated and the Renk source it came from.
+struct Generated {
+    rust_path: PathBuf,
+    /// The source's path as renk shows it.
+    path: String,
+    source: String,
+    rust: String,
+    /// The source line of each 1-based Rust line and whether renk synthesized it.
+    source_lines: Vec<(usize, bool)>,
+}
+
+impl Generated {
+    /// The source's 1-based `line`.
+    fn line(&self, line: usize) -> &str {
+        self.source
+            .lines()
+            .nth(line.saturating_sub(1))
+            .unwrap_or_default()
+    }
+
+    /// The 1-based source line and 0-based source column of a 1-based Rust line and 0-based
+    /// column: the source column whose character the column's character came from, by a character
+    /// diff of the two lines. A synthesized line, like a closing brace, points at the end of the
+    /// source line it closes.
+    fn position(&self, line: usize, column: usize) -> (usize, usize) {
+        let (source_line, synthesized) = self
+            .source_lines
+            .get(line.saturating_sub(1))
+            .copied()
+            .unwrap_or((line, false));
+        let source_line = source_line.clamp(1, self.source.lines().count().max(1));
+        let text = self.line(source_line);
+        let rust = self
+            .rust
+            .lines()
+            .nth(line.saturating_sub(1))
+            .unwrap_or_default();
+        let column = if synthesized {
+            text.chars().count()
+        } else {
+            script_column(text, rust, column)
+        };
+        (source_line, column)
+    }
+
+    /// The byte offset in the source of a 1-based line and 0-based column.
+    fn offset(&self, (line, column): (usize, usize)) -> usize {
+        let before = self.source.split_inclusive('\n').take(line - 1);
+        before.map(str::len).sum::<usize>() + char_offset(self.line(line), column)
+    }
+}
+
+/// Maps rustc's JSON diagnostics and panic locations in generated Rust files to the lines and
+/// columns of their Renk sources.
+struct SourceMapper<'a> {
+    files: &'a [Generated],
+    /// The script being built, which `renk add` edits.
+    script: Option<&'a str>,
     styled: bool,
 }
 
@@ -604,12 +800,128 @@ fn text(value: &serde_json::Value) -> &str {
     value["message"].as_str().unwrap_or_default()
 }
 
-impl ScriptDiagnostic<'_> {
-    fn render(&self, message: &serde_json::Value) -> String {
-        let rendered = message["rendered"].as_str().unwrap_or_default();
-        if !self.mentions_script(message) {
-            return rendered.to_string();
+impl SourceMapper<'_> {
+    /// The generated file rustc names `name`, relative to the workspace or absolute.
+    fn file(&self, name: &str) -> Option<&Generated> {
+        let name = Path::new(name.strip_prefix("./").unwrap_or(name));
+        self.files
+            .iter()
+            .find(|file| !name.as_os_str().is_empty() && file.rust_path.ends_with(name))
+    }
+
+    /// Maps the spans of a rustc diagnostic in generated files to their Renk sources and renders
+    /// it there, `short` on one line as rustc's short format does; a diagnostic about other files
+    /// keeps rustc's rendering.
+    fn rewrite(&self, message: &mut serde_json::Value, short: bool) {
+        if !self.map(message) {
+            return;
         }
+        let rendered = if short {
+            self.short(message)
+        } else {
+            Some(self.render(message))
+        };
+        if let Some(rendered) = rendered {
+            message["rendered"] = rendered.into();
+        }
+    }
+
+    /// Maps the spans of a diagnostic and its children in generated files, and says whether there
+    /// were any.
+    fn map(&self, message: &mut serde_json::Value) -> bool {
+        let mut mapped = false;
+        for key in ["spans", "children"] {
+            let values = message
+                .get_mut(key)
+                .and_then(serde_json::Value::as_array_mut);
+            for value in values.into_iter().flatten() {
+                mapped |= if key == "spans" {
+                    self.map_span(value)
+                } else {
+                    self.map(value)
+                };
+            }
+        }
+        mapped
+    }
+
+    /// Points a span in a generated file at the Renk source and quotes its lines. Its suggested
+    /// replacement is Rust, so it goes.
+    fn map_span(&self, span: &mut serde_json::Value) -> bool {
+        if let Some(expansion) = span.get_mut("expansion").filter(|value| value.is_object()) {
+            for key in ["span", "def_site_span"] {
+                self.map_span(&mut expansion[key]);
+            }
+        }
+        let Some(file) = span["file_name"].as_str().and_then(|name| self.file(name)) else {
+            return false;
+        };
+        let number = |key: &str| span[key].as_u64().unwrap_or(1) as usize;
+        let start = file.position(
+            number("line_start"),
+            number("column_start").saturating_sub(1),
+        );
+        let end = file.position(number("line_end"), number("column_end").saturating_sub(1));
+        let end = end.max(start);
+        let text = (start.0..=end.0)
+            .map(|line| {
+                let text = file.line(line);
+                let from = if line == start.0 { start.1 } else { 0 };
+                let to = if line == end.0 {
+                    end.1
+                } else {
+                    text.chars().count()
+                };
+                serde_json::json!({"text": text, "highlight_start": from + 1, "highlight_end": to + 1})
+            })
+            .collect::<Vec<_>>();
+        let fields = serde_json::json!({
+            "file_name": file.path,
+            "byte_start": file.offset(start),
+            "byte_end": file.offset(end),
+            "line_start": start.0,
+            "line_end": end.0,
+            "column_start": start.1 + 1,
+            "column_end": end.1 + 1,
+            "text": text,
+            "suggested_replacement": null,
+        });
+        if let (Some(span), serde_json::Value::Object(fields)) = (span.as_object_mut(), fields) {
+            span.extend(fields);
+        }
+        true
+    }
+
+    /// rustc's short form of a diagnostic whose primary span is in a Renk source:
+    /// `PATH:LINE:COLUMN: LEVEL[CODE]: MESSAGE`.
+    fn short(&self, message: &serde_json::Value) -> Option<String> {
+        let spans = message["spans"].as_array()?;
+        let span = spans.iter().find(|span| {
+            span["is_primary"] == true
+                && self
+                    .files
+                    .iter()
+                    .any(|file| span["file_name"] == file.path.as_str())
+        })?;
+        let code = message["code"]["code"]
+            .as_str()
+            .filter(|code| code.starts_with('E'))
+            .map(|code| format!("[{code}]"))
+            .unwrap_or_default();
+        Some(format!(
+            "{}:{}:{}: {}{code}: {}\n",
+            span["file_name"].as_str()?,
+            span["line_start"],
+            span["column_start"],
+            message["level"].as_str()?,
+            text(message)
+        ))
+    }
+
+    /// Renders a diagnostic whose spans in generated files were mapped to their Renk sources over
+    /// those sources. Suggested replacements in other files are Rust, so they show only their
+    /// message.
+    fn render(&self, message: &serde_json::Value) -> String {
         let mut title = level(&message["level"]).primary_title(text(message));
         // Lints name themselves in a note, as rustc renders them; only error codes title the
         // diagnostic.
@@ -657,32 +969,17 @@ impl ScriptDiagnostic<'_> {
     /// rustc's help for a crate the manifest lacks tells to edit a `Cargo.toml` that a script does
     /// not have, so it becomes the `renk add` that edits the frontmatter.
     fn add_hint(&self, help: &str) -> Option<String> {
+        let script = self.script?;
         let (name, rest) = help
             .strip_prefix("if you wanted to use a crate named `")?
             .split_once('`')?;
         rest.contains("`cargo add").then(|| {
-            format!(
-                "if you wanted to use a crate named `{name}`, add it with `renk add {} {name}`",
-                self.script
-            )
+            format!("if you wanted to use a crate named `{name}`, add it with `renk add {script} {name}`")
         })
     }
 
-    fn is_script(&self, span: &serde_json::Value) -> bool {
-        let file = span["file_name"].as_str().unwrap_or_default();
-        self.rust_path
-            .parent()
-            .is_some_and(|dir| dir.join(file) == self.rust_path)
-    }
-
-    fn mentions_script(&self, message: &serde_json::Value) -> bool {
-        let mut spans = message["spans"].as_array().into_iter().flatten();
-        let mut children = message["children"].as_array().into_iter().flatten();
-        spans.any(|span| self.is_script(span)) || children.any(|child| self.mentions_script(child))
-    }
-
-    /// One snippet over the script for its spans, and one per span in any other file, built from
-    /// the source lines rustc quotes.
+    /// One snippet over each Renk source for its spans, and one per span in any other file, built
+    /// from the source lines rustc quotes.
     fn snippets<'s>(&'s self, spans: &'s serde_json::Value) -> Vec<Snippet<'s, Annotation<'s>>> {
         let spans = spans.as_array().map(Vec::as_slice).unwrap_or_default();
         let annotation = |span: &'s serde_json::Value, range| {
@@ -697,18 +994,30 @@ impl ScriptDiagnostic<'_> {
             let number = |key: &str| span[key].as_u64().unwrap_or(1) as usize;
             (number(line), number(column).saturating_sub(1))
         };
-        let script = spans
-            .iter()
-            .filter(|span| self.is_script(span))
-            .map(|span| {
-                let start = self.script_offset(position(span, "line_start", "column_start"));
-                let end = self.script_offset(position(span, "line_end", "column_end"));
-                annotation(span, start..end.max(start))
+        let source = |span: &serde_json::Value| {
+            self.files
+                .iter()
+                .find(|file| span["file_name"] == file.path.as_str())
+        };
+        let sources = self.files.iter().filter_map(|file| {
+            let annotations = spans
+                .iter()
+                .filter(|span| span["file_name"] == file.path.as_str())
+                .map(|span| {
+                    let start = file.offset(position(span, "line_start", "column_start"));
+                    let end = file.offset(position(span, "line_end", "column_end"));
+                    annotation(span, start..end.max(start))
+                })
+                .collect::<Vec<_>>();
+            (!annotations.is_empty()).then(|| {
+                Snippet::source(file.source.as_str())
+                    .path(file.path.as_str())
+                    .annotations(annotations)
             })
-            .collect::<Vec<_>>();
+        });
         let others = spans
             .iter()
-            .filter(|span| !self.is_script(span))
+            .filter(|span| source(span).is_none())
             .map(|span| {
                 let lines = span["text"]
                     .as_array()
@@ -733,41 +1042,208 @@ impl ScriptDiagnostic<'_> {
                     .path(span["file_name"].as_str())
                     .annotation(annotation(span, start..end.max(start)))
             });
-        let script = (!script.is_empty()).then(|| {
-            Snippet::source(self.script_source)
-                .path(self.script)
-                .annotations(script)
-        });
-        script.into_iter().chain(others).collect()
+        sources.chain(others).collect()
     }
 
-    /// The byte offset in the script of a 1-based Rust line and 0-based column: the script column
-    /// whose character the column's character came from, by a character diff of the two lines.
-    fn script_offset(&self, (line, column): (usize, usize)) -> usize {
-        let (script_line, synthesized) = self
-            .source_lines
-            .get(line.saturating_sub(1))
-            .copied()
-            .unwrap_or((line, false));
-        let lines = self.script_source.split_inclusive('\n').collect::<Vec<_>>();
-        let index = script_line
-            .saturating_sub(1)
-            .min(lines.len().saturating_sub(1));
-        let script_text = lines
-            .get(index)
-            .map_or("", |text| text.trim_end_matches(['\n', '\r']));
-        let start = lines[..index].iter().map(|text| text.len()).sum::<usize>();
-        let rust_text = self
-            .rust
-            .lines()
-            .nth(line.saturating_sub(1))
-            .unwrap_or_default();
-        let column = if synthesized {
-            script_text.chars().count()
-        } else {
-            script_column(script_text, rust_text, column)
+    /// `text` with each `FILE.rs:LINE:COLUMN` or `FILE.rs:LINE` in a generated file, as panic
+    /// messages and backtraces show them, at the Renk source instead. Text that is not UTF-8 stays.
+    fn locations(&self, text: &[u8]) -> Vec<u8> {
+        let Ok(mut rest) = std::str::from_utf8(text) else {
+            return text.to_vec();
         };
-        start + char_offset(script_text, column)
+        let number = |text: &str| {
+            let digits = text
+                .find(|c: char| !c.is_ascii_digit())
+                .unwrap_or(text.len());
+            Some((text[..digits].parse::<usize>().ok()?, digits))
+        };
+        let mut output = String::new();
+        while let Some(index) = rest.find(".rs:") {
+            let path_end = index + 3;
+            let start = rest[..index]
+                .rfind(|c: char| c.is_whitespace() || "'\"`([<".contains(c))
+                .map_or(0, |at| at + 1);
+            let after = &rest[path_end + 1..];
+            let location = number(after).and_then(|(line, digits)| {
+                let file = self.file(&rest[start..path_end])?;
+                let column = after[digits..].strip_prefix(':').and_then(number);
+                let rust_column = column.map_or(0, |(column, _)| column.saturating_sub(1));
+                let (line, column_at) = file.position(line, rust_column);
+                let shown = match column {
+                    Some(_) => format!("{}:{line}:{}", file.path, column_at + 1),
+                    None => format!("{}:{line}", file.path),
+                };
+                Some((
+                    shown,
+                    path_end + 1 + digits + column.map_or(0, |(_, d)| d + 1),
+                ))
+            });
+            match location {
+                Some((shown, end)) => {
+                    output.push_str(&rest[..start]);
+                    output.push_str(&shown);
+                    rest = &rest[end..];
+                }
+                None => {
+                    output.push_str(&rest[..path_end]);
+                    rest = &rest[path_end..];
+                }
+            }
+        }
+        output.push_str(rest);
+        output.into_bytes()
+    }
+}
+
+/// A line handler of a relayed stream. Given a line, or a partial line, like a prompt, that went
+/// 50 ms without its newline, it returns what to write, or `None` to keep holding the partial line.
+type Relay<'a> = &'a mut (dyn FnMut(&[u8], bool) -> Option<Vec<u8>> + Send);
+
+/// Runs `command` with its stdout and stderr passed through the given relays, or inherited, and
+/// returns its exit code, or 128 plus the signal that killed it. A relayed stream that is a
+/// terminal reaches the child as a terminal of its own. renk ignores the interrupt and quit
+/// signals that the terminal sends the child too.
+fn supervise<'a>(
+    mut command: Command,
+    stdout: Option<Relay<'a>>,
+    stderr: Option<Relay<'a>>,
+) -> CliResult<i32> {
+    let mut relays = Vec::new();
+    if let Some(line) = stdout {
+        let (reader, writer) = capture(io::stdout())?;
+        command.stdout(writer);
+        relays.push((
+            reader,
+            line,
+            Box::new(io::stdout()) as Box<dyn Write + Send>,
+        ));
+    }
+    if let Some(line) = stderr {
+        let (reader, writer) = capture(io::stderr())?;
+        command.stderr(writer);
+        relays.push((reader, line, Box::new(io::stderr())));
+    }
+    let mut child = command.spawn()?;
+    // The command holds the child ends of the streams, which must close for the relays to end.
+    drop(command);
+    #[cfg(unix)]
+    // SAFETY: ignoring a signal installs no handler.
+    unsafe {
+        libc::signal(libc::SIGINT, libc::SIG_IGN);
+        libc::signal(libc::SIGQUIT, libc::SIG_IGN);
+    }
+    std::thread::scope(|scope| {
+        for (reader, line, output) in relays {
+            scope.spawn(move || relay(reader, output, line));
+        }
+    });
+    let status = child.wait()?;
+    #[cfg(unix)]
+    if let Some(signal) = std::os::unix::process::ExitStatusExt::signal(&status) {
+        return Ok(128 + signal);
+    }
+    Ok(status.code().unwrap_or(1))
+}
+
+/// Copies `input` to `output` a line at a time through `line`, holding a partial line until its
+/// newline comes or 50 ms pass without output.
+fn relay(mut input: impl Read + Send, mut output: impl Write, line: Relay) {
+    let (sender, chunks) = mpsc::channel::<Vec<u8>>();
+    std::thread::scope(|scope| {
+        scope.spawn(move || {
+            let mut buffer = [0; 8192];
+            // A pseudo-terminal fails to read once the child's ends close.
+            while let Ok(read @ 1..) = input.read(&mut buffer) {
+                if sender.send(buffer[..read].to_vec()).is_err() {
+                    break;
+                }
+            }
+        });
+        let mut pending = Vec::new();
+        let mut write = |bytes: Option<Vec<u8>>, pending: &mut Vec<u8>| {
+            if let Some(bytes) = bytes {
+                let _ = output.write_all(&bytes);
+                pending.clear();
+            }
+            let _ = output.flush();
+        };
+        loop {
+            let chunk = if pending.is_empty() {
+                chunks.recv().map_err(|_| RecvTimeoutError::Disconnected)
+            } else {
+                chunks.recv_timeout(Duration::from_millis(50))
+            };
+            match chunk {
+                Ok(chunk) => pending.extend(chunk),
+                Err(RecvTimeoutError::Timeout) => {
+                    write(line(&pending, false), &mut pending);
+                    continue;
+                }
+                Err(RecvTimeoutError::Disconnected) => break,
+            }
+            while let Some(newline) = pending.iter().position(|&byte| byte == b'\n') {
+                let mut rest = pending.split_off(newline + 1);
+                write(line(&pending, true), &mut pending);
+                pending.append(&mut rest);
+            }
+        }
+        if !pending.is_empty() {
+            write(line(&pending, true), &mut pending);
+        }
+    });
+}
+
+/// The end renk reads and the child's end of a relayed stream: a pseudo-terminal when `stream` is
+/// a terminal, else a pipe.
+#[cfg(unix)]
+fn capture(
+    stream: impl IsTerminal + std::os::fd::AsFd,
+) -> io::Result<(Box<dyn Read + Send>, process::Stdio)> {
+    if stream.is_terminal() {
+        let (reader, writer) = pseudo_terminal(stream.as_fd())?;
+        return Ok((Box::new(reader), writer));
+    }
+    let (reader, writer) = io::pipe()?;
+    Ok((Box::new(reader), writer.into()))
+}
+
+#[cfg(not(unix))]
+fn capture(_: impl IsTerminal) -> io::Result<(Box<dyn Read + Send>, process::Stdio)> {
+    let (reader, writer) = io::pipe()?;
+    Ok((Box::new(reader), writer.into()))
+}
+
+/// A pseudo-terminal the size of `terminal`, in raw mode so output passes through unchanged: the
+/// end renk reads and the child's end.
+#[cfg(unix)]
+fn pseudo_terminal(terminal: std::os::fd::BorrowedFd) -> io::Result<(fs::File, process::Stdio)> {
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+
+    let (mut parent, mut child) = (0, 0);
+    // SAFETY: the calls get valid pointers, and `openpty` opens two descriptors that only the
+    // `OwnedFd`s own.
+    unsafe {
+        let mut size = std::mem::zeroed::<libc::winsize>();
+        libc::ioctl(terminal.as_raw_fd(), libc::TIOCGWINSZ, &mut size);
+        let opened = libc::openpty(
+            &mut parent,
+            &mut child,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &raw mut size,
+        );
+        if opened != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let (parent, child) = (OwnedFd::from_raw_fd(parent), OwnedFd::from_raw_fd(child));
+        let mut mode = std::mem::zeroed::<libc::termios>();
+        libc::tcgetattr(child.as_raw_fd(), &mut mode);
+        libc::cfmakeraw(&mut mode);
+        libc::tcsetattr(child.as_raw_fd(), libc::TCSANOW, &mode);
+        for fd in [&parent, &child] {
+            libc::fcntl(fd.as_raw_fd(), libc::F_SETFD, libc::FD_CLOEXEC);
+        }
+        Ok((parent.into(), child.into()))
     }
 }
 
@@ -821,7 +1297,9 @@ fn write_script_cache(path: &Path, rust: &str) -> io::Result<()> {
     fs::write(path, rust)
 }
 
-fn transpile_cargo_sources(root: &Path) -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
+/// Writes the Rust of each `.rk` file under the project's source roots beside it, and returns the
+/// files with their sources shown relative to `root`.
+fn transpile_cargo_sources(root: &Path) -> Result<Vec<Generated>, Box<dyn std::error::Error>> {
     let mut sources = Vec::new();
     collect_renk_sources(root, &mut sources)?;
     sources.sort();
@@ -830,10 +1308,25 @@ fn transpile_cargo_sources(root: &Path) -> Result<Vec<PathBuf>, Box<dyn std::err
     for source_path in sources {
         let rust_path = source_path.with_extension("rs");
         let source = fs::read_to_string(&source_path)?;
-        let rust_source = to_rust(&source, source_syntax(Some(&source_path)))?;
-        let rust = format!("{GENERATED_HEADER}{rust_source}");
+        let output = transpile(&source)?;
+        let rust = format!("{GENERATED_HEADER}{}", output.rust);
         write_generated_source(&rust_path, &rust)?;
-        generated.push(rust_path);
+        // The header is the first Rust line.
+        let source_lines = [(1, true)]
+            .into_iter()
+            .chain(output.line_origins())
+            .collect();
+        generated.push(Generated {
+            rust_path,
+            path: source_path
+                .strip_prefix(root)
+                .unwrap_or(&source_path)
+                .display()
+                .to_string(),
+            source,
+            rust,
+            source_lines,
+        });
     }
 
     Ok(generated)
@@ -946,7 +1439,11 @@ mod tests {
         let rust_path = project.join("src/main.rs");
         fs::write(&source_path, "pub fn main():\n    println!(\"hello\")\n").unwrap();
 
-        let generated = transpile_cargo_sources(&project).unwrap();
+        let generated = transpile_cargo_sources(&project)
+            .unwrap()
+            .into_iter()
+            .map(|file| file.rust_path)
+            .collect::<Vec<_>>();
         assert_eq!(generated, vec![rust_path.clone()]);
         let rust = fs::read_to_string(&rust_path).unwrap();
         assert!(rust.starts_with(GENERATED_HEADER));
@@ -955,14 +1452,22 @@ mod tests {
         let mut permissions = fs::metadata(&rust_path).unwrap().permissions();
         permissions.set_readonly(true);
         fs::set_permissions(&rust_path, permissions).unwrap();
-        let generated = transpile_cargo_sources(&project).unwrap();
+        let generated = transpile_cargo_sources(&project)
+            .unwrap()
+            .into_iter()
+            .map(|file| file.rust_path)
+            .collect::<Vec<_>>();
         assert_eq!(generated, vec![rust_path.clone()]);
 
         let mut permissions = fs::metadata(&rust_path).unwrap().permissions();
         permissions.set_readonly(false);
         fs::set_permissions(&rust_path, permissions).unwrap();
         fs::write(&source_path, "pub fn main():\n    println!(\"cached\")\n").unwrap();
-        let generated = transpile_cargo_sources(&project).unwrap();
+        let generated = transpile_cargo_sources(&project)
+            .unwrap()
+            .into_iter()
+            .map(|file| file.rust_path)
+            .collect::<Vec<_>>();
         assert_eq!(generated, vec![rust_path.clone()]);
         let rust = fs::read_to_string(&rust_path).unwrap();
         assert!(rust.starts_with(GENERATED_HEADER));
@@ -1025,8 +1530,60 @@ mod tests {
         fs::write(project.join("src/main.rk"), "pub fn main() = 1\n").unwrap();
         fs::write(project.join("src/main.rs"), "fn main() {}\n").unwrap();
 
-        let error = transpile_cargo_sources(&project).unwrap_err().to_string();
+        let error = transpile_cargo_sources(&project).err().unwrap().to_string();
         assert!(error.contains("refusing to overwrite non-generated Rust file"));
         let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn message_format_puts_renk_json_after_the_command_and_keeps_program_arguments() {
+        let args = |args: &[&str]| args.iter().map(OsString::from).collect::<Vec<_>>();
+        let format = |short, styled| MessageFormat {
+            json: false,
+            short,
+            styled,
+        };
+        let cases = [
+            (
+                &["+nightly", "test", "-q", "--", "--message-format=short"][..],
+                true,
+                format(false, true),
+                &[
+                    "+nightly",
+                    "test",
+                    "--message-format=json-diagnostic-rendered-ansi",
+                    "-q",
+                    "--",
+                    "--message-format=short",
+                ][..],
+            ),
+            (
+                &["check", "--message-format", "short"],
+                false,
+                format(true, false),
+                &["check", "--message-format=json-diagnostic-short"],
+            ),
+            (
+                &["check", "--message-format=human"],
+                false,
+                format(false, false),
+                &["check", "--message-format=json"],
+            ),
+        ];
+        for (given, terminal, expected, passed) in cases {
+            let command = given.iter().position(|arg| !arg.starts_with('+')).unwrap();
+            assert_eq!(
+                message_format(args(given), command, terminal),
+                (expected, args(passed)),
+                "{given:?}"
+            );
+        }
+        let json = args(&["build", "--message-format=json,json-diagnostic-short"]);
+        let (format, passed) = message_format(json.clone(), 0, true);
+        assert_eq!(
+            (format.json, format.short, format.styled),
+            (true, true, false)
+        );
+        assert_eq!(passed, json);
     }
 }

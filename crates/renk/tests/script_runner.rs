@@ -526,3 +526,84 @@ fn script_diagnostics_show_script_columns_and_source() {
     assert!(!stderr.contains("String::nope"), "{stderr}");
     let _ = fs::remove_dir_all(dir);
 }
+
+#[test]
+fn script_panics_point_at_the_script_and_signals_set_the_exit_code() {
+    let dir = temp_dir("script-panic");
+    let script = dir.join("panics.rk");
+    fs::write(
+        &script,
+        "let v: Vec[i32] = Vec.new()\nif std.env.args().count() > 1:\n    std.process.abort()\nprintln!(\"{v[3]}\")\n",
+    )
+    .unwrap();
+    let run = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_renk"))
+            .arg(&script)
+            .args(args)
+            .env("XDG_CACHE_HOME", dir.join("cache"))
+            .env("RUST_BACKTRACE", "1")
+            .output()
+            .unwrap()
+    };
+
+    let output = run(&[]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(101), "{stderr}");
+    let location = format!("{}:4:{}", script.display(), "println!(\"{v[".len());
+    assert!(
+        stderr.contains(&format!("panicked at {location}:\n")),
+        "{stderr}"
+    );
+    assert!(stderr.contains(&format!("at {location}\n")), "{stderr}");
+    assert!(!stderr.contains("panics.rs"), "{stderr}");
+
+    let output = run(&["abort"]);
+    assert_eq!(
+        output.status.code(),
+        Some(128 + 6),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn script_prompts_on_stderr_show_without_their_newline() {
+    use std::io::{Read, Write};
+
+    let dir = temp_dir("script-prompt");
+    let script = dir.join("prompt.rk");
+    fs::write(
+        &script,
+        "eprint!(\"name? \")\nlet mut line = String.new()\nstd.io.stdin().read_line(&mut line)?\neprintln!(\"hi {line.trim()}\")\n",
+    )
+    .unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_renk"))
+        .arg(&script)
+        .env("XDG_CACHE_HOME", dir.join("cache"))
+        .stdin(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stderr = child.stderr.take().unwrap();
+    let (sender, chunks) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut buffer = [0; 1024];
+        while let Ok(read @ 1..) = stderr.read(&mut buffer) {
+            let _ = sender.send(String::from_utf8_lossy(&buffer[..read]).into_owned());
+        }
+    });
+    let mut read = String::new();
+    while !read.ends_with("name? ") {
+        read += &chunks
+            .recv_timeout(std::time::Duration::from_secs(300))
+            .unwrap_or_else(|_| panic!("no prompt after {read:?}"));
+    }
+    child.stdin.take().unwrap().write_all(b"Ada\n").unwrap();
+    assert_eq!(child.wait().unwrap().code(), Some(0));
+    assert!(
+        (read + &chunks.into_iter().collect::<String>()).ends_with("name? hi Ada\n"),
+        "stderr ends wrong"
+    );
+    let _ = fs::remove_dir_all(dir);
+}
