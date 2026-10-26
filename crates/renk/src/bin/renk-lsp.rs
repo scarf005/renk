@@ -3011,7 +3011,7 @@ mod tests {
     }
 
     #[test]
-    fn mirror_refreshes_follow_the_workspace_but_not_symlinked_directories() {
+    fn mirror_refreshes_follow_the_workspace_and_symlinked_directories_once() {
         let temp = std::env::temp_dir().join(format!("renk-lsp-refresh-{}", std::process::id()));
         let _ = fs::remove_dir_all(&temp);
         fs::create_dir_all(temp.join("src")).unwrap();
@@ -3020,11 +3020,21 @@ mod tests {
         fs::write(temp.join("src/extra.rs"), "pub const EXTRA: i32 = 2;\n").unwrap();
         fs::write(temp.join("src/swapped.rs"), "pub fn hand() {}\n").unwrap();
         std::os::unix::fs::symlink(temp.join("src"), temp.join("src/cycle")).unwrap();
+        // A member crate linked in from outside the workspace.
+        let member = temp.with_extension("member");
+        let _ = fs::remove_dir_all(&member);
+        fs::create_dir_all(member.join("src")).unwrap();
+        fs::write(member.join("Cargo.toml"), "[package]\nname = \"m\"\n").unwrap();
+        fs::write(member.join("src/lib.rk"), "pub fn linked() = ()\n").unwrap();
+        std::os::unix::fs::symlink(&member, temp.join("member")).unwrap();
         let rust_root = temp.join("target/renk");
         mirror_workspace(&temp, &rust_root, &HashMap::new());
         assert!(rust_root.join("src/util.rs").is_file());
         assert!(rust_root.join("src/extra.rs").is_file());
         assert!(!rust_root.join("src/cycle").exists());
+        assert!(rust_root.join("member/Cargo.toml").is_file());
+        let linked = fs::read_to_string(rust_root.join("member/src/lib.rs")).unwrap_or_default();
+        assert!(linked.contains("fn linked()"), "{linked}");
         fs::create_dir_all(rust_root.join("target/debug")).unwrap();
         fs::write(rust_root.join("target/debug/build.rs"), "").unwrap();
 
@@ -3045,7 +3055,9 @@ mod tests {
         assert!(mirrored("src/open.rs").contains("fn unsaved()"));
         assert!(rust_root.join("Cargo.toml").is_file());
         assert!(rust_root.join("target/debug/build.rs").is_file());
+        assert!(rust_root.join("member/src/lib.rs").is_file());
         let _ = fs::remove_dir_all(temp);
+        let _ = fs::remove_dir_all(member);
     }
 
     #[test]
