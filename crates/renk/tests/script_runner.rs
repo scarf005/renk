@@ -636,6 +636,31 @@ fn script_ends_when_the_reader_of_its_stderr_closes() {
     let _ = fs::remove_dir_all(dir);
 }
 
+#[test]
+fn script_returns_when_it_exits_though_its_children_hold_its_output() {
+    let dir = temp_dir("script-daemon");
+    let script = dir.join("daemon.rk");
+    fs::write(
+        &script,
+        "if std.env.args().count() > 1:\n    std.process.Command.new(\"sh\").args([\"-c\", \"sleep 30 &\"]).status()?\n",
+    )
+    .unwrap();
+    let run = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_renk"))
+            .arg(&script)
+            .args(args)
+            .env("XDG_CACHE_HOME", dir.join("cache"))
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap()
+    };
+    // The first run builds the script.
+    assert!(run(&[]).wait().unwrap().success());
+    assert!(exits_within(&mut run(&["daemon"]), 10), "renk waited");
+    let _ = fs::remove_dir_all(dir);
+}
+
 /// Whether `child` exits within `seconds`; it is killed if not.
 fn exits_within(child: &mut std::process::Child, seconds: u64) -> bool {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(seconds);
