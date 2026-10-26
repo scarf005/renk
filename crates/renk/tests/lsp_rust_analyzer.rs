@@ -277,6 +277,35 @@ fn cargo_check_on_save_reads_modules_changed_outside_the_editor() {
 }
 
 #[test]
+fn cargo_check_runs_on_saving_a_hand_written_rust_file() {
+    let main = MAIN.replace("use extra.EXTRA\n", "use extra.EXTRA\nuse extra.new_api\n");
+    let Some(mut session) = Session::open("lsp-check-rust", &main) else {
+        return;
+    };
+    let (main, extra) = (session.uri("src/main.rk"), session.uri("src/extra.rs"));
+    let errors = session.check_errors(&main, &main);
+    assert!(
+        errors[0]["message"].to_string().contains("new_api"),
+        "{errors:?}"
+    );
+
+    fs::write(
+        session.dir.join("src/extra.rs"),
+        "pub const EXTRA: i32 = 2;\npub fn new_api() {}\n",
+    )
+    .unwrap();
+    session.notify(
+        "textDocument/didSave",
+        json!({"textDocument": {"uri": extra}}),
+    );
+    session.diagnostics_until(&main, |diagnostics| {
+        !diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic["severity"] == 1 && diagnostic["source"] == "rustc")
+    });
+}
+
+#[test]
 fn references_map_to_renk_modules_open_or_on_disk() {
     let Some(mut session) = Session::open("lsp-references", MAIN) else {
         return;
