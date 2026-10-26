@@ -502,6 +502,18 @@ impl LanguageServer for Backend {
 }
 
 impl Backend {
+    fn new(client: Client) -> Self {
+        Self {
+            client,
+            documents: Default::default(),
+            rust_diagnostics: Default::default(),
+            rust_analyzer: Default::default(),
+            opened: Default::default(),
+            sync: Default::default(),
+            initialize_params: Default::default(),
+        }
+    }
+
     /// The rust-analyzer a document's generated Rust is open in, and that Rust's URI.
     async fn rust_analyzer(&self, uri: &Url) -> Option<(Arc<RustAnalyzerClient>, Url)> {
         self.opened.read().await.get(uri).cloned()
@@ -2971,6 +2983,30 @@ mod tests {
         let _ = fs::remove_dir_all(temp);
     }
 
+    #[tokio::test]
+    async fn rust_documents_are_left_to_rust_analyzer() {
+        let (service, _socket) = LspService::new(Backend::new);
+        let backend = service.inner();
+        let uri = module_uri("src/extra.rs");
+        let text = "fn helper() -> i32 {\n    1\n}\n";
+        backend
+            .did_open(DidOpenTextDocumentParams {
+                text_document: TextDocumentItem::new(uri.clone(), "rust".into(), 1, text.into()),
+            })
+            .await;
+        let hover = backend
+            .hover(HoverParams {
+                text_document_position_params: TextDocumentPositionParams::new(
+                    TextDocumentIdentifier::new(uri),
+                    Position::new(0, 4),
+                ),
+                work_done_progress_params: Default::default(),
+            })
+            .await
+            .unwrap();
+        assert!(hover.is_none(), "{hover:?}");
+    }
+
     #[test]
     fn mirror_refreshes_follow_the_workspace_but_not_symlinked_directories() {
         let temp = std::env::temp_dir().join(format!("renk-lsp-refresh-{}", std::process::id()));
@@ -3078,14 +3114,6 @@ mod tests {
 async fn main() {
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
-    let (service, socket) = LspService::new(|client| Backend {
-        client,
-        documents: Arc::new(RwLock::new(HashMap::new())),
-        rust_diagnostics: Arc::new(RwLock::new(HashMap::new())),
-        rust_analyzer: Arc::new(RwLock::new(None)),
-        opened: Arc::new(RwLock::new(HashMap::new())),
-        sync: Arc::new(Mutex::new(())),
-        initialize_params: Arc::new(RwLock::new(None)),
-    });
+    let (service, socket) = LspService::new(Backend::new);
     Server::new(stdin, stdout, socket).serve(service).await;
 }
