@@ -13,7 +13,7 @@ use std::{
 };
 
 use renk::{
-    SourceSyntax, TranspileError, format_source, rust_to_renk, rust_to_renk_aggressive,
+    SourceSyntax, TranspileError, format_source_with, rust_to_renk, rust_to_renk_aggressive,
     script::{
         SCRIPT_EDITION, cache_root, script_cache_path, script_column, script_package, script_parts,
         script_rust,
@@ -50,9 +50,9 @@ struct Cli {
 enum Subcmd {
     /// Print the Rust for a Renk file, or for stdin
     Transpile(Transpile),
-    /// Format a Renk file, or stdin
+    /// Format Renk files, or stdin, with rustfmt
     #[command(alias = "format")]
-    Fmt(Io),
+    Fmt(Fmt),
     /// Convert a Rust file, or stdin, to Renk
     #[command(name = "from-rust", alias = "to-renk")]
     FromRust(FromRust),
@@ -97,6 +97,18 @@ struct Io {
     /// Write to PATH instead of stdout
     #[arg(short, long, value_name = "PATH")]
     output: Option<PathBuf>,
+}
+
+#[derive(clap::Args)]
+struct Fmt {
+    /// Input files; reads stdin when omitted
+    inputs: Vec<PathBuf>,
+    /// Write to PATH instead of stdout
+    #[arg(short, long, value_name = "PATH", conflicts_with = "check")]
+    output: Option<PathBuf>,
+    /// Write nothing; print a diff for each unformatted file and exit with 1 if there is one
+    #[arg(long)]
+    check: bool,
 }
 
 #[derive(clap::Args)]
@@ -171,7 +183,7 @@ fn run(cli: Cli) -> CliResult<i32> {
             source_map: None,
         }),
         Some(Subcmd::Transpile(args)) => run_transpile(args),
-        Some(Subcmd::Fmt(io)) => run_fmt(io),
+        Some(Subcmd::Fmt(args)) => run_fmt(args),
         Some(Subcmd::FromRust(args)) => run_from_rust(args),
         Some(Subcmd::Script(args)) => run_script(args),
         Some(Subcmd::Add(args)) => run_add(args),
@@ -209,9 +221,61 @@ fn emit(output: Option<PathBuf>, text: &str) -> CliResult<()> {
     Ok(())
 }
 
-fn run_fmt(io: Io) -> CliResult<i32> {
-    emit(io.output, &format_source(&read_source(io.input.as_ref())?)?)?;
-    Ok(0)
+fn run_fmt(args: Fmt) -> CliResult<i32> {
+    if !args.check && args.inputs.len() > 1 {
+        return Err("formatting more than one file needs --check".into());
+    }
+    Command::new("rustfmt")
+        .arg("--version")
+        .output()
+        .map_err(|error| {
+            format!("cannot run rustfmt ({error}); install it with `rustup component add rustfmt`")
+        })?;
+    let inputs = match args.inputs.as_slice() {
+        [] => vec![None],
+        paths => paths.iter().map(Some).collect(),
+    };
+    let mut code = 0;
+    for input in inputs {
+        let source = read_source(input)?;
+        let formatted = format_source_with(&source, &rustfmt)?;
+        if !args.check {
+            emit(args.output, &formatted)?;
+            return Ok(0);
+        }
+        if formatted != source {
+            let name =
+                input.map_or_else(|| "<stdin>".to_string(), |path| path.display().to_string());
+            print!(
+                "{}",
+                similar::TextDiff::from_lines(&source, &formatted)
+                    .unified_diff()
+                    .header(&name, &name)
+            );
+            code = 1;
+        }
+    }
+    Ok(code)
+}
+
+/// `rust` formatted by `rustfmt` for edition 2024, with the `rustfmt.toml` of the working
+/// directory; `None` when rustfmt rejects it.
+fn rustfmt(rust: &str) -> Option<String> {
+    use io::Write;
+    let mut child = Command::new("rustfmt")
+        .args(["--edition", "2024"])
+        .stdin(process::Stdio::piped())
+        .stdout(process::Stdio::piped())
+        .stderr(process::Stdio::null())
+        .spawn()
+        .ok()?;
+    child.stdin.take()?.write_all(rust.as_bytes()).ok()?;
+    let output = child.wait_with_output().ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8(output.stdout).ok())
+        .flatten()
 }
 
 fn run_from_rust(args: FromRust) -> CliResult<i32> {

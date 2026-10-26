@@ -310,3 +310,59 @@ fn cargo_wrapper_generates_sources_and_forwards_cargo_exit_codes() {
     );
     let _ = fs::remove_dir_all(dir);
 }
+
+#[test]
+fn fmt_check_prints_a_diff_and_fails_for_unformatted_files() {
+    let dir = temp_dir("fmt-check");
+    let formatted = "fn main():\n    let x = 1\n    println!(\"{x}\")\n";
+    let unformatted = "fn main():\n  let  x = 1\n  println!(\"{x}\")\n";
+    fs::write(dir.join("good.rk"), formatted).unwrap();
+    fs::write(dir.join("bad.rk"), unformatted).unwrap();
+
+    let output = renk(&["fmt", "--check", "good.rk"], "", &dir);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
+    assert!(output.stdout.is_empty(), "{}", text(&output.stdout));
+
+    let output = renk(&["fmt", "--check", "good.rk", "bad.rk"], "", &dir);
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output.stderr));
+    assert_eq!(
+        text(&output.stdout),
+        "--- bad.rk\n+++ bad.rk\n@@ -1,3 +1,3 @@\n fn main():\n-  let  x = 1\n-  println!(\"{x}\")\n+    let x = 1\n+    println!(\"{x}\")\n"
+    );
+    assert_eq!(fs::read_to_string(dir.join("bad.rk")).unwrap(), unformatted);
+
+    let output = renk(&["fmt", "--check"], "fn main():\n  f()\n", &dir);
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output.stderr));
+    assert!(
+        text(&output.stdout).starts_with("--- <stdin>\n+++ <stdin>\n"),
+        "{}",
+        text(&output.stdout)
+    );
+
+    let output = renk(&["fmt", "bad.rk", "-o", "out.rk"], "", &dir);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
+    assert_eq!(fs::read_to_string(dir.join("out.rk")).unwrap(), formatted);
+
+    let output = renk(&["fmt", "good.rk", "bad.rk"], "", &dir);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(
+        text(&output.stderr),
+        "renk: formatting more than one file needs --check\n"
+    );
+    let output = renk(&["fmt", "--check", "good.rk", "-o", "out.rk"], "", &dir);
+    assert_eq!(output.status.code(), Some(2));
+
+    let output = Command::new(env!("CARGO_BIN_EXE_renk"))
+        .args(["fmt", "good.rk"])
+        .current_dir(&dir)
+        .env("PATH", &dir)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        text(&output.stderr).starts_with("renk: cannot run rustfmt"),
+        "{}",
+        text(&output.stderr)
+    );
+    let _ = fs::remove_dir_all(dir);
+}

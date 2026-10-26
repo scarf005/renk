@@ -258,6 +258,147 @@ fn format_lines(source: &str) -> Result<String, TranspileError> {
     ))
 }
 
+/// Formats Renk as `rustfmt` lays out Rust: the generated Rust goes through `rustfmt`, which
+/// returns `None` when it cannot format it, and back through [`rust_to_renk`]. The result is kept
+/// only when its Rust formats to the same text as the source's, up to inlined format arguments;
+/// otherwise each top-level item whose formatted lines fail that check keeps its lines as
+/// [`format_source`] writes them. A script keeps its `#!` line and frontmatter, and its top-level
+/// statements are formatted in the `fn main` that runs them.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn format_source_with(
+    source: &str,
+    rustfmt: &dyn Fn(&str) -> Option<String>,
+) -> Result<String, TranspileError> {
+    let parts = script::script_parts(source)?;
+    let lines = source.split_inclusive('\n').collect::<Vec<_>>();
+    let body = lines[parts.body_start..].concat();
+    let base = format_source(&body).map_err(|mut error| {
+        error.line += parts.body_start;
+        error
+    })?;
+    let base = base.trim_start_matches('\n');
+    let wrapped = (parts.body_start > 0)
+        .then(|| wrap_script_statements(base, SourceSyntax::Renk, None))
+        .flatten();
+    let formatted = match wrapped {
+        Some((wrapped, _)) => unwrap_script_statements(&format_items(&wrapped, rustfmt))
+            .filter(|body| {
+                wrap_script_statements(body, SourceSyntax::Renk, None)
+                    .and_then(|(rewrapped, _)| canonical_rust(&rewrapped, rustfmt))
+                    == canonical_rust(&wrapped, rustfmt)
+            })
+            .unwrap_or_else(|| base.to_string()),
+        None => format_items(base, rustfmt),
+    };
+    // A script's blank lines after its header stay.
+    let gap = if parts.body_start > 0 {
+        body.lines()
+            .take_while(|line| line.trim().is_empty())
+            .count()
+    } else {
+        0
+    };
+    Ok(lines[..parts.body_start].concat() + &"\n".repeat(gap) + &formatted)
+}
+
+/// The generated Rust of `source` as `rustfmt` formats it.
+#[cfg(not(target_arch = "wasm32"))]
+fn formatted_rust(source: &str, rustfmt: &dyn Fn(&str) -> Option<String>) -> Option<String> {
+    rustfmt(&transpile(source).ok()?.rust)
+}
+
+/// [`formatted_rust`] with format arguments inlined, as `"{}", x` and `"{x}"` are the same.
+#[cfg(not(target_arch = "wasm32"))]
+fn canonical_rust(source: &str, rustfmt: &dyn Fn(&str) -> Option<String>) -> Option<String> {
+    formatted_rust(source, rustfmt).map(|rust| canonical_format_macros(&rust))
+}
+
+/// `source` formatted as a whole, or else item by item; see [`format_source_with`].
+#[cfg(not(target_arch = "wasm32"))]
+fn format_items(source: &str, rustfmt: &dyn Fn(&str) -> Option<String>) -> String {
+    let format = |text: &str| rust_to_renk(&formatted_rust(text, rustfmt)?).ok();
+    let expected = canonical_rust(source, rustfmt);
+    if let Some(formatted) = format(source)
+        && expected.is_some()
+        && canonical_rust(&formatted, rustfmt) == expected
+    {
+        return formatted;
+    }
+    // An item starts at a line without indentation after a blank line, and keeps the blank lines
+    // after it.
+    let lines = source.lines().collect::<Vec<_>>();
+    let in_literal = lines_ending_in_literal(source);
+    let mut items = Vec::<(String, String)>::new();
+    for (index, line) in lines.iter().enumerate() {
+        let starts = index > 0
+            && !in_literal[index - 1]
+            && lines[index - 1].is_empty()
+            && !line.is_empty()
+            && raw_indent(line) == 0;
+        match items.last_mut() {
+            Some((_, gap)) if line.is_empty() && !in_literal[index - 1] => gap.push('\n'),
+            Some((item, gap)) if !starts => {
+                item.push_str(&std::mem::take(gap));
+                item.push_str(line);
+                item.push('\n');
+            }
+            _ => items.push((format!("{line}\n"), String::new())),
+        }
+    }
+    let join = |items: &[(String, String)]| {
+        items
+            .iter()
+            .map(|(item, gap)| format!("{item}{gap}"))
+            .collect::<String>()
+    };
+    for index in 0..items.len() {
+        let Some(formatted) = format(&items[index].0) else {
+            continue;
+        };
+        let mut trial = items.clone();
+        trial[index].0 = formatted;
+        let same = match &expected {
+            Some(_) => canonical_rust(&join(&trial), rustfmt) == expected,
+            // Without Rust for the whole source, the item is compared alone.
+            None => canonical_rust(&items[index].0, rustfmt)
+                .is_some_and(|rust| canonical_rust(&trial[index].0, rustfmt) == Some(rust)),
+        };
+        if same {
+            items = trial;
+        }
+    }
+    ensure_trailing_newline(join(&items).trim_end_matches('\n'))
+}
+
+/// The top-level lines of a script that [`wrap_script_statements`] wrapped, from its formatted
+/// form; `None` when the wrapper is no longer there.
+#[cfg(not(target_arch = "wasm32"))]
+fn unwrap_script_statements(wrapped: &str) -> Option<String> {
+    let lines = wrapped.lines().collect::<Vec<_>>();
+    let in_literal = lines_ending_in_literal(wrapped);
+    let starts_code = |index: usize| index == 0 || !in_literal[index - 1];
+    let header = (0..lines.len())
+        .find(|&index| starts_code(index) && lines[index].starts_with("fn main()"))?;
+    let end = lines.len().checked_sub(1)?;
+    if end <= header || lines[end] != "    Ok(())" {
+        return None;
+    }
+    let body = (header + 1..end)
+        .map(|index| match lines[index] {
+            line if !starts_code(index) || line.is_empty() => Some(line),
+            line => line.strip_prefix("    "),
+        })
+        .collect::<Option<Vec<_>>>()?;
+    Some(ensure_trailing_newline(
+        &lines[..header]
+            .iter()
+            .copied()
+            .chain(body)
+            .collect::<Vec<_>>()
+            .join("\n"),
+    ))
+}
+
 /// A script without a top-level `fn main` with its lines wrapped in a `fn main` returning
 /// `Result`, so top-level statements run in order and can use `?`, and the 1-based line of the
 /// inserted header. `result` names a `Result` alias with a default error type, such as
