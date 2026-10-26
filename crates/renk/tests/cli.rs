@@ -678,6 +678,34 @@ fn cargo_wrapper_run_keeps_the_order_of_stdout_and_stderr_on_one_stream() {
     let _ = fs::remove_dir_all(dir);
 }
 
+#[test]
+fn cargo_wrapper_run_relays_all_output_written_before_the_program_exits() {
+    let dir = cargo_project(
+        "cargo-flood",
+        "fn main():\n    let line = \"x\".repeat(1023)\n    for _ in 0..8192:\n        println!(\"{line}\")\n",
+    );
+    fs::remove_file(dir.join("src/other.rs")).unwrap();
+    // Like `renk run -q 2>/dev/null | wc -c`.
+    let mut child = Command::new(env!("CARGO_BIN_EXE_renk"))
+        .args(["run", "-q"])
+        .current_dir(&dir)
+        .env("CARGO_TARGET_DIR", dir.join("target"))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut stdout = child.stdout.take().unwrap();
+    let mut first = [0; 1];
+    stdout.read_exact(&mut first).unwrap();
+    // The program exits while most of its output still waits for the reader.
+    std::thread::sleep(std::time::Duration::from_secs(1));
+    let mut rest = Vec::new();
+    stdout.read_to_end(&mut rest).unwrap();
+    assert!(child.wait().unwrap().success());
+    assert_eq!(1 + rest.len(), 8192 * 1024);
+    let _ = fs::remove_dir_all(dir);
+}
+
 /// Whether `child` exits within `seconds`; it is killed if not.
 fn exits_within(child: &mut std::process::Child, seconds: u64) -> bool {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(seconds);

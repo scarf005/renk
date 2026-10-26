@@ -691,6 +691,36 @@ fn script_output_keeps_its_order_on_one_stream() {
     let _ = fs::remove_dir_all(dir);
 }
 
+#[test]
+fn script_output_on_one_stream_is_relayed_in_full() {
+    use std::io::Read;
+
+    let dir = temp_dir("script-flood");
+    let script = dir.join("flood.rk");
+    fs::write(
+        &script,
+        "let line = \"x\".repeat(1023)\nfor i in 0..8192:\n    if i % 2 == 0:\n        println!(\"{line}\")\n    else:\n        eprintln!(\"{line}\")\n",
+    )
+    .unwrap();
+    // Like `renk flood.rk 2>&1 | wc -c`, with a reader that falls behind.
+    let (mut reader, writer) = std::io::pipe().unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_renk"))
+        .arg(&script)
+        .env("XDG_CACHE_HOME", dir.join("cache"))
+        .stdout(writer.try_clone().unwrap())
+        .stderr(writer)
+        .spawn()
+        .unwrap();
+    let mut first = [0; 1];
+    reader.read_exact(&mut first).unwrap();
+    std::thread::sleep(std::time::Duration::from_secs(1));
+    let mut rest = Vec::new();
+    reader.read_to_end(&mut rest).unwrap();
+    assert!(child.wait().unwrap().success());
+    assert_eq!(1 + rest.len(), 8192 * 1024);
+    let _ = fs::remove_dir_all(dir);
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn killing_renk_ends_its_script() {
