@@ -2629,6 +2629,33 @@ mod tests {
     }
 
     #[test]
+    fn script_edits_of_what_does_not_convert_back_drop_the_action() {
+        let source = "#!/usr/bin/env -S renk script\nlet n = 1\nprintln!(\"{n}\")\n";
+        let rust = generated(&module_uri("tool.rk"), source).unwrap().rust;
+        let line = |text: &str| rust.lines().position(|line| line.contains(text)).unwrap() as u32;
+        let dependency = insert(line("[package]"), "[dependencies]\nregex = \"1\"\n");
+        let body = insert(line("println!"), "    let m = 2;\n");
+        let main = line("fn main()");
+        let returns = TextEdit::new(
+            Range::new(
+                Position::new(main, 13),
+                Position::new(
+                    main,
+                    rust.lines().nth(main as usize).unwrap().len() as u32 - 2,
+                ),
+            ),
+            "std::io::Result<()>".to_string(),
+        );
+        assert!(renk_edits(source, &rust, std::slice::from_ref(&body), true).is_some());
+        assert_eq!(renk_edits(source, &rust, &[dependency.clone()], true), None);
+        assert_eq!(
+            renk_edits(source, &rust, &[dependency, body.clone()], true),
+            None
+        );
+        assert_eq!(renk_edits(source, &rust, &[returns, body], true), None);
+    }
+
+    #[test]
     fn filled_match_arms_become_renk_arms() {
         let source = "enum E:\n    A\n    B\n\nfn f(e: E) -> i32 = match e:\n    E.A => 1\n";
         let rust = module_rust(source);
