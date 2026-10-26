@@ -2,6 +2,12 @@
 name = "renk"
 version = "0.1.0"
 edition = "2024"
+description = "Indentation-based syntax for Rust: transpiles .rk files to .rs"
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/scarf005/rusk"
+readme = "../../README.md"
+keywords = ["rust", "transpiler", "syntax", "indentation"]
+categories = ["development-tools"]
 
 [lib]
 crate-type = ["cdylib", "rlib"]
