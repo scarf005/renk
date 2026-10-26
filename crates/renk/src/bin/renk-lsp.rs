@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeSet, HashMap},
+    collections::{BTreeSet, HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
     process::Stdio,
@@ -1163,9 +1163,22 @@ fn write_if_changed(path: &Path, content: &str) {
 }
 
 /// Brings the mirror at `rust_root` up to date with `source_root` and the open `documents`:
-/// prunes what is gone first, so a module's generated Rust replaces a removed file's copy.
+/// prunes what is gone first, so a module's generated Rust replaces a removed file's copy, but
+/// not the generated Rust of an open module, which may have no file in `source_root`.
 fn mirror_workspace(source_root: &Path, rust_root: &Path, documents: &HashMap<Url, String>) {
-    prune_mirror(source_root, rust_root, rust_root);
+    let open = Url::from_directory_path(source_root)
+        .ok()
+        .zip(Url::from_directory_path(rust_root).ok())
+        .map(|(source_root_uri, rust_root_uri)| {
+            documents
+                .iter()
+                .filter(|(uri, text)| !is_script(uri, text))
+                .filter_map(|(uri, _)| rust_uri_for_renk_uri(uri, &source_root_uri, &rust_root_uri))
+                .filter_map(|rust_uri| rust_uri.to_file_path().ok())
+                .collect()
+        })
+        .unwrap_or_default();
+    prune_mirror(source_root, rust_root, rust_root, &open);
     mirror_sources(source_root, rust_root, source_root, documents);
 }
 
@@ -1233,11 +1246,11 @@ fn mirror_sources(
 
 /// Removes the Rust files and Cargo manifests under `dir` of the mirror at `rust_root` that
 /// nothing in `source_root` mirrors to any more: a module's generated Rust stays while its Renk
-/// module or a Rust file is there, and a copy while its file is there.
-fn prune_mirror(source_root: &Path, rust_root: &Path, dir: &Path) {
+/// module or a Rust file is there, a copy while its file is there, and the files in `open` stay.
+fn prune_mirror(source_root: &Path, rust_root: &Path, dir: &Path, open: &HashSet<PathBuf>) {
     for (path, directory) in walk(dir) {
         if directory {
-            prune_mirror(source_root, rust_root, &path);
+            prune_mirror(source_root, rust_root, &path, open);
             continue;
         }
         let Ok(relative) = path.strip_prefix(rust_root) else {
@@ -1250,7 +1263,7 @@ fn prune_mirror(source_root: &Path, rust_root: &Path, dir: &Path) {
         };
         let mirrored = path.extension().is_some_and(|extension| extension == "rs")
             || path.ends_with("Cargo.toml");
-        if mirrored && !source.is_file() && !generated() {
+        if mirrored && !open.contains(&path) && !source.is_file() && !generated() {
             let _ = fs::remove_file(&path);
         }
     }
