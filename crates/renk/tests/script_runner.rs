@@ -823,6 +823,95 @@ fn script_terminal_follows_the_window_size() {
     let _ = fs::remove_dir_all(dir);
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn script_reads_the_new_window_size_on_sigwinch() {
+    use std::{
+        io::{Read, Write},
+        os::{
+            fd::{AsRawFd, FromRawFd, OwnedFd},
+            unix::process::CommandExt,
+        },
+    };
+
+    let dir = temp_dir("script-sigwinch");
+    let script = dir.join("trap.rk");
+    // `wait`, unlike `read`, runs the trap as soon as the signal comes.
+    fs::write(
+        &script,
+        "std.process.Command.new(\"bash\").args([\"-c\", \"trap 'stty size </dev/stderr' WINCH; echo ready; head -n1 <&0 & while ! wait $!; do :; done\"]).status()?\n",
+    )
+    .unwrap();
+    let size = |rows, cols| libc::winsize {
+        ws_row: rows,
+        ws_col: cols,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
+    let (mut parent, mut child) = (0, 0);
+    // SAFETY: `openpty` gets valid pointers and opens two descriptors only the files own.
+    let (parent, child) = unsafe {
+        let opened = libc::openpty(
+            &mut parent,
+            &mut child,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &size(24, 80),
+        );
+        assert_eq!(opened, 0);
+        (fs::File::from_raw_fd(parent), OwnedFd::from_raw_fd(child))
+    };
+    let mut command = Command::new(env!("CARGO_BIN_EXE_renk"));
+    command
+        .arg(&script)
+        .env("XDG_CACHE_HOME", dir.join("cache"))
+        .stdin(std::process::Stdio::piped())
+        .stdout(child.try_clone().unwrap())
+        .stderr(child);
+    // SAFETY: `setsid` and `ioctl` are async-signal-safe. renk leads a session whose controlling
+    // terminal is the pseudo-terminal, so resizing it signals renk's process group, as a real
+    // terminal signals its foreground job.
+    unsafe {
+        command.pre_exec(|| {
+            libc::setsid();
+            libc::ioctl(1, libc::TIOCSCTTY, 0);
+            Ok(())
+        });
+    }
+    let mut renk = command.spawn().unwrap();
+    let mut reader = parent.try_clone().unwrap();
+    let (sender, chunks) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut buffer = [0; 1024];
+        while let Ok(read @ 1..) = reader.read(&mut buffer) {
+            if sender
+                .send(String::from_utf8_lossy(&buffer[..read]).into_owned())
+                .is_err()
+            {
+                break;
+            }
+        }
+    });
+    let mut output = String::new();
+    let mut read_until = |expected: &str, seconds| {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(seconds);
+        while !output.contains(expected) {
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            output += &chunks
+                .recv_timeout(left)
+                .unwrap_or_else(|_| panic!("no {expected:?} in {output:?}"));
+        }
+    };
+    // The first run builds the script.
+    read_until("ready", 300);
+    // SAFETY: the call gets a valid pointer.
+    unsafe { libc::ioctl(parent.as_raw_fd(), libc::TIOCSWINSZ, &size(40, 100)) };
+    read_until("40 100", 10);
+    renk.stdin.take().unwrap().write_all(b"\n").unwrap();
+    assert!(renk.wait().unwrap().success());
+    let _ = fs::remove_dir_all(dir);
+}
+
 /// Whether `child` exits within `seconds`; it is killed if not.
 fn exits_within(child: &mut std::process::Child, seconds: u64) -> bool {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(seconds);
