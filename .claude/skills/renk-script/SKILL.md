@@ -42,5 +42,6 @@ fn main():
 ## Checks
 
 - A missing-crate error suggests the `renk add` command; run it.
-- Diagnostics point at `.rk` lines. Fix the script, not the cached Rust in `$XDG_CACHE_HOME/renk/scripts`.
+- Diagnostics and panics point at `.rk` lines. Fix the script, not the cached Rust in `$XDG_CACHE_HOME/renk/scripts`.
+- A ``renk read `a.b` as ...`` help names the other spelling of a misread dot; use it.
 - Print visible output from `main`; do not discard results with `let _ =`.

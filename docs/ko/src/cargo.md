@@ -35,3 +35,16 @@ mod tests:
 
 `renk run`은 `42`를 출력하고, `renk test`는 `doubles`를 실행한다. 본문 없는 `mod name`은 Rust의
 `mod name;`처럼 모듈 파일을 선언한다.
+
+## 진단
+
+- 생성된 파일에 대한 컴파일러 진단은 `.rk`의 줄과 열을 가리키고 `.rk` 소스를 인용한다. 다른
+  파일에 대한 진단은 rustc가 렌더링한 그대로 출력한다.
+- rustc가 제안하는 수정은 Rust 코드이므로 `.rk` span에서는 뺀다.
+- `--message-format=short`는 `src/main.rk:LINE:COLUMN: error: ...` 줄을 출력한다.
+  `--message-format=json...`은 span, 인용한 줄, `rendered` 텍스트를 `.rk` 파일로 옮긴 cargo의
+  JSON 메시지를 출력한다.
+- `renk run`, `renk test`, `renk bench`의 panic 메시지와 backtrace는 `.rk` 위치를 보여 준다.
+  출력이 터미널인 프로그램은 계속 터미널에 쓴다.
+- `a.b`에서 이름을 찾지 못하면 renk가 점을 어떻게 읽었는지 알려 주는 help 줄이 붙는다.
+  [한계](limits.md)를 참고한다.

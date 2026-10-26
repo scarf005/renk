@@ -58,13 +58,13 @@ instead, so its `bail!` works. A top-level `return` must be `return Ok(())`.
 
 - `RENK_SCRIPT` holds the script's absolute path.
 - `CARGO_MANIFEST_DIR` and `CARGO_PKG_NAME` are set as `cargo run` sets them.
-- renk exits with the script's exit code.
+- renk exits with the script's exit code, or 128 plus the signal number when a signal kills it.
 
 ## Builds and caching
 
 - The generated Rust goes to `$XDG_CACHE_HOME/renk/scripts/` (`~/.cache/renk/scripts/` when
   `XDG_CACHE_HOME` is unset) and is rewritten only when it changes.
-- A run execs the cached binary without cargo and rebuilds only when the generated Rust
+- A run starts the cached binary without cargo and rebuilds only when the generated Rust
   changes. `renk script --cargo FILE.rk` builds through cargo on every run, which picks up
   dependency and toolchain updates.
 - All scripts build in one shared `$XDG_CACHE_HOME/renk/build/`, so each dependency compiles
@@ -80,6 +80,9 @@ instead, so its `bail!` works. A top-level `return` must be `return Ok(())`.
 - Compiler warnings print only on runs that compile the script.
 - Diagnostics point at the script's lines and columns and quote its source. A span on a line
   renk synthesizes, such as a closing brace, points at the end of the script line it closes.
-- rustc's suggested replacements are Rust code, so only their message shows.
+- rustc's suggested replacements are Rust code, so they are left out.
+- A name that does not resolve at `a.b` gets a help line saying how renk read the dot. See
+  [Limits](limits.md).
+- Panic messages and backtraces point at the script's lines and columns.
 - When renk named the package, cargo's failure summary names the script, as in
   ``could not compile `tool.rk` ``.

@@ -36,3 +36,16 @@ mod tests:
 
 `renk run` prints `42`, and `renk test` runs `doubles`. `mod name` without a body declares a
 module file, as `mod name;` does in Rust.
+
+## Diagnostics
+
+- Compiler diagnostics about generated files point at the `.rk` line and column and quote the
+  `.rk` source. Diagnostics about other files print as rustc renders them.
+- rustc's suggested replacements are Rust code, so they are left out of `.rk` spans.
+- `--message-format=short` prints `src/main.rk:LINE:COLUMN: error: ...` lines.
+  `--message-format=json...` prints cargo's JSON messages with spans, quoted lines, and
+  `rendered` text moved to the `.rk` file.
+- Panic messages and backtraces from `renk run`, `renk test`, and `renk bench` show `.rk`
+  locations. A program whose output is a terminal still writes to a terminal.
+- A name that does not resolve at `a.b` gets a help line saying how renk read the dot. See
+  [Limits](limits.md).

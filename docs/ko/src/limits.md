@@ -3,7 +3,9 @@
 Renk는 문법 프런트엔드다. 타입이 아니라 텍스트를 읽으므로 다음과 같은 한계가 있다:
 
 - `a.b`는 타입이 아니라 이름 바인딩으로 판단한다. 잘못 읽힌 이름은 대개 컴파일에 실패한다.
-  경로를 강제하려면 `foo::new()`를, 값 receiver를 강제하려면 `(Unit).method()`를 쓴다.
+  경로를 강제하려면 `foo::new()`를, 값 receiver를 강제하려면 `(Unit).method()`를 쓴다. 이런
+  점에서 이름을 찾지 못하면 ``renk read `String.nope` as the path `String::nope`; write
+  `(String).nope` for a value``처럼 다른 표기를 알려 주는 help 줄이 붙는다.
 - 표현식 뒤의 `[...]`는 `name[...](`이거나 `::`나 `.name` 앞의 CamelCase `Name[...]`가 아니면
   인덱싱이다. 그 밖의 제네릭 적용은 Rust의 `::<...>`를 쓴다.
 - 매크로와 속성의 토큰 트리는 해석하지 않는 Rust 토큰이다. [매크로](syntax/macros.md)에 나열한

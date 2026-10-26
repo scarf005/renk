@@ -57,13 +57,14 @@ println!("{n * 2}")
 
 - `RENK_SCRIPT`에는 스크립트의 절대 경로가 들어 있다.
 - `CARGO_MANIFEST_DIR`와 `CARGO_PKG_NAME`은 `cargo run`과 같은 방식으로 설정된다.
-- renk는 스크립트의 종료 코드로 끝난다.
+- renk는 스크립트의 종료 코드로 끝나고, 스크립트가 시그널로 죽으면 128에 시그널 번호를 더한
+  코드로 끝난다.
 
 ## 빌드와 캐시
 
 - 생성된 Rust는 `$XDG_CACHE_HOME/renk/scripts/`(`XDG_CACHE_HOME`이 없으면
   `~/.cache/renk/scripts/`)에 저장되며, 내용이 바뀔 때만 다시 쓴다.
-- 실행할 때는 캐시된 바이너리를 cargo 없이 exec하고, 생성된 Rust가 바뀔 때만 다시 빌드한다.
+- 실행할 때는 캐시된 바이너리를 cargo 없이 실행하고, 생성된 Rust가 바뀔 때만 다시 빌드한다.
   `renk script --cargo FILE.rk`는 매번 cargo를 거쳐 빌드하므로 의존성과 툴체인 업데이트를
   반영한다.
 - 모든 스크립트는 공유 디렉터리 `$XDG_CACHE_HOME/renk/build/`에서 빌드하므로 각 의존성은 한 번만
@@ -78,6 +79,9 @@ println!("{n * 2}")
 - 컴파일러 경고는 스크립트를 컴파일하는 실행에서만 출력된다.
 - 진단은 스크립트의 줄과 열을 가리키고 스크립트 소스를 인용한다. 닫는 중괄호처럼 renk가 만들어 낸
   줄의 span은 그 줄이 닫는 스크립트 줄의 끝을 가리킨다.
-- rustc가 제안하는 수정은 Rust 코드이므로 메시지만 보여 준다.
+- rustc가 제안하는 수정은 Rust 코드이므로 뺀다.
+- `a.b`에서 이름을 찾지 못하면 renk가 점을 어떻게 읽었는지 알려 주는 help 줄이 붙는다.
+  [한계](limits.md)를 참고한다.
+- panic 메시지와 backtrace는 스크립트의 줄과 열을 가리킨다.
 - 패키지 이름을 renk가 정했으면 cargo의 실패 요약은 ``could not compile `tool.rk` ``처럼
   스크립트 이름을 쓴다.
