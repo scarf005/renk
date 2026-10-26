@@ -11,6 +11,7 @@ use std::{
     path::{Path, PathBuf},
     process::{self, Command},
     sync::{
+        Arc,
         atomic::{AtomicBool, Ordering},
         mpsc::{self, RecvTimeoutError},
     },
@@ -1246,10 +1247,10 @@ fn supervise<'a>(
     let handlers = unsafe {
         [libc::SIGINT, libc::SIGQUIT].map(|signal| (signal, libc::signal(signal, libc::SIG_IGN)))
     };
-    let exited = AtomicBool::new(false);
+    let exited = Arc::new(AtomicBool::new(false));
     let status = std::thread::scope(|scope| {
         for (reader, resize, line, output) in relays {
-            let exited = &exited;
+            let exited = exited.clone();
             scope.spawn(move || relay(reader, resize, output, line, exited));
         }
         let status = child.wait();
@@ -1270,7 +1271,8 @@ fn supervise<'a>(
 
 /// Copies `input` to `output` a line at a time through `line`, holding a partial line until its
 /// newline comes or 50 ms pass without output. Once `exited` is set, it ends at the first 50 ms
-/// without output, or a mebibyte later, as the child's own children may hold `input` open. When
+/// without output, or after a mebibyte more read from `input`, as the child's own children may
+/// hold `input` open; what was read before goes out in full. When
 /// `output` fails, as when its reader closes, `input` closes too, so the child's next write to it
 /// fails. It calls `resize` at least every 50 ms.
 fn relay(
@@ -1278,16 +1280,21 @@ fn relay(
     resize: impl Fn(),
     mut output: impl Write,
     mut line: impl FnMut(&[u8], bool) -> Option<Vec<u8>>,
-    exited: &AtomicBool,
+    exited: Arc<AtomicBool>,
 ) -> io::Result<()> {
     let (sender, chunks) = mpsc::channel::<Vec<u8>>();
+    let reading = exited.clone();
     // The reader is left blocked on a stream that is held open, and ends at its next chunk once
     // `chunks` is gone.
     std::thread::spawn(move || {
         let mut buffer = [0; 8192];
+        let mut left = 1_usize << 20;
         // A pseudo-terminal fails to read once the child's ends close.
         while let Ok(read @ 1..) = input.read(&mut buffer) {
-            if sender.send(buffer[..read].to_vec()).is_err() {
+            if reading.load(Ordering::Relaxed) {
+                left = left.saturating_sub(read);
+            }
+            if sender.send(buffer[..read].to_vec()).is_err() || left == 0 {
                 break;
             }
         }
@@ -1300,17 +1307,11 @@ fn relay(
         }
         output.flush()
     };
-    let mut left = 1_usize << 20;
     loop {
         resize();
         let done = exited.load(Ordering::Relaxed);
         match chunks.recv_timeout(Duration::from_millis(50)) {
-            Ok(chunk) if left > 0 => {
-                if done {
-                    left = left.saturating_sub(chunk.len());
-                }
-                pending.extend(chunk);
-            }
+            Ok(chunk) => pending.extend(chunk),
             Err(RecvTimeoutError::Timeout) if !done => {
                 if !pending.is_empty() {
                     write(line(&pending, false), &mut pending)?;
