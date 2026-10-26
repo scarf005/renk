@@ -1186,7 +1186,8 @@ type Relay<'a> = &'a mut (dyn FnMut(&[u8], bool) -> Option<Vec<u8>> + Send);
 /// terminal reaches the child as a terminal of its own. When renk's stdout and stderr are one
 /// file, as a shared terminal or `2>&1` makes them, the child gets one stream for both, relayed
 /// to stdout through both relays so their order holds. Until the child exits, renk ignores the
-/// interrupt and quit signals that the terminal sends the child too.
+/// interrupt and quit signals that the terminal sends the child too; on Linux the child dies with
+/// renk, as it would if renk ran it in its place.
 fn supervise<'a>(
     mut command: Command,
     mut stdout: Option<Relay<'a>>,
@@ -1194,11 +1195,12 @@ fn supervise<'a>(
 ) -> CliResult<i32> {
     let mut relays = Vec::<(
         _,
+        _,
         Box<dyn FnMut(&[u8], bool) -> Option<Vec<u8>> + Send + 'a>,
         _,
     )>::new();
     if (stdout.is_some() || stderr.is_some()) && same_file(io::stdout(), io::stderr()) {
-        let (reader, writer) = capture(io::stdout())?;
+        let (reader, writer, resize) = capture(io::stdout())?;
         command.stdout(writer.try_clone()?).stderr(writer);
         let both = move |line: &[u8], complete| {
             let line = match &mut stdout {
@@ -1212,20 +1214,29 @@ fn supervise<'a>(
         };
         relays.push((
             reader,
+            resize,
             Box::new(both),
             Box::new(io::stdout()) as Box<dyn Write + Send>,
         ));
     } else {
         if let Some(line) = stdout {
-            let (reader, writer) = capture(io::stdout())?;
+            let (reader, writer, resize) = capture(io::stdout())?;
             command.stdout(writer);
-            relays.push((reader, Box::new(line), Box::new(io::stdout())));
+            relays.push((reader, resize, Box::new(line), Box::new(io::stdout())));
         }
         if let Some(line) = stderr {
-            let (reader, writer) = capture(io::stderr())?;
+            let (reader, writer, resize) = capture(io::stderr())?;
             command.stderr(writer);
-            relays.push((reader, Box::new(line), Box::new(io::stderr())));
+            relays.push((reader, resize, Box::new(line), Box::new(io::stderr())));
         }
+    }
+    #[cfg(target_os = "linux")]
+    // SAFETY: `prctl` is async-signal-safe, so it may run between `fork` and `exec`.
+    unsafe {
+        std::os::unix::process::CommandExt::pre_exec(&mut command, || {
+            libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
+            Ok(())
+        });
     }
     let mut child = command.spawn()?;
     // The command holds the child ends of the streams, which must close for the relays to end.
@@ -1237,9 +1248,9 @@ fn supervise<'a>(
     };
     let exited = AtomicBool::new(false);
     let status = std::thread::scope(|scope| {
-        for (reader, line, output) in relays {
+        for (reader, resize, line, output) in relays {
             let exited = &exited;
-            scope.spawn(move || relay(reader, output, line, exited));
+            scope.spawn(move || relay(reader, resize, output, line, exited));
         }
         let status = child.wait();
         exited.store(true, Ordering::Relaxed);
@@ -1261,9 +1272,10 @@ fn supervise<'a>(
 /// newline comes or 50 ms pass without output. Once `exited` is set, it ends at the first 50 ms
 /// without output, or a mebibyte later, as the child's own children may hold `input` open. When
 /// `output` fails, as when its reader closes, `input` closes too, so the child's next write to it
-/// fails.
+/// fails. It calls `resize` at least every 50 ms.
 fn relay(
     mut input: Box<dyn Read + Send>,
+    resize: impl Fn(),
     mut output: impl Write,
     mut line: impl FnMut(&[u8], bool) -> Option<Vec<u8>>,
     exited: &AtomicBool,
@@ -1290,6 +1302,7 @@ fn relay(
     };
     let mut left = 1_usize << 20;
     loop {
+        resize();
         let done = exited.load(Ordering::Relaxed);
         match chunks.recv_timeout(Duration::from_millis(50)) {
             Ok(chunk) if left > 0 => {
@@ -1319,26 +1332,42 @@ fn relay(
 }
 
 /// The end renk reads and the child's end of a relayed stream: a pseudo-terminal when `stream` is
-/// a terminal, else a pipe.
+/// a terminal, else a pipe. The function it comes with gives a pseudo-terminal the terminal's
+/// current window size.
 #[cfg(unix)]
-fn capture(
-    stream: impl IsTerminal + std::os::fd::AsFd,
-) -> io::Result<(Box<dyn Read + Send>, fs::File)> {
+fn capture(stream: impl IsTerminal + std::os::fd::AsFd) -> io::Result<Capture> {
+    use std::os::fd::AsRawFd;
+
     if stream.is_terminal() {
         let (reader, writer) = pseudo_terminal(stream.as_fd())?;
-        return Ok((Box::new(reader), writer));
+        let (terminal, parent) = (stream.as_fd().as_raw_fd(), reader.try_clone()?);
+        let resize = move || copy_size(terminal, parent.as_raw_fd());
+        return Ok((Box::new(reader), writer, Box::new(resize)));
     }
     let (reader, writer) = io::pipe()?;
-    Ok((Box::new(reader), std::os::fd::OwnedFd::from(writer).into()))
+    let writer = std::os::fd::OwnedFd::from(writer).into();
+    Ok((Box::new(reader), writer, Box::new(|| ())))
 }
 
 #[cfg(not(unix))]
-fn capture(_: impl IsTerminal) -> io::Result<(Box<dyn Read + Send>, fs::File)> {
+fn capture(_: impl IsTerminal) -> io::Result<Capture> {
     let (reader, writer) = io::pipe()?;
-    Ok((
-        Box::new(reader),
-        std::os::windows::io::OwnedHandle::from(writer).into(),
-    ))
+    let writer = std::os::windows::io::OwnedHandle::from(writer).into();
+    Ok((Box::new(reader), writer, Box::new(|| ())))
+}
+
+type Capture = (Box<dyn Read + Send>, fs::File, Box<dyn Fn() + Send>);
+
+/// Gives the pseudo-terminal `to` the window size of the terminal `from`.
+#[cfg(unix)]
+fn copy_size(from: std::os::fd::RawFd, to: std::os::fd::RawFd) {
+    // SAFETY: the calls get a valid pointer.
+    unsafe {
+        let mut size = std::mem::zeroed::<libc::winsize>();
+        if libc::ioctl(from, libc::TIOCGWINSZ, &mut size) == 0 {
+            libc::ioctl(to, libc::TIOCSWINSZ, &size);
+        }
+    }
 }
 
 /// Whether `a` and `b` are one file, as a terminal both write to, or a pipe after `2>&1`.
