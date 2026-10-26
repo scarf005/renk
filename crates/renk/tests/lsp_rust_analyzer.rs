@@ -125,6 +125,38 @@ impl Session {
             let _ = self.messages.recv_timeout(Duration::from_millis(500));
         }
     }
+
+    /// The diagnostics of the first publish for `uri` that `done` accepts, within two minutes.
+    fn diagnostics_until(&mut self, uri: &str, done: impl Fn(&[Value]) -> bool) -> Vec<Value> {
+        let deadline = Instant::now() + Duration::from_secs(120);
+        loop {
+            let left = deadline
+                .checked_duration_since(Instant::now())
+                .expect("no such diagnostics arrived");
+            let Ok(message) = self.messages.recv_timeout(left) else {
+                continue;
+            };
+            if message["method"] == "textDocument/publishDiagnostics"
+                && message["params"]["uri"] == uri
+            {
+                let diagnostics = message["params"]["diagnostics"].as_array().unwrap().clone();
+                if done(&diagnostics) {
+                    return diagnostics;
+                }
+            }
+        }
+    }
+
+    fn change(&mut self, path: &str, version: i32, text: &str) {
+        let uri = self.uri(path);
+        self.notify(
+            "textDocument/didChange",
+            json!({
+                "textDocument": {"uri": uri, "version": version},
+                "contentChanges": [{"text": text}],
+            }),
+        );
+    }
 }
 
 impl Drop for Session {
@@ -380,5 +412,35 @@ fn code_actions_edit_a_scripts_top_level_lines() {
             json!({"range": {"start": position(1, 0), "end": position(2, 0)}, "newText": "let a: i32 = 1 + 1\n"})
         ],
         "{action}"
+    );
+}
+
+#[test]
+fn rust_analyzer_diagnostics_go_while_the_renk_text_does_not_transpile() {
+    let main = format!("{MAIN}    let wrong: u8 = \"text\"\n");
+    let Some(mut session) = Session::open("lsp-stale-diagnostics", &main) else {
+        return;
+    };
+    let uri = session.uri("src/main.rk");
+    let from = |source: &'static str| {
+        move |diagnostics: &[Value]| diagnostics.iter().any(|d| d["source"] == source)
+    };
+    let found = session.diagnostics_until(&uri, from("rust-analyzer"));
+    let error = found.iter().find(|d| d["source"] == "rust-analyzer");
+    assert_eq!(error.unwrap()["range"]["start"]["line"], 9, "{found:?}");
+
+    // A tab is a Renk syntax error, and the line it adds would move rust-analyzer's error.
+    session.change("src/main.rk", 2, &format!("\t\n{main}"));
+    let broken = session.diagnostics_until(&uri, from("renk"));
+    assert!(broken.iter().all(|d| d["source"] == "renk"), "{broken:?}");
+
+    session.change("src/main.rk", 3, &main);
+    let fixed = session.diagnostics_until(&uri, from("rust-analyzer"));
+    assert!(fixed.iter().all(|d| d["source"] != "renk"), "{fixed:?}");
+    assert!(
+        fixed
+            .iter()
+            .all(|d| d["source"] != "rust-analyzer" || d["range"]["start"]["line"] == 9),
+        "{fixed:?}"
     );
 }
