@@ -3,10 +3,15 @@
 `renk-lsp` is a Language Server Protocol server on stdio for `.rk` files. Install it with
 `cargo install --path crates/renk --bin renk-lsp`. It provides:
 
-- diagnostics for Renk syntax errors; type errors come from `renk check` or `renk script`,
+- diagnostics for Renk syntax errors,
 - document symbols,
-- hover, go to definition, and completion from `rust-analyzer` on the generated Rust, when
-  `rust-analyzer` is on `PATH`.
+- from `rust-analyzer` on the generated Rust, when `rust-analyzer` is on `PATH`: its
+  diagnostics, including type errors from its `cargo check` on save; hover; go to definition;
+  completion; find references; rename; code actions; and inlay hints.
+
+Positions map back to the `.rk` file. A rename fails when it would change Renk text that
+differs from the generated Rust, and a code action is left out when its edit does not map to
+the `.rk` lines; scripts get no code actions.
 
 A script, which is a `.rk` file with a `#!` line or frontmatter or outside a Cargo package,
 transpiles as `renk script` does. It gets a `rust-analyzer` of its own over its generated
