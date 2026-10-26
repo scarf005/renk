@@ -124,6 +124,9 @@ impl LanguageServer for Backend {
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
         let _sync = self.sync.lock().await;
         let uri = params.text_document.uri;
+        if is_rust(&uri) {
+            return;
+        }
         let version = params.text_document.version;
         let text = params.text_document.text;
         self.documents
@@ -137,6 +140,9 @@ impl LanguageServer for Backend {
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
         let _sync = self.sync.lock().await;
         let uri = params.text_document.uri;
+        if is_rust(&uri) {
+            return;
+        }
         let version = params.text_document.version;
         let text = params
             .content_changes
@@ -202,9 +208,6 @@ impl LanguageServer for Backend {
             return Ok(None);
         };
         let uri = &params.text_document.uri;
-        if source_syntax(uri) != SourceSyntax::Renk {
-            return Ok(Some(DocumentSymbolResponse::Nested(Vec::new())));
-        }
         let body = if is_script(uri, text) {
             script_body(text)
         } else {
@@ -1252,20 +1255,11 @@ fn prune_mirror(source_root: &Path, rust_root: &Path, dir: &Path) {
     }
 }
 
-fn source_syntax(uri: &Url) -> SourceSyntax {
-    match uri
-        .to_file_path()
-        .ok()
-        .and_then(|path| {
-            path.extension()
-                .and_then(|extension| extension.to_str())
-                .map(str::to_string)
-        })
-        .as_deref()
-    {
-        Some("rs") => SourceSyntax::Rust,
-        _ => SourceSyntax::Renk,
-    }
+/// Whether a document is Rust, which the editor's own rust-analyzer serves: as a Renk document,
+/// its edits would turn into Renk.
+fn is_rust(uri: &Url) -> bool {
+    uri.to_file_path()
+        .is_ok_and(|path| path.extension().is_some_and(|extension| extension == "rs"))
 }
 
 /// A document's generated Rust, as written to the file rust-analyzer and cargo read, and, for
@@ -1286,19 +1280,12 @@ fn generated(uri: &Url, text: &str) -> std::result::Result<Generated, TranspileE
             source_lines: script.source_lines,
         });
     }
-    let (rust, source_lines) = if source_syntax(uri) == SourceSyntax::Rust {
-        let lines = (1..=text.lines().count())
-            .map(|line| (line, false))
-            .collect();
-        (text.to_string(), lines)
-    } else {
-        let output = transpile(text)?;
-        let lines = output.line_origins();
-        (output.rust, lines)
-    };
+    let output = transpile(text)?;
     Ok(Generated {
-        rust: format!("{GENERATED_HEADER}{rust}"),
-        source_lines: std::iter::once((1, true)).chain(source_lines).collect(),
+        rust: format!("{GENERATED_HEADER}{}", output.rust),
+        source_lines: std::iter::once((1, true))
+            .chain(output.line_origins())
+            .collect(),
     })
 }
 
@@ -1311,7 +1298,7 @@ fn is_script(uri: &Url, text: &str) -> bool {
             .skip(1)
             .any(|dir| dir.join("Cargo.toml").is_file())
     });
-    source_syntax(uri) == SourceSyntax::Renk && (headed || !packaged)
+    headed || !packaged
 }
 
 /// The generated cargo-script file rust-analyzer reads for a script, apart from the one
@@ -2488,7 +2475,6 @@ mod tests {
             "#![allow(unused)]\npub fn f() = ()\n"
         ));
         assert!(is_script(&uri("tool.rk"), module));
-        assert!(!is_script(&uri("tool.rs"), module));
         let _ = fs::remove_dir_all(temp);
     }
 
@@ -3083,7 +3069,7 @@ mod tests {
         assert!(origins.inlay_hint(&rust_uri, hint(0, 3)).is_none());
         assert_eq!(
             rust_lines(
-                &generated(&Url::from_file_path("/x/src/main.rs").unwrap(), "a\nb\n").unwrap(),
+                &generated(&module_uri("src/hints.rk"), source).unwrap(),
                 Range::new(Position::new(1, 0), Position::new(1, 1))
             ),
             Some(Range::new(Position::new(2, 0), Position::new(3, 0)))
