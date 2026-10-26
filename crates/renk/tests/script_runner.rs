@@ -523,7 +523,14 @@ fn script_diagnostics_show_script_columns_and_source() {
     }
     assert!(stderr.contains("1 | struct P:"), "{stderr}");
     assert!(!stderr.contains("p.nope(), v.len()"), "{stderr}");
-    assert!(!stderr.contains("String::nope"), "{stderr}");
+    assert!(!stderr.contains("String::nope()"), "{stderr}");
+    assert!(
+        stderr.contains(
+            "= help: renk read `String.nope` as the path `String::nope`; write `(String).nope` for a value\n"
+        ),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("renk read `p.nope`"), "{stderr}");
     let _ = fs::remove_dir_all(dir);
 }
 

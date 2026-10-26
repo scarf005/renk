@@ -17,8 +17,8 @@ use std::{
 use renk::{
     SourceSyntax, TranspileError, format_source_with, rust_to_renk, rust_to_renk_aggressive,
     script::{
-        SCRIPT_EDITION, cache_root, script_cache_path, script_column, script_package, script_parts,
-        script_rust,
+        SCRIPT_EDITION, cache_root, line_dots, script_cache_path, script_column, script_package,
+        script_parts, script_rust,
     },
     source_map_json, to_rust, transpile,
 };
@@ -786,6 +786,13 @@ impl Generated {
     }
 }
 
+/// rustc's error codes for names that do not resolve, where a dot renk read the other way is a
+/// likely cause.
+const RESOLUTION_ERRORS: &[&str] = &[
+    "E0412", "E0423", "E0425", "E0433", "E0531", "E0532", "E0573", "E0574", "E0599", "E0609",
+    "E0610", "E0615", "E0616",
+];
+
 /// Maps rustc's JSON diagnostics and panic locations in generated Rust files to the lines and
 /// columns of their Renk sources.
 struct SourceMapper<'a> {
@@ -811,10 +818,24 @@ impl SourceMapper<'_> {
 
     /// Maps the spans of a rustc diagnostic in generated files to their Renk sources and renders
     /// it there, `short` on one line as rustc's short format does; a diagnostic about other files
-    /// keeps rustc's rendering.
+    /// keeps rustc's rendering. A resolution error at a dot gets a hint on how renk read it.
     fn rewrite(&self, message: &mut serde_json::Value, short: bool) {
+        let hint = self.dot_hint(message);
         if !self.map(message) {
             return;
+        }
+        let children = message
+            .get_mut("children")
+            .and_then(serde_json::Value::as_array_mut);
+        if let (Some(hint), Some(children)) = (hint, children) {
+            children.push(serde_json::json!({
+                "message": hint,
+                "code": null,
+                "level": "help",
+                "spans": [],
+                "children": [],
+                "rendered": null,
+            }));
         }
         let rendered = if short {
             self.short(message)
@@ -890,6 +911,34 @@ impl SourceMapper<'_> {
             span.extend(fields);
         }
         true
+    }
+
+    /// For a resolution error whose primary span in a generated file touches a dot, how renk read
+    /// the dot and how to write the other reading.
+    fn dot_hint(&self, message: &serde_json::Value) -> Option<String> {
+        if !RESOLUTION_ERRORS.contains(&message["code"]["code"].as_str()?) {
+            return None;
+        }
+        let spans = message["spans"].as_array()?;
+        let span = spans.iter().find(|span| span["is_primary"] == true)?;
+        let file = self.file(span["file_name"].as_str()?)?;
+        let number = |key: &str| span[key].as_u64().map(|number| number as usize);
+        let line = number("line_start")?;
+        let (source_line, false) = *file.source_lines.get(line.checked_sub(1)?)? else {
+            return None;
+        };
+        let (renk, rust) = (file.line(source_line), file.rust.lines().nth(line - 1)?);
+        let column = |key: &str| Some(script_column(renk, rust, number(key)?.saturating_sub(1)));
+        let start = column("column_start")?;
+        let end = if number("line_end")? == line {
+            column("column_end")?
+        } else {
+            renk.chars().count()
+        };
+        line_dots(renk, rust)
+            .iter()
+            .filter(|dot| dot.receiver.start <= end && start <= dot.member.end)
+            .find_map(|dot| dot.hint(renk))
     }
 
     /// rustc's short form of a diagnostic whose primary span is in a Renk source:

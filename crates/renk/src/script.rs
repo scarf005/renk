@@ -1,11 +1,17 @@
 //! Single-file scripts: the cargo-script frontmatter, the `fn main` around top-level lines, and
 //! the generated Rust that `renk script` builds and `renk-lsp` hands to rust-analyzer.
 
-use std::path::{Path, PathBuf};
+use std::{
+    ops::Range,
+    path::{Path, PathBuf},
+};
 
 use similar::{DiffTag, TextDiff};
 
-use crate::{SourceSyntax, TranspileError, to_rust, transpile, wrap_script_statements};
+use crate::{
+    SourceSyntax, TranspileError, is_ident_continue, is_ident_start, opaque_span_end, read_ident,
+    to_rust, transpile, wrap_script_statements,
+};
 
 /// The 0-based line indices of a script's parts: an optional `#!` line, the optional `---`
 /// frontmatter with its fence lines, and the body after them.
@@ -240,9 +246,163 @@ pub fn script_column(script: &str, rust: &str, column: usize) -> usize {
         )
 }
 
+/// A `.` between two names in Renk code, as in `a.b`, and how renk read it. Ranges count the
+/// characters of the Renk line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Dot {
+    pub receiver: Range<usize>,
+    pub member: Range<usize>,
+    /// Whether renk wrote the path `a::b` rather than keeping `a.b`, a member of the value `a`.
+    pub path: bool,
+    /// Whether the receiver is a name of its own, not the last segment of `x.a` or `x::a`.
+    pub plain: bool,
+}
+
+impl Dot {
+    /// How to write the other reading of the dot on the Renk line `renk`. A member of a receiver
+    /// that is not a plain name has no other reading to suggest.
+    pub fn hint(&self, renk: &str) -> Option<String> {
+        let text = |range: &Range<usize>| -> String {
+            renk.chars().skip(range.start).take(range.len()).collect()
+        };
+        let (receiver, member) = (text(&self.receiver), text(&self.member));
+        if self.path {
+            return Some(format!(
+                "renk read `{receiver}.{member}` as the path `{receiver}::{member}`; write `({receiver}).{member}` for a value"
+            ));
+        }
+        self.plain.then(|| {
+            format!(
+                "renk read `{receiver}.{member}` as a member of the value `{receiver}`; write `{receiver}::{member}` for a path"
+            )
+        })
+    }
+}
+
+/// The dots between two names in the code of the Renk line `renk`, outside strings and comments,
+/// read as paths where `rust`, the Rust line renk wrote for it, has `::` in their place by a
+/// character diff of the two lines. Dots the diff shows neither kept nor turned into `::` are left
+/// out.
+pub fn line_dots(renk: &str, rust: &str) -> Vec<Dot> {
+    let chars = renk.chars().collect::<Vec<_>>();
+    let generated = rust.chars().collect::<Vec<_>>();
+    let diff = TextDiff::from_chars(renk, rust);
+    let reading = |dot: usize| {
+        let (tag, _, range) = diff
+            .ops()
+            .iter()
+            .map(similar::DiffOp::as_tag_tuple)
+            .find(|(_, written, _)| written.contains(&dot))?;
+        match tag {
+            DiffTag::Equal => Some(false),
+            _ => generated[range]
+                .windows(2)
+                .any(|pair| pair == [':', ':'])
+                .then_some(true),
+        }
+    };
+    let mut dots = Vec::new();
+    let mut index = 0;
+    while index < chars.len() {
+        if let Some(end) = opaque_span_end(&chars, index) {
+            index = end + 1;
+        } else if chars[index].is_ascii_digit() {
+            // A number such as `1.5` or `2.0f64` is no receiver.
+            index += 1;
+            while index < chars.len()
+                && (is_ident_continue(chars[index])
+                    || (chars[index] == '.'
+                        && chars.get(index + 1).is_some_and(char::is_ascii_digit)))
+            {
+                index += 1;
+            }
+        } else if is_ident_start(chars[index]) {
+            let start = index;
+            index = read_ident(&chars, index);
+            if chars.get(index) == Some(&'.')
+                && chars.get(index + 1).copied().is_some_and(is_ident_start)
+                && let Some(path) = reading(index)
+            {
+                dots.push(Dot {
+                    receiver: start..index,
+                    member: index + 1..read_ident(&chars, index + 1),
+                    path,
+                    plain: !matches!(chars[..start].last(), Some('.' | ':')),
+                });
+            }
+        } else {
+            index += 1;
+        }
+    }
+    dots
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn line_dots_tell_paths_from_members_outside_strings_and_comments() {
+        let dot = |receiver: Range<usize>, member: Range<usize>, path, plain| Dot {
+            receiver,
+            member,
+            path,
+            plain,
+        };
+        assert_eq!(
+            line_dots("    let s = String.nope()", "    let s = String::nope();"),
+            [dot(12..18, 19..23, true, true)]
+        );
+        assert_eq!(
+            line_dots("    let n = args.len()", "    let n = args.len();"),
+            [dot(12..16, 17..20, false, true)]
+        );
+        assert_eq!(
+            line_dots(
+                "let a = std.env.args().skip(1)",
+                "let a = std::env::args().skip(1);"
+            ),
+            [
+                dot(8..11, 12..15, true, true),
+                dot(12..15, 16..20, true, false)
+            ]
+        );
+        assert_eq!(
+            line_dots(
+                "    println!(\"{a.b}\", 'x', 1.5, 2.0f64.abs()) // c.d",
+                "    println!(\"{}\", a.b, 'x', 1.5, 2.0f64.abs()); // c.d"
+            ),
+            []
+        );
+        assert_eq!(
+            line_dots("let r = 0..n.len()", "let r = 0..n.len();").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn dot_hints_suggest_the_other_reading() {
+        let line = "let s = String.nope() + cfg.name.len()";
+        let rust = "let s = String::nope() + cfg.name.len();";
+        let hints = line_dots(line, rust)
+            .iter()
+            .map(|dot| dot.hint(line))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            hints,
+            [
+                Some(
+                    "renk read `String.nope` as the path `String::nope`; write `(String).nope` for a value"
+                        .to_string()
+                ),
+                Some(
+                    "renk read `cfg.name` as a member of the value `cfg`; write `cfg::name` for a path"
+                        .to_string()
+                ),
+                None,
+            ]
+        );
+    }
 
     #[test]
     fn script_body_blanks_the_shebang_and_frontmatter_but_keeps_their_lines() {

@@ -394,7 +394,7 @@ fn cargo_wrapper(dir: &Path, args: &[&str]) -> Output {
 const UNRESOLVED: &str = "mod other\n\nfn main():\n    let config = 1\n    let a = String.nope()\n    let b = config.MAX\n    let c: String = config.count_ones()\n    let y: i32 = \"nope\"\n";
 
 #[test]
-fn cargo_wrapper_diagnostics_point_at_renk_lines_and_columns() {
+fn cargo_wrapper_diagnostics_point_at_renk_lines_and_hint_at_dots() {
     let dir = cargo_project("cargo-diagnostics", UNRESOLVED);
     let output = cargo_wrapper(&dir, &["check"]);
     let stderr = text(&output.stderr);
@@ -402,14 +402,21 @@ fn cargo_wrapper_diagnostics_point_at_renk_lines_and_columns() {
     for expected in [
         "--> src/main.rk:5:20\n",
         "5 |     let a = String.nope()\n",
+        "= help: renk read `String.nope` as the path `String::nope`; write `(String).nope` for a value\n",
         "--> src/main.rk:6:20\n",
-        "--> src/main.rk:7:28\n",
+        "= help: renk read `config.MAX` as a member of the value `config`; write `config::MAX` for a path\n",
         "--> src/main.rk:8:18\n",
         "--> src/other.rs:1:21\n",
         "could not compile `wrapped`",
     ] {
         assert!(stderr.contains(expected), "{expected}\n{stderr}");
     }
+    // E0689 is no resolution error, though its span is on a dot.
+    assert!(stderr.contains("--> src/main.rk:7:28\n"), "{stderr}");
+    assert!(
+        !stderr.contains("renk read `config.count_ones`"),
+        "{stderr}"
+    );
     assert!(!stderr.contains("main.rs"), "{stderr}");
     assert!(output.stdout.is_empty(), "{}", text(&output.stdout));
     let _ = fs::remove_dir_all(dir);
@@ -447,6 +454,16 @@ fn cargo_wrapper_maps_json_and_short_messages_to_renk_sources() {
     assert_eq!(span["text"][0]["highlight_start"], 20);
     let rendered = unresolved["rendered"].as_str().unwrap();
     assert!(rendered.contains("--> src/main.rk:5:20\n"), "{rendered}");
+    assert!(rendered.contains("renk read `String.nope`"), "{rendered}");
+    let children = unresolved["children"].as_array().unwrap();
+    assert!(
+        children.iter().any(|child| child["level"] == "help"
+            && child["message"]
+                .as_str()
+                .unwrap()
+                .starts_with("renk read `String.nope`")),
+        "{children:?}"
+    );
     let mismatched = messages
         .iter()
         .map(|message| &message["message"])
