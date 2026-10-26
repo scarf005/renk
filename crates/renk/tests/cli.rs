@@ -828,7 +828,8 @@ fn cargo_wrapper_reads_json_messages_after_the_progress_bar_on_a_shared_terminal
     slow_build("rendered");
     let output = on_terminal(&dir, &["check"]);
     assert!(output.contains("Building"), "{output}");
-    assert!(output.contains("--> src/main.rk:5:20\n"), "{output}");
+    // The arrow is styled apart from the location.
+    assert!(output.contains("src/main.rk:5:20\n"), "{output}");
     assert!(!output.contains("\"reason\""), "{output}");
 
     slow_build("json");
@@ -836,7 +837,7 @@ fn cargo_wrapper_reads_json_messages_after_the_progress_bar_on_a_shared_terminal
     assert!(output.contains("Building"), "{output}");
     let files = output
         .lines()
-        .filter_map(|line| line.find("{\"reason\":").map(|start| &line[start..]))
+        .filter_map(|line| line.find('{').map(|start| &line[start..]))
         .map(|json| serde_json::from_str::<serde_json::Value>(json).unwrap())
         .filter(|message| message["message"]["code"]["code"] == "E0599")
         .map(|message| message["message"]["spans"][0]["file_name"].clone())

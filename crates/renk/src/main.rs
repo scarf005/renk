@@ -382,10 +382,11 @@ fn run_cargo_wrapper(cargo_args: Vec<OsString>) -> CliResult<i32> {
             });
         }
         // A JSON message waits for its newline; cargo's progress bar on a shared terminal does not.
-        if !complete && line.starts_with(b"{") {
+        if !complete && line.contains(&b'{') {
             return None;
         }
-        let Ok(mut message) = serde_json::from_slice::<serde_json::Value>(line) else {
+        let (text, json) = cargo_message(line);
+        let Ok(mut message) = serde_json::from_slice::<serde_json::Value>(json) else {
             return Some(line.to_vec());
         };
         built = message["reason"] == "build-finished";
@@ -393,16 +394,17 @@ fn run_cargo_wrapper(cargo_args: Vec<OsString>) -> CliResult<i32> {
             mapper.rewrite(&mut message["message"], format.short);
             if format.render {
                 eprint!(
-                    "{}",
+                    "{}{}",
+                    String::from_utf8_lossy(text),
                     message["message"]["rendered"].as_str().unwrap_or_default()
                 );
                 return Some(Vec::new());
             }
         }
         if !format.json {
-            return Some(Vec::new());
+            return Some(text.to_vec());
         }
-        let mut json = serde_json::to_vec(&message).unwrap_or_default();
+        let mut json = [text, &serde_json::to_vec(&message).unwrap_or_default()].concat();
         json.push(b'\n');
         Some(json)
     };
@@ -414,6 +416,16 @@ fn run_cargo_wrapper(cargo_args: Vec<OsString>) -> CliResult<i32> {
         Some(&mut stdout),
         runs.then_some(&mut stderr as Relay),
     )
+}
+
+/// Splits a line of cargo's output at its JSON message, which cargo's progress bar on a terminal
+/// shared with stdout may precede: the text before the message and the message, if any.
+fn cargo_message(line: &[u8]) -> (&[u8], &[u8]) {
+    let start = line
+        .windows(br#"{"reason":"#.len())
+        .position(|window| window == br#"{"reason":"#)
+        .unwrap_or(line.len());
+    line.split_at(start)
 }
 
 /// The root of the workspace that cargo, given `args`, builds in, which rustc names files relative
@@ -1709,6 +1721,21 @@ mod tests {
         let error = transpile_cargo_sources(&project).err().unwrap().to_string();
         assert!(error.contains("refusing to overwrite non-generated Rust file"));
         let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn cargo_message_splits_off_the_progress_bar_before_a_json_message() {
+        let bar = b"\x1b[1m    Building\x1b[0m [==>   ] 1/3: wrapped(build)  \r\x1b[K";
+        let json = br#"{"reason":"build-finished","success":true}"#;
+        assert_eq!(
+            cargo_message(&[&bar[..], json].concat()),
+            (&bar[..], &json[..])
+        );
+        assert_eq!(cargo_message(json), (&b""[..], &json[..]));
+        assert_eq!(cargo_message(bar), (&bar[..], &b""[..]));
+        // Only the start of a message splits a line.
+        let text = br#"warning: {"x": 1}"#;
+        assert_eq!(cargo_message(text), (&text[..], &b""[..]));
     }
 
     #[test]
