@@ -378,7 +378,8 @@ fn run_cargo_wrapper(cargo_args: Vec<OsString>) -> CliResult<i32> {
                 line.to_vec()
             });
         }
-        if !complete {
+        // A JSON message waits for its newline; cargo's progress bar on a shared terminal does not.
+        if !complete && line.starts_with(b"{") {
             return None;
         }
         let Ok(mut message) = serde_json::from_slice::<serde_json::Value>(line) else {
@@ -1143,27 +1144,49 @@ type Relay<'a> = &'a mut (dyn FnMut(&[u8], bool) -> Option<Vec<u8>> + Send);
 
 /// Runs `command` with its stdout and stderr passed through the given relays, or inherited, and
 /// returns its exit code, or 128 plus the signal that killed it. A relayed stream that is a
-/// terminal reaches the child as a terminal of its own. Until the child exits, renk ignores the
+/// terminal reaches the child as a terminal of its own. When renk's stdout and stderr are one
+/// file, as a shared terminal or `2>&1` makes them, the child gets one stream for both, relayed
+/// to stdout through both relays so their order holds. Until the child exits, renk ignores the
 /// interrupt and quit signals that the terminal sends the child too.
 fn supervise<'a>(
     mut command: Command,
-    stdout: Option<Relay<'a>>,
-    stderr: Option<Relay<'a>>,
+    mut stdout: Option<Relay<'a>>,
+    mut stderr: Option<Relay<'a>>,
 ) -> CliResult<i32> {
-    let mut relays = Vec::new();
-    if let Some(line) = stdout {
+    let mut relays = Vec::<(
+        _,
+        Box<dyn FnMut(&[u8], bool) -> Option<Vec<u8>> + Send + 'a>,
+        _,
+    )>::new();
+    if (stdout.is_some() || stderr.is_some()) && same_file(io::stdout(), io::stderr()) {
         let (reader, writer) = capture(io::stdout())?;
-        command.stdout(writer);
+        command.stdout(writer.try_clone()?).stderr(writer);
+        let both = move |line: &[u8], complete| {
+            let line = match &mut stdout {
+                Some(relay) => relay(line, complete)?,
+                None => line.to_vec(),
+            };
+            match &mut stderr {
+                Some(relay) => relay(&line, complete),
+                None => Some(line),
+            }
+        };
         relays.push((
             reader,
-            line,
+            Box::new(both),
             Box::new(io::stdout()) as Box<dyn Write + Send>,
         ));
-    }
-    if let Some(line) = stderr {
-        let (reader, writer) = capture(io::stderr())?;
-        command.stderr(writer);
-        relays.push((reader, line, Box::new(io::stderr())));
+    } else {
+        if let Some(line) = stdout {
+            let (reader, writer) = capture(io::stdout())?;
+            command.stdout(writer);
+            relays.push((reader, Box::new(line), Box::new(io::stdout())));
+        }
+        if let Some(line) = stderr {
+            let (reader, writer) = capture(io::stderr())?;
+            command.stderr(writer);
+            relays.push((reader, Box::new(line), Box::new(io::stderr())));
+        }
     }
     let mut child = command.spawn()?;
     // The command holds the child ends of the streams, which must close for the relays to end.
@@ -1203,7 +1226,7 @@ fn supervise<'a>(
 fn relay(
     mut input: Box<dyn Read + Send>,
     mut output: impl Write,
-    line: Relay,
+    mut line: impl FnMut(&[u8], bool) -> Option<Vec<u8>>,
     exited: &AtomicBool,
 ) -> io::Result<()> {
     let (sender, chunks) = mpsc::channel::<Vec<u8>>();
@@ -1261,25 +1284,47 @@ fn relay(
 #[cfg(unix)]
 fn capture(
     stream: impl IsTerminal + std::os::fd::AsFd,
-) -> io::Result<(Box<dyn Read + Send>, process::Stdio)> {
+) -> io::Result<(Box<dyn Read + Send>, fs::File)> {
     if stream.is_terminal() {
         let (reader, writer) = pseudo_terminal(stream.as_fd())?;
         return Ok((Box::new(reader), writer));
     }
     let (reader, writer) = io::pipe()?;
-    Ok((Box::new(reader), writer.into()))
+    Ok((Box::new(reader), std::os::fd::OwnedFd::from(writer).into()))
 }
 
 #[cfg(not(unix))]
-fn capture(_: impl IsTerminal) -> io::Result<(Box<dyn Read + Send>, process::Stdio)> {
+fn capture(_: impl IsTerminal) -> io::Result<(Box<dyn Read + Send>, fs::File)> {
     let (reader, writer) = io::pipe()?;
-    Ok((Box::new(reader), writer.into()))
+    Ok((
+        Box::new(reader),
+        std::os::windows::io::OwnedHandle::from(writer).into(),
+    ))
+}
+
+/// Whether `a` and `b` are one file, as a terminal both write to, or a pipe after `2>&1`.
+#[cfg(unix)]
+fn same_file(a: impl std::os::fd::AsFd, b: impl std::os::fd::AsFd) -> bool {
+    use std::os::unix::fs::MetadataExt;
+
+    let id = |fd: std::os::fd::BorrowedFd| {
+        let metadata = fs::File::from(fd.try_clone_to_owned().ok()?)
+            .metadata()
+            .ok()?;
+        Some((metadata.dev(), metadata.ino()))
+    };
+    id(a.as_fd()).is_some_and(|a| Some(a) == id(b.as_fd()))
+}
+
+#[cfg(not(unix))]
+fn same_file<T, U>(_: T, _: U) -> bool {
+    false
 }
 
 /// A pseudo-terminal the size of `terminal`, in raw mode so output passes through unchanged: the
 /// end renk reads and the child's end.
 #[cfg(unix)]
-fn pseudo_terminal(terminal: std::os::fd::BorrowedFd) -> io::Result<(fs::File, process::Stdio)> {
+fn pseudo_terminal(terminal: std::os::fd::BorrowedFd) -> io::Result<(fs::File, fs::File)> {
     use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 
     let (mut parent, mut child) = (0, 0);
