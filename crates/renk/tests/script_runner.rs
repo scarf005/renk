@@ -661,6 +661,36 @@ fn script_returns_when_it_exits_though_its_children_hold_its_output() {
     let _ = fs::remove_dir_all(dir);
 }
 
+#[test]
+fn script_output_keeps_its_order_on_one_stream() {
+    use std::io::Read;
+
+    let dir = temp_dir("script-order");
+    let script = dir.join("order.rk");
+    fs::write(
+        &script,
+        "for i in 0..200:\n    println!(\"o{i}\")\n    eprintln!(\"e{i}\")\n",
+    )
+    .unwrap();
+    // Like `renk order.rk 2>&1 | cat`.
+    let (mut reader, writer) = std::io::pipe().unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_renk"))
+        .arg(&script)
+        .env("XDG_CACHE_HOME", dir.join("cache"))
+        .stdout(writer.try_clone().unwrap())
+        .stderr(writer)
+        .spawn()
+        .unwrap();
+    let mut output = String::new();
+    reader.read_to_string(&mut output).unwrap();
+    assert!(child.wait().unwrap().success(), "{output}");
+    let expected = (0..200)
+        .map(|i| format!("o{i}\ne{i}\n"))
+        .collect::<String>();
+    assert_eq!(output, expected);
+    let _ = fs::remove_dir_all(dir);
+}
+
 /// Whether `child` exits within `seconds`; it is killed if not.
 fn exits_within(child: &mut std::process::Child, seconds: u64) -> bool {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(seconds);

@@ -587,6 +587,33 @@ fn cargo_wrapper_run_ends_when_its_reader_closes() {
     let _ = fs::remove_dir_all(dir);
 }
 
+#[test]
+fn cargo_wrapper_run_keeps_the_order_of_stdout_and_stderr_on_one_stream() {
+    let dir = cargo_project(
+        "cargo-order",
+        "fn main():\n    for i in 0..200:\n        println!(\"o{i}\")\n        eprintln!(\"e{i}\")\n",
+    );
+    fs::remove_file(dir.join("src/other.rs")).unwrap();
+    // Like `renk run -q 2>&1 | cat`.
+    let (mut reader, writer) = std::io::pipe().unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_renk"))
+        .args(["run", "-q"])
+        .current_dir(&dir)
+        .env("CARGO_TARGET_DIR", dir.join("target"))
+        .stdout(writer.try_clone().unwrap())
+        .stderr(writer)
+        .spawn()
+        .unwrap();
+    let mut output = String::new();
+    reader.read_to_string(&mut output).unwrap();
+    assert!(child.wait().unwrap().success(), "{output}");
+    let expected = (0..200)
+        .map(|i| format!("o{i}\ne{i}\n"))
+        .collect::<String>();
+    assert_eq!(output, expected);
+    let _ = fs::remove_dir_all(dir);
+}
+
 /// Whether `child` exits within `seconds`; it is killed if not.
 fn exits_within(child: &mut std::process::Child, seconds: u64) -> bool {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(seconds);
@@ -671,8 +698,7 @@ fn cargo_wrapper_keeps_terminals_for_the_program_and_libtest_colors() {
     };
 
     let output = on_terminal(&["run", "-q"]);
-    assert!(output.contains("out true\n"), "{output}");
-    assert!(output.contains("err true\n"), "{output}");
+    assert!(output.contains("out true\nerr true\n"), "{output}");
     assert!(output.contains("panicked at src/main.rk:7:"), "{output}");
     assert!(!output.contains("main.rs"), "{output}");
     assert!(!output.contains("\"reason\""), "{output}");
