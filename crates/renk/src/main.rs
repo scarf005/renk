@@ -1399,19 +1399,18 @@ fn pseudo_terminal(terminal: std::os::fd::BorrowedFd) -> io::Result<(fs::File, f
     // SAFETY: the calls get valid pointers, and `openpty` opens two descriptors that only the
     // `OwnedFd`s own.
     unsafe {
-        let mut size = std::mem::zeroed::<libc::winsize>();
-        libc::ioctl(terminal.as_raw_fd(), libc::TIOCGWINSZ, &mut size);
         let opened = libc::openpty(
             &mut parent,
             &mut child,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
-            &raw mut size,
+            std::ptr::null_mut(),
         );
         if opened != 0 {
             return Err(io::Error::last_os_error());
         }
         let (parent, child) = (OwnedFd::from_raw_fd(parent), OwnedFd::from_raw_fd(child));
+        copy_size(terminal.as_raw_fd(), parent.as_raw_fd());
         let mut mode = std::mem::zeroed::<libc::termios>();
         libc::tcgetattr(child.as_raw_fd(), &mut mode);
         libc::cfmakeraw(&mut mode);
