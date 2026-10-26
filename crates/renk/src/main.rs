@@ -10,7 +10,10 @@ use std::{
     io::{self, IsTerminal, Read, Write},
     path::{Path, PathBuf},
     process::{self, Command},
-    sync::mpsc::{self, RecvTimeoutError},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc::{self, RecvTimeoutError},
+    },
     time::Duration,
 };
 
@@ -1140,8 +1143,8 @@ type Relay<'a> = &'a mut (dyn FnMut(&[u8], bool) -> Option<Vec<u8>> + Send);
 
 /// Runs `command` with its stdout and stderr passed through the given relays, or inherited, and
 /// returns its exit code, or 128 plus the signal that killed it. A relayed stream that is a
-/// terminal reaches the child as a terminal of its own. renk ignores the interrupt and quit
-/// signals that the terminal sends the child too.
+/// terminal reaches the child as a terminal of its own. Until the child exits, renk ignores the
+/// interrupt and quit signals that the terminal sends the child too.
 fn supervise<'a>(
     mut command: Command,
     stdout: Option<Relay<'a>>,
@@ -1166,17 +1169,25 @@ fn supervise<'a>(
     // The command holds the child ends of the streams, which must close for the relays to end.
     drop(command);
     #[cfg(unix)]
-    // SAFETY: ignoring a signal installs no handler.
-    unsafe {
-        libc::signal(libc::SIGINT, libc::SIG_IGN);
-        libc::signal(libc::SIGQUIT, libc::SIG_IGN);
-    }
-    std::thread::scope(|scope| {
+    // SAFETY: ignoring a signal installs no handler, and the old handlers come back below.
+    let handlers = unsafe {
+        [libc::SIGINT, libc::SIGQUIT].map(|signal| (signal, libc::signal(signal, libc::SIG_IGN)))
+    };
+    let exited = AtomicBool::new(false);
+    let status = std::thread::scope(|scope| {
         for (reader, line, output) in relays {
-            scope.spawn(move || relay(reader, output, line));
+            let exited = &exited;
+            scope.spawn(move || relay(reader, output, line, exited));
         }
-    });
-    let status = child.wait()?;
+        let status = child.wait();
+        exited.store(true, Ordering::Relaxed);
+        #[cfg(unix)]
+        for (signal, handler) in handlers {
+            // SAFETY: the handler is one `signal` returned.
+            unsafe { libc::signal(signal, handler) };
+        }
+        status
+    })?;
     #[cfg(unix)]
     if let Some(signal) = std::os::unix::process::ExitStatusExt::signal(&status) {
         return Ok(128 + signal);
@@ -1185,57 +1196,64 @@ fn supervise<'a>(
 }
 
 /// Copies `input` to `output` a line at a time through `line`, holding a partial line until its
-/// newline comes or 50 ms pass without output. When `output` fails, as when its reader closes,
-/// `input` closes too, so the child's next write to it fails.
-fn relay(mut input: impl Read + Send, mut output: impl Write, line: Relay) {
+/// newline comes or 50 ms pass without output. Once `exited` is set, it ends at the first 50 ms
+/// without output, or a mebibyte later, as the child's own children may hold `input` open. When
+/// `output` fails, as when its reader closes, `input` closes too, so the child's next write to it
+/// fails.
+fn relay(
+    mut input: Box<dyn Read + Send>,
+    mut output: impl Write,
+    line: Relay,
+    exited: &AtomicBool,
+) -> io::Result<()> {
     let (sender, chunks) = mpsc::channel::<Vec<u8>>();
-    std::thread::scope(|scope| {
-        scope.spawn(move || {
-            let mut buffer = [0; 8192];
-            // A pseudo-terminal fails to read once the child's ends close.
-            while let Ok(read @ 1..) = input.read(&mut buffer) {
-                if sender.send(buffer[..read].to_vec()).is_err() {
-                    break;
-                }
+    // The reader is left blocked on a stream that is held open, and ends at its next chunk once
+    // `chunks` is gone.
+    std::thread::spawn(move || {
+        let mut buffer = [0; 8192];
+        // A pseudo-terminal fails to read once the child's ends close.
+        while let Ok(read @ 1..) = input.read(&mut buffer) {
+            if sender.send(buffer[..read].to_vec()).is_err() {
+                break;
             }
-        });
-        let mut pending = Vec::new();
-        let mut write = |bytes: Option<Vec<u8>>, pending: &mut Vec<u8>| {
-            if let Some(bytes) = bytes {
-                output.write_all(&bytes)?;
-                pending.clear();
-            }
-            output.flush()
-        };
-        let _ = (|| -> io::Result<()> {
-            loop {
-                let chunk = if pending.is_empty() {
-                    chunks.recv().map_err(|_| RecvTimeoutError::Disconnected)
-                } else {
-                    chunks.recv_timeout(Duration::from_millis(50))
-                };
-                match chunk {
-                    Ok(chunk) => pending.extend(chunk),
-                    Err(RecvTimeoutError::Timeout) => {
-                        write(line(&pending, false), &mut pending)?;
-                        continue;
-                    }
-                    Err(RecvTimeoutError::Disconnected) => break,
-                }
-                while let Some(newline) = pending.iter().position(|&byte| byte == b'\n') {
-                    let mut rest = pending.split_off(newline + 1);
-                    write(line(&pending, true), &mut pending)?;
-                    pending.append(&mut rest);
-                }
-            }
-            if !pending.is_empty() {
-                write(line(&pending, true), &mut pending)?;
-            }
-            Ok(())
-        })();
-        // The reader ends at its next chunk, closing `input`.
-        drop(chunks);
+        }
     });
+    let mut pending = Vec::new();
+    let mut write = |bytes: Option<Vec<u8>>, pending: &mut Vec<u8>| {
+        if let Some(bytes) = bytes {
+            output.write_all(&bytes)?;
+            pending.clear();
+        }
+        output.flush()
+    };
+    let mut left = 1_usize << 20;
+    loop {
+        let done = exited.load(Ordering::Relaxed);
+        match chunks.recv_timeout(Duration::from_millis(50)) {
+            Ok(chunk) if left > 0 => {
+                if done {
+                    left = left.saturating_sub(chunk.len());
+                }
+                pending.extend(chunk);
+            }
+            Err(RecvTimeoutError::Timeout) if !done => {
+                if !pending.is_empty() {
+                    write(line(&pending, false), &mut pending)?;
+                }
+                continue;
+            }
+            _ => break,
+        }
+        while let Some(newline) = pending.iter().position(|&byte| byte == b'\n') {
+            let mut rest = pending.split_off(newline + 1);
+            write(line(&pending, true), &mut pending)?;
+            pending.append(&mut rest);
+        }
+    }
+    if !pending.is_empty() {
+        write(line(&pending, true), &mut pending)?;
+    }
+    Ok(())
 }
 
 /// The end renk reads and the child's end of a relayed stream: a pseudo-terminal when `stream` is
