@@ -1277,7 +1277,6 @@ fn supervise<'a>(
             scope.spawn(move || relay(reader, output, line, exited));
         }
         let status = child.wait();
-        exited.store(true, Ordering::Relaxed);
         #[cfg(unix)]
         for (signal, handler) in handlers {
             // SAFETY: the handler is one `signal` returned.
@@ -1287,6 +1286,8 @@ fn supervise<'a>(
         for [_, pseudo_terminal] in &RESIZED {
             pseudo_terminal.store(-1, Ordering::Relaxed);
         }
+        // Only now, as a `SIGWINCH` that `resize` handles would end a reader's `poll` early.
+        exited.store(true, Ordering::Relaxed);
         status
     })?;
     #[cfg(unix)]
@@ -1297,27 +1298,39 @@ fn supervise<'a>(
 }
 
 /// Copies `input` to `output` a line at a time through `line`, holding a partial line until its
-/// newline comes or 50 ms pass without output. Once `exited` is set, it ends at the first 50 ms
-/// without output, or after a mebibyte more read from `input`, as the child's own children may
-/// hold `input` open; what was read before goes out in full. When `output` fails, as when its
-/// reader closes, `input` closes too, so the child's next write to it fails. It calls `resize` at
-/// least every 50 ms, for a resize that sends renk no signal.
+/// newline comes or 50 ms pass without output. Once `exited` is set, it ends when `input` has had
+/// nothing to read for 50 ms, or after a mebibyte more read from it, as the child's own children
+/// may hold `input` open; what the child wrote before goes out in full. When `output` fails, as
+/// when its reader closes, `input` closes too, so the child's next write to it fails. It calls
+/// `resize` at least every 50 ms, for a resize that sends renk no signal.
 fn relay(
-    mut input: Box<dyn Read + Send>,
+    mut input: fs::File,
     mut output: impl Write,
     mut line: impl FnMut(&[u8], bool) -> Option<Vec<u8>>,
     exited: Arc<AtomicBool>,
 ) -> io::Result<()> {
     let (sender, chunks) = mpsc::channel::<Vec<u8>>();
     let reading = exited.clone();
-    // The reader is left blocked on a stream that is held open, and ends at its next chunk once
-    // `chunks` is gone.
+    // The reader, not the relay, tells that `input` went quiet: data the child wrote can wait in
+    // the stream while the reader is not scheduled. It ends at its next chunk once `chunks` is
+    // gone.
     std::thread::spawn(move || {
         let mut buffer = [0; 8192];
         let mut left = 1_usize << 20;
-        // A pseudo-terminal fails to read once the child's ends close.
-        while let Ok(read @ 1..) = input.read(&mut buffer) {
-            if reading.load(Ordering::Relaxed) {
+        loop {
+            let after_exit = reading.load(Ordering::Relaxed);
+            #[cfg(unix)]
+            if !readable(&input) {
+                if after_exit {
+                    break;
+                }
+                continue;
+            }
+            // A pseudo-terminal fails to read once the child's ends close.
+            let Ok(read @ 1..) = input.read(&mut buffer) else {
+                break;
+            };
+            if after_exit {
                 left = left.saturating_sub(read);
             }
             if sender.send(buffer[..read].to_vec()).is_err() || left == 0 {
@@ -1336,16 +1349,15 @@ fn relay(
     loop {
         #[cfg(unix)]
         resize(libc::SIGWINCH);
-        let done = exited.load(Ordering::Relaxed);
         match chunks.recv_timeout(Duration::from_millis(50)) {
             Ok(chunk) => pending.extend(chunk),
-            Err(RecvTimeoutError::Timeout) if !done => {
+            Err(RecvTimeoutError::Timeout) => {
                 if !pending.is_empty() {
                     write(line(&pending, false), &mut pending)?;
                 }
                 continue;
             }
-            _ => break,
+            Err(RecvTimeoutError::Disconnected) => break,
         }
         while let Some(newline) = pending.iter().position(|&byte| byte == b'\n') {
             let mut rest = pending.split_off(newline + 1);
@@ -1357,6 +1369,20 @@ fn relay(
         write(line(&pending, true), &mut pending)?;
     }
     Ok(())
+}
+
+/// Whether `input` has something to read, or has closed, within 50 ms.
+#[cfg(unix)]
+fn readable(input: &fs::File) -> bool {
+    use std::os::fd::AsRawFd;
+
+    let mut fd = libc::pollfd {
+        fd: input.as_raw_fd(),
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    // SAFETY: `poll` gets one valid `pollfd`; an interrupted one counts as nothing to read.
+    unsafe { libc::poll(&mut fd, 1, 50) > 0 }
 }
 
 /// The end renk reads and the child's end of a relayed stream: a pseudo-terminal when `stream` is
@@ -1377,21 +1403,27 @@ fn capture(stream: impl IsTerminal + std::os::fd::AsFd) -> io::Result<Capture> {
         if let Some([terminal, _]) = pair {
             terminal.store(stream.as_fd().as_raw_fd(), Ordering::Relaxed);
         }
-        return Ok((Box::new(reader), writer, Some(parent)));
+        return Ok((reader, writer, Some(parent)));
     }
     let (reader, writer) = io::pipe()?;
-    let writer = std::os::fd::OwnedFd::from(writer).into();
-    Ok((Box::new(reader), writer, None))
+    let (reader, writer) = (
+        std::os::fd::OwnedFd::from(reader).into(),
+        std::os::fd::OwnedFd::from(writer).into(),
+    );
+    Ok((reader, writer, None))
 }
 
 #[cfg(not(unix))]
 fn capture(_: impl IsTerminal) -> io::Result<Capture> {
     let (reader, writer) = io::pipe()?;
-    let writer = std::os::windows::io::OwnedHandle::from(writer).into();
-    Ok((Box::new(reader), writer, None))
+    let (reader, writer) = (
+        std::os::windows::io::OwnedHandle::from(reader).into(),
+        std::os::windows::io::OwnedHandle::from(writer).into(),
+    );
+    Ok((reader, writer, None))
 }
 
-type Capture = (Box<dyn Read + Send>, fs::File, Option<fs::File>);
+type Capture = (fs::File, fs::File, Option<fs::File>);
 
 /// The terminals and the pseudo-terminals relayed from them that `resize` resizes, as pairs of
 /// descriptors; a pair with -1 is free.
@@ -1667,6 +1699,27 @@ fn source_syntax(path: Option<&Path>) -> SourceSyntax {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn relays_what_the_child_wrote_though_its_children_keep_the_stream_open() {
+        let (reader, mut writer) = io::pipe().unwrap();
+        let written = "x".repeat(1023) + "\n";
+        // Within a page, the least a pipe buffers, so the writes finish before anything reads them.
+        for _ in 0..3 {
+            writer.write_all(written.as_bytes()).unwrap();
+        }
+        let mut output = Vec::new();
+        // The child exited; `writer` stays open as a child of the child would keep it.
+        relay(
+            std::os::fd::OwnedFd::from(reader).into(),
+            &mut output,
+            |line, _| Some(line.to_vec()),
+            Arc::new(AtomicBool::new(true)),
+        )
+        .unwrap();
+        assert_eq!(output.len(), 3 * written.len());
+        drop(writer);
+    }
 
     fn temp_project(name: &str) -> PathBuf {
         let path = env::temp_dir().join(format!("renk-{name}-{}", process::id()));
