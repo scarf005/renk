@@ -166,13 +166,17 @@ impl LanguageServer for Backend {
             Some(saved) => Some(saved),
             // The editor's rust-analyzer serves a Rust file, but the workspace check reads its copy.
             None if is_rust(&uri) => {
+                // Only a file the mirror copies.
                 let copy = |(source_root, rust_root): (PathBuf, PathBuf)| {
                     let path = uri.to_file_path().ok()?;
-                    Url::from_file_path(rust_root.join(path.strip_prefix(source_root).ok()?)).ok()
+                    Url::from_file_path(mirror_copy(&source_root, &rust_root, &path)?).ok()
                 };
-                workspace
-                    .clone()
-                    .zip(self.origins().await.roots.and_then(copy))
+                match workspace.clone() {
+                    Some(workspace) => {
+                        (self.origins().await.roots.and_then(copy)).map(|uri| (workspace, uri))
+                    }
+                    None => None,
+                }
             }
             None => None,
         };
@@ -1193,14 +1197,37 @@ fn mirror_workspace(source_root: &Path, rust_root: &Path, documents: &HashMap<Ur
     mirror_sources(source_root, rust_root, documents);
 }
 
+/// A mirror copy of the file at `path`, found by [`walk`] at the same canonical path.
+fn mirror_copy(source_root: &Path, rust_root: &Path, path: &Path) -> Option<PathBuf> {
+    let saved = fs::canonicalize(path).ok()?;
+    walk(source_root)
+        .into_iter()
+        .filter(|file| {
+            file.file_name() == saved.file_name()
+                && fs::canonicalize(file).is_ok_and(|file| file == saved)
+        })
+        .find_map(|file| Some(rust_root.join(file.strip_prefix(source_root).ok()?)))
+}
+
+/// Whether a walk of the workspace enters a directory named `name`: not `target/` or a hidden one.
+fn walked(name: &std::ffi::OsStr) -> bool {
+    name.to_str()
+        .is_some_and(|name| name != "target" && !name.starts_with('.'))
+}
+
 /// The files under `dir`, without those in `target/` or hidden directories. It follows symlinked
-/// directories, but not into a directory it is already in, which a link back up leads to.
+/// directories, but not into a directory it is already in or one that `dir` is in, which links
+/// back up lead to, nor into a `target/` under `dir`, whose `target/` holds the mirror.
 fn walk(dir: &Path) -> Vec<PathBuf> {
-    fn files(dir: &Path, ancestors: &[PathBuf]) -> Vec<PathBuf> {
-        let Some(canonical) = fs::canonicalize(dir)
-            .ok()
-            .filter(|canonical| !ancestors.contains(canonical))
-        else {
+    fn files(dir: &Path, root: &Path, ancestors: &[PathBuf]) -> Vec<PathBuf> {
+        let Some(canonical) = fs::canonicalize(dir).ok().filter(|canonical| {
+            ancestors.is_empty()
+                || !ancestors.contains(canonical)
+                    && !root.starts_with(canonical)
+                    && !canonical
+                        .strip_prefix(root)
+                        .is_ok_and(|inside| inside.iter().any(|name| name == "target"))
+        }) else {
             return Vec::new();
         };
         let ancestors = [ancestors, &[canonical]].concat();
@@ -1210,19 +1237,18 @@ fn walk(dir: &Path) -> Vec<PathBuf> {
             .flatten()
             .flat_map(|entry| {
                 let path = entry.path();
-                let walked = path
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .is_some_and(|name| name != "target" && !name.starts_with('.'));
                 match path.is_dir() {
-                    true if walked => files(&path, &ancestors),
+                    true if path.file_name().is_some_and(walked) => files(&path, root, &ancestors),
                     true => Vec::new(),
                     false => vec![path],
                 }
             })
             .collect()
     }
-    files(dir, &[])
+    let Ok(root) = fs::canonicalize(dir) else {
+        return Vec::new();
+    };
+    files(dir, &root, &[])
 }
 
 /// Mirrors the crates of `source_root` at `rust_root` for `cargo check`: each Renk module's
@@ -3073,6 +3099,59 @@ mod tests {
         assert!(rust_root.join("member/src/lib.rs").is_file());
         let _ = fs::remove_dir_all(temp);
         let _ = fs::remove_dir_all(member);
+    }
+
+    #[test]
+    fn mirror_refreshes_follow_no_link_into_the_mirror_or_up_the_tree() {
+        let temp = std::env::temp_dir().join(format!("renk-lsp-links-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&temp);
+        let project = temp.join("proj");
+        fs::create_dir_all(project.join("src")).unwrap();
+        fs::create_dir_all(temp.join("sibling/src")).unwrap();
+        fs::write(project.join("Cargo.toml"), "[package]\nname = \"c\"\n").unwrap();
+        fs::write(project.join("src/a.rs"), "pub fn a() {}\n").unwrap();
+        fs::write(temp.join("sibling/src/b.rs"), "pub fn b() {}\n").unwrap();
+        fs::create_dir_all(project.join("target")).unwrap();
+        std::os::unix::fs::symlink(project.join("target"), project.join("out")).unwrap();
+        std::os::unix::fs::symlink(&temp, project.join("up")).unwrap();
+        // A crate at two paths of the workspace, and one kept in a hidden directory.
+        for (path, link) in [("vendor/real", "crates/real"), (".deps/hid", "crates/hid")] {
+            fs::create_dir_all(project.join(path).join("src")).unwrap();
+            fs::write(project.join(path).join("src/lib.rs"), "pub fn f() {}\n").unwrap();
+            fs::create_dir_all(project.join("crates")).unwrap();
+            std::os::unix::fs::symlink(project.join(path), project.join(link)).unwrap();
+        }
+        // Build output of a nested project, linked from a visible name.
+        fs::create_dir_all(project.join("vendor/real/target/out")).unwrap();
+        fs::write(project.join("vendor/real/target/out/g.rs"), "").unwrap();
+        std::os::unix::fs::symlink(project.join("vendor/real/target/out"), project.join("gen"))
+            .unwrap();
+        let rust_root = project.join("target/renk");
+        for _ in 0..2 {
+            mirror_workspace(&project, &rust_root, &HashMap::new());
+        }
+        assert!(rust_root.join("src/a.rs").is_file());
+        assert!(!rust_root.join("out").exists());
+        assert!(!rust_root.join("up").exists());
+        for mirrored in ["vendor/real", "crates/real", "crates/hid"] {
+            assert!(
+                rust_root.join(mirrored).join("src/lib.rs").is_file(),
+                "{mirrored}"
+            );
+        }
+        assert!(!rust_root.join(".deps").exists());
+        assert!(!rust_root.join("gen").exists());
+        // A save through the real path refreshes the copy at the linked one.
+        assert_eq!(
+            mirror_copy(&project, &rust_root, &project.join(".deps/hid/src/lib.rs")),
+            Some(rust_root.join("crates/hid/src/lib.rs"))
+        );
+        fs::write(project.join("target/x.rs"), "").unwrap();
+        assert_eq!(
+            mirror_copy(&project, &rust_root, &project.join("out/x.rs")),
+            None
+        );
+        let _ = fs::remove_dir_all(temp);
     }
 
     #[test]
