@@ -745,49 +745,56 @@ fn read_until(
     chunks.into_iter()
 }
 
+/// The output of renk, given `args`, in `dir`, with its stdout and stderr on an 80-column
+/// terminal.
+#[cfg(target_os = "linux")]
+fn on_terminal(dir: &Path, args: &[&str]) -> String {
+    use std::os::fd::{FromRawFd, OwnedFd};
+
+    let size = libc::winsize {
+        ws_row: 24,
+        ws_col: 80,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
+    let (mut parent, mut child) = (0, 0);
+    // SAFETY: `openpty` gets valid pointers and opens two descriptors only the files own.
+    let (mut parent, child) = unsafe {
+        let opened = libc::openpty(
+            &mut parent,
+            &mut child,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &size,
+        );
+        assert_eq!(opened, 0);
+        (fs::File::from_raw_fd(parent), OwnedFd::from_raw_fd(child))
+    };
+    let mut renk = Command::new(env!("CARGO_BIN_EXE_renk"))
+        .args(args)
+        .current_dir(dir)
+        .env("CARGO_TARGET_DIR", dir.join("target"))
+        // libtest colors only a terminal that `TERM` names.
+        .env("TERM", "xterm-256color")
+        .stdin(Stdio::null())
+        .stdout(child.try_clone().unwrap())
+        .stderr(child)
+        .spawn()
+        .unwrap();
+    let mut output = Vec::new();
+    // The terminal fails to read once renk and cargo close it.
+    let _ = parent.read_to_end(&mut output);
+    renk.wait().unwrap();
+    text(&output).replace("\r\n", "\n")
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn cargo_wrapper_keeps_terminals_for_the_program_and_libtest_colors() {
-    use std::{
-        io::Read,
-        os::fd::{FromRawFd, OwnedFd},
-    };
-
     let main = "use std.io.IsTerminal\n\nfn main():\n    println!(\"out {std.io.stdout().is_terminal()}\")\n    eprintln!(\"err {std.io.stderr().is_terminal()}\")\n    let v: Vec[i32] = Vec.new()\n    println!(\"{v[3]}\")\n\n#[cfg(test)]\nmod tests:\n    #[test]\n    fn fails():\n        assert_eq!(1 + 1, 3)\n";
     let dir = cargo_project("cargo-terminal", main);
     fs::remove_file(dir.join("src/other.rs")).unwrap();
-    // The output of renk run with its stdout and stderr on a terminal.
-    let on_terminal = |args: &[&str]| {
-        let (mut parent, mut child) = (0, 0);
-        // SAFETY: `openpty` gets valid pointers and opens two descriptors only the files own.
-        let (mut parent, child) = unsafe {
-            let opened = libc::openpty(
-                &mut parent,
-                &mut child,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-            );
-            assert_eq!(opened, 0);
-            (fs::File::from_raw_fd(parent), OwnedFd::from_raw_fd(child))
-        };
-        let mut renk = Command::new(env!("CARGO_BIN_EXE_renk"))
-            .args(args)
-            .current_dir(&dir)
-            .env("CARGO_TARGET_DIR", dir.join("target"))
-            // libtest colors only a terminal that `TERM` names.
-            .env("TERM", "xterm-256color")
-            .stdin(Stdio::null())
-            .stdout(child.try_clone().unwrap())
-            .stderr(child)
-            .spawn()
-            .unwrap();
-        let mut output = Vec::new();
-        // The terminal fails to read once renk and cargo close it.
-        let _ = parent.read_to_end(&mut output);
-        renk.wait().unwrap();
-        text(&output).replace("\r\n", "\n")
-    };
+    let on_terminal = |args: &[&str]| on_terminal(&dir, args);
 
     let output = on_terminal(&["run", "-q"]);
     assert!(output.contains("out true\nerr true\n"), "{output}");
@@ -801,5 +808,39 @@ fn cargo_wrapper_keeps_terminals_for_the_program_and_libtest_colors() {
         "{output}"
     );
     assert!(output.contains("\u{1b}[31mFAILED"), "{output}");
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn cargo_wrapper_reads_json_messages_after_the_progress_bar_on_a_shared_terminal() {
+    let dir = cargo_project("cargo-progress", UNRESOLVED);
+    // A build script slow enough for cargo to show its progress bar, which it clears before
+    // the next JSON message on the line.
+    let slow_build = |comment: &str| {
+        fs::write(
+            dir.join("build.rs"),
+            format!("// {comment}\nfn main() {{ std::thread::sleep(std::time::Duration::from_secs(2)); }}\n"),
+        )
+        .unwrap();
+    };
+
+    slow_build("rendered");
+    let output = on_terminal(&dir, &["check"]);
+    assert!(output.contains("Building"), "{output}");
+    assert!(output.contains("--> src/main.rk:5:20\n"), "{output}");
+    assert!(!output.contains("\"reason\""), "{output}");
+
+    slow_build("json");
+    let output = on_terminal(&dir, &["check", "--message-format=json"]);
+    assert!(output.contains("Building"), "{output}");
+    let files = output
+        .lines()
+        .filter_map(|line| line.find("{\"reason\":").map(|start| &line[start..]))
+        .map(|json| serde_json::from_str::<serde_json::Value>(json).unwrap())
+        .filter(|message| message["message"]["code"]["code"] == "E0599")
+        .map(|message| message["message"]["spans"][0]["file_name"].clone())
+        .collect::<Vec<_>>();
+    assert_eq!(files, ["src/main.rk"], "{output}");
     let _ = fs::remove_dir_all(dir);
 }
