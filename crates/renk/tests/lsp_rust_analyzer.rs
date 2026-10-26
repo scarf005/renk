@@ -348,3 +348,37 @@ fn code_actions_edit_the_renk_document() {
         "{action}"
     );
 }
+
+#[test]
+fn code_actions_edit_a_scripts_top_level_lines() {
+    let script = "#!/usr/bin/env -S renk script\nlet a = 1 + 1\nprintln!(\"{a}\")\n";
+    let Some(mut session) = Session::open("lsp-script-code-action", script) else {
+        return;
+    };
+    let main = session.uri("src/main.rk");
+    let explicit = |actions: &Value| {
+        actions.as_array().and_then(|actions| {
+            actions
+                .iter()
+                .find(|action| action["title"].to_string().contains("explicit type"))
+                .cloned()
+        })
+    };
+    let actions = session.request_until(
+        "textDocument/codeAction",
+        json!({
+            "textDocument": {"uri": main},
+            "range": range(1, 4, 4),
+            "context": {"diagnostics": []},
+        }),
+        |actions| explicit(actions).is_some(),
+    );
+    let action = explicit(&actions).unwrap_or_else(|| panic!("{actions}"));
+    assert_eq!(
+        edits_of(&action["edit"], &main),
+        [
+            json!({"range": {"start": position(1, 0), "end": position(2, 0)}, "newText": "let a: i32 = 1 + 1\n"})
+        ],
+        "{action}"
+    );
+}

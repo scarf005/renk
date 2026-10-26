@@ -10,7 +10,7 @@ use similar::{DiffTag, TextDiff};
 
 use crate::{
     SourceSyntax, TranspileError, is_ident_continue, is_ident_start, opaque_span_end, read_ident,
-    to_rust, transpile, wrap_script_statements,
+    rust_to_renk, to_rust, transpile, unwrap_script_statements, wrap_script_statements,
 };
 
 /// The 0-based line indices of a script's parts: an optional `#!` line, the optional `---`
@@ -144,6 +144,19 @@ pub fn script_rust(
         named_package,
         package: package_name,
     })
+}
+
+/// What `rust`, the Rust [`script_rust`] wrote for the script `source`, converts back to with
+/// [`rust_to_renk`]: without the frontmatter, and with top-level lines taken out of the `fn main`
+/// wrapper. `None` when the Rust does not convert or the wrapper is gone.
+pub fn script_renk(source: &str, rust: &str) -> Option<String> {
+    let lines = rust.split_inclusive('\n').collect::<Vec<_>>();
+    let renk = rust_to_renk(&lines[script_parts(rust).ok()?.body_start..].concat()).ok()?;
+    if wrap_script_statements(&script_body(source).ok()?, SourceSyntax::Renk, None).is_some() {
+        unwrap_script_statements(&renk)
+    } else {
+        Some(renk)
+    }
 }
 
 /// The edition renk's generated Rust is written for, pinned in scripts that do not name one so

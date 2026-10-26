@@ -28,12 +28,13 @@ use tower_lsp::{
         DocumentSymbolParams, DocumentSymbolResponse, GotoDefinitionParams, GotoDefinitionResponse,
         Hover, HoverContents, HoverParams, InitializeParams, InitializeResult, InitializedParams,
         InlayHint, InlayHintLabel, InlayHintParams, Location, MarkupContent, MarkupKind,
-        MessageType, NumberOrString, OneOf, Position, PrepareRenameResponse, PublishDiagnosticsParams, Range,
-        ReferenceParams, RenameOptions, RenameParams, ResourceOp, ServerCapabilities, SymbolKind,
-        TextDocumentContentChangeEvent, TextDocumentEdit, TextDocumentIdentifier, TextDocumentItem,
-        TextDocumentPositionParams, TextDocumentSyncCapability, TextDocumentSyncKind,
-        TextDocumentSyncOptions, TextDocumentSyncSaveOptions, TextEdit, Url,
-        VersionedTextDocumentIdentifier, WorkspaceEdit, WorkspaceFolder,
+        MessageType, NumberOrString, OneOf, Position, PrepareRenameResponse,
+        PublishDiagnosticsParams, Range, ReferenceParams, RenameOptions, RenameParams, ResourceOp,
+        ServerCapabilities, SymbolKind, TextDocumentContentChangeEvent, TextDocumentEdit,
+        TextDocumentIdentifier, TextDocumentItem, TextDocumentPositionParams,
+        TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions,
+        TextDocumentSyncSaveOptions, TextEdit, Url, VersionedTextDocumentIdentifier, WorkspaceEdit,
+        WorkspaceFolder,
     },
 };
 
@@ -41,7 +42,7 @@ use renk::{
     SourceMapNode, SourceSyntax, TranspileError, rust_to_renk,
     script::{
         RESOLUTION_ERRORS, cache_root, dot_hint, script_body, script_cache_path, script_column,
-        script_package, script_parts, script_rust,
+        script_package, script_parts, script_renk, script_rust,
     },
     transpile,
 };
@@ -1367,11 +1368,11 @@ fn checked_edit(generated: &Generated, text: &str, edit: TextEdit) -> Option<Tex
 /// Renk edits of `source` that make the change `edits` make to its generated Rust `rust`, or
 /// `None` when some of it falls where `source` differs from `rust` converted back to Renk.
 ///
-/// Both versions of the Rust convert to Renk, and the line hunks between those conversions apply
-/// to the lines of `source` that the old conversion's lines match: a hunk applies only when the
-/// lines it replaces match consecutive lines of `source`, or when it inserts next to a matching
-/// line.
-fn renk_edits(source: &str, rust: &str, edits: &[TextEdit]) -> Option<Vec<TextEdit>> {
+/// Both versions of the Rust convert to Renk, as [`rust_to_renk`] or for a script [`script_renk`]
+/// does, and the line hunks between those conversions apply to the lines of `source` that the old
+/// conversion's lines match: a hunk applies only when the lines it replaces match consecutive
+/// lines of `source`, or when it inserts next to a matching line.
+fn renk_edits(source: &str, rust: &str, edits: &[TextEdit], script: bool) -> Option<Vec<TextEdit>> {
     let mut edited = rust.to_string();
     let mut edits = edits.to_vec();
     edits.sort_by_key(|edit| std::cmp::Reverse(offset(rust, edit.range.start)));
@@ -1382,8 +1383,12 @@ fn renk_edits(source: &str, rust: &str, edits: &[TextEdit]) -> Option<Vec<TextEd
             &edit.new_text,
         );
     }
-    let before = rust_to_renk(rust).ok()?;
-    let after = rust_to_renk(&edited).ok()?;
+    let to_renk = |rust: &str| match script {
+        true => script_renk(source, rust),
+        false => rust_to_renk(rust).ok(),
+    };
+    let before = to_renk(rust)?;
+    let after = to_renk(&edited)?;
     let before = before.lines().collect::<Vec<_>>();
     let after = after.lines().collect::<Vec<_>>();
     let source = source.lines().collect::<Vec<_>>();
@@ -1565,9 +1570,8 @@ impl Origins {
         };
         let renk = text.lines().nth(line.checked_sub(1)?)?;
         let rust = generated.rust.lines().nth(start.line as usize)?;
-        let column = |position: Position| {
-            script_column(renk, rust, char_column(rust, position.character))
-        };
+        let column =
+            |position: Position| script_column(renk, rust, char_column(rust, position.character));
         let last = if end.line == start.line {
             column(end)
         } else {
@@ -1654,8 +1658,8 @@ impl Origins {
     }
 
     /// Edits of rust-analyzer's file as edits of the editor's: in a Renk document, checked to
-    /// replace the same text, or with `convert`, converted with [`renk_edits`], which scripts do
-    /// not support. `None` when an edit does not map.
+    /// replace the same text, or with `convert`, converted with [`renk_edits`]. `None` when an
+    /// edit does not map.
     fn text_edits(
         &mut self,
         rust_uri: &Url,
@@ -1670,9 +1674,7 @@ impl Origins {
                 script,
             }) => {
                 let edits = if convert {
-                    (!script)
-                        .then(|| renk_edits(text, &generated.rust, &edits))
-                        .flatten()?
+                    renk_edits(text, &generated.rust, &edits, *script)?
                 } else {
                     edits
                         .into_iter()
@@ -2567,6 +2569,7 @@ mod tests {
             source,
             &rust,
             &[insert(1, "use std::collections::HashMap;\n\n")],
+            false,
         );
         assert_eq!(
             edits,
@@ -2575,11 +2578,67 @@ mod tests {
     }
 
     #[test]
+    fn script_edits_become_renk_edits_of_its_top_level_lines() {
+        let source = "#!/usr/bin/env -S renk script\n---\n[dependencies]\n---\nlet map = HashMap.new()\nlet n = map.len()\nprintln!(\"{n}\")\n";
+        let rust = generated(&module_uri("tool.rk"), source).unwrap().rust;
+        let line = |text: &str| rust.lines().position(|line| line.contains(text)).unwrap() as u32;
+        let main = line("fn main()");
+        let explicit = TextEdit::new(
+            Range::new(
+                Position::new(line("let n"), 9),
+                Position::new(line("let n"), 9),
+            ),
+            ": usize".to_string(),
+        );
+        assert_eq!(
+            renk_edits(
+                source,
+                &rust,
+                &[insert(main, "use std::collections::HashMap;\n\n")],
+                true
+            ),
+            Some(vec![insert(4, "use std.collections.HashMap\n\n")])
+        );
+        assert_eq!(
+            renk_edits(source, &rust, &[explicit], true),
+            Some(vec![TextEdit::new(
+                Range::new(Position::new(5, 0), Position::new(6, 0)),
+                "let n: usize = map.len()\n".to_string(),
+            )])
+        );
+
+        // A script with its own `fn main` keeps it.
+        let source =
+            "#!/usr/bin/env -S renk script\nfn main():\n    let n = 1\n    println!(\"{n}\")\n";
+        let rust = generated(&module_uri("main.rk"), source).unwrap().rust;
+        let at = rust
+            .lines()
+            .position(|line| line.contains("let n"))
+            .unwrap() as u32;
+        let explicit = TextEdit::new(
+            Range::new(Position::new(at, 9), Position::new(at, 9)),
+            ": i32".to_string(),
+        );
+        assert_eq!(
+            renk_edits(source, &rust, &[explicit], true),
+            Some(vec![TextEdit::new(
+                Range::new(Position::new(2, 0), Position::new(3, 0)),
+                "    let n: i32 = 1\n".to_string(),
+            )])
+        );
+    }
+
+    #[test]
     fn filled_match_arms_become_renk_arms() {
         let source = "enum E:\n    A\n    B\n\nfn f(e: E) -> i32 = match e:\n    E.A => 1\n";
         let rust = module_rust(source);
         assert_eq!(rust.lines().nth(9), Some("    }"));
-        let edits = renk_edits(source, &rust, &[insert(9, "        E::B => todo!(),\n")]);
+        let edits = renk_edits(
+            source,
+            &rust,
+            &[insert(9, "        E::B => todo!(),\n")],
+            false,
+        );
         assert_eq!(edits, Some(vec![insert(6, "    E.B => todo!()\n")]));
     }
 
@@ -2595,9 +2654,9 @@ mod tests {
                 ": String".to_string(),
             )
         };
-        assert_eq!(renk_edits(source, &rust, &[explicit(2, 12)]), None);
+        assert_eq!(renk_edits(source, &rust, &[explicit(2, 12)], false), None);
         assert_eq!(
-            renk_edits(source, &rust, &[explicit(3, 13)]),
+            renk_edits(source, &rust, &[explicit(3, 13)], false),
             Some(vec![TextEdit::new(
                 Range::new(Position::new(2, 0), Position::new(3, 0)),
                 "    let other: String = String.from(\"b\")\n".to_string(),

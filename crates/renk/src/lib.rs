@@ -373,7 +373,7 @@ fn format_items(source: &str, rustfmt: &dyn Fn(&str) -> Option<String>) -> Strin
 /// The top-level lines of a script that [`wrap_script_statements`] wrapped, from its formatted
 /// form; `None` when the wrapper is no longer there.
 #[cfg(not(target_arch = "wasm32"))]
-fn unwrap_script_statements(wrapped: &str) -> Option<String> {
+pub(crate) fn unwrap_script_statements(wrapped: &str) -> Option<String> {
     let lines = wrapped.lines().collect::<Vec<_>>();
     let in_literal = lines_ending_in_literal(wrapped);
     let starts_code = |index: usize| index == 0 || !in_literal[index - 1];
