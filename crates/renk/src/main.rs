@@ -390,11 +390,12 @@ fn run_cargo_wrapper(cargo_args: Vec<OsString>) -> CliResult<i32> {
         built = message["reason"] == "build-finished";
         if message["reason"] == "compiler-message" {
             mapper.rewrite(&mut message["message"], format.short);
-            if !format.json {
+            if format.render {
                 eprint!(
                     "{}",
                     message["message"]["rendered"].as_str().unwrap_or_default()
                 );
+                return Some(Vec::new());
             }
         }
         if !format.json {
@@ -444,15 +445,18 @@ fn workspace_root(args: &[OsString]) -> Option<PathBuf> {
 /// How the user asked cargo to print diagnostics, read from the `--message-format` flags.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct MessageFormat {
-    /// Print cargo's JSON messages, with their spans mapped, instead of rendered diagnostics.
+    /// Print cargo's JSON messages, with their spans mapped.
     json: bool,
+    /// Print diagnostics rendered on stderr instead of as JSON messages.
+    render: bool,
     /// Render diagnostics on one line, as rustc's `short` format does.
     short: bool,
     styled: bool,
 }
 
 /// Reads the user's `--message-format` flags of the cargo command at index `command`. Unless they
-/// ask for JSON, the flags give way to the JSON format renk reads, put after the command.
+/// ask for JSON with diagnostics in it, the flags give way to the JSON format renk reads, put after
+/// the command.
 fn message_format(
     args: Vec<OsString>,
     command: usize,
@@ -484,20 +488,25 @@ fn message_format(
         .iter()
         .flat_map(|value| value.split(','))
         .collect::<Vec<_>>();
-    if formats.iter().any(|format| format.starts_with("json")) {
-        let format = MessageFormat {
-            json: true,
-            short: formats.contains(&"json-diagnostic-short"),
-            styled: formats.contains(&"json-diagnostic-rendered-ansi"),
-        };
+    let json = formats.iter().any(|format| format.starts_with("json"));
+    let format = MessageFormat {
+        json,
+        render: !json || formats.contains(&"json-render-diagnostics"),
+        short: formats.contains(&if json {
+            "json-diagnostic-short"
+        } else {
+            "short"
+        }),
+        styled: if json {
+            formats.contains(&"json-diagnostic-rendered-ansi")
+        } else {
+            terminal
+        },
+    };
+    if !format.render {
         return (format, args);
     }
-    let format = MessageFormat {
-        json: false,
-        short: formats.contains(&"short"),
-        styled: terminal,
-    };
-    let flag = match (format.short, terminal) {
+    let flag = match (format.short, format.styled) {
         (false, false) => "json",
         (false, true) => "json-diagnostic-rendered-ansi",
         (true, false) => "json-diagnostic-short",
@@ -1678,6 +1687,7 @@ mod tests {
         let args = |args: &[&str]| args.iter().map(OsString::from).collect::<Vec<_>>();
         let format = |short, styled| MessageFormat {
             json: false,
+            render: true,
             short,
             styled,
         };
@@ -1707,6 +1717,18 @@ mod tests {
                 format(false, false),
                 &["check", "--message-format=json"],
             ),
+            (
+                &[
+                    "build",
+                    "--message-format=json-render-diagnostics,json-diagnostic-short",
+                ],
+                true,
+                MessageFormat {
+                    json: true,
+                    ..format(true, false)
+                },
+                &["build", "--message-format=json-diagnostic-short"],
+            ),
         ];
         for (given, terminal, expected, passed) in cases {
             let command = given.iter().position(|arg| !arg.starts_with('+')).unwrap();
@@ -1719,8 +1741,8 @@ mod tests {
         let json = args(&["build", "--message-format=json,json-diagnostic-short"]);
         let (format, passed) = message_format(json.clone(), 0, true);
         assert_eq!(
-            (format.json, format.short, format.styled),
-            (true, true, false)
+            (format.json, format.render, format.short, format.styled),
+            (true, false, true, false)
         );
         assert_eq!(passed, json);
     }
