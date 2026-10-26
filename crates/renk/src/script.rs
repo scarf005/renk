@@ -337,6 +337,37 @@ pub fn line_dots(renk: &str, rust: &str) -> Vec<Dot> {
     dots
 }
 
+/// The codes of errors about names that do not resolve, where a dot renk read the other way is a
+/// likely cause: rustc's, and rust-analyzer's own.
+pub const RESOLUTION_ERRORS: &[&str] = &[
+    "E0412",
+    "E0423",
+    "E0425",
+    "E0433",
+    "E0531",
+    "E0532",
+    "E0573",
+    "E0574",
+    "E0599",
+    "E0609",
+    "E0610",
+    "E0615",
+    "E0616",
+    "unresolved-assoc-item",
+    "unresolved-field",
+    "unresolved-ident",
+    "unresolved-method",
+];
+
+/// The [`Dot::hint`] of the first dot of the Renk line `renk` that the character range
+/// `columns` of it touches, given `rust`, the Rust line renk wrote for it.
+pub fn dot_hint(renk: &str, rust: &str, columns: Range<usize>) -> Option<String> {
+    line_dots(renk, rust)
+        .iter()
+        .filter(|dot| dot.receiver.start <= columns.end && columns.start <= dot.member.end)
+        .find_map(|dot| dot.hint(renk))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

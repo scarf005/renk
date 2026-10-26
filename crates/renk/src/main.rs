@@ -17,8 +17,8 @@ use std::{
 use renk::{
     SourceSyntax, TranspileError, format_source_with, rust_to_renk, rust_to_renk_aggressive,
     script::{
-        SCRIPT_EDITION, cache_root, line_dots, script_cache_path, script_column, script_package,
-        script_parts, script_rust,
+        RESOLUTION_ERRORS, SCRIPT_EDITION, cache_root, dot_hint, script_cache_path, script_column,
+        script_package, script_parts, script_rust,
     },
     source_map_json, to_rust, transpile,
 };
@@ -786,13 +786,6 @@ impl Generated {
     }
 }
 
-/// rustc's error codes for names that do not resolve, where a dot renk read the other way is a
-/// likely cause.
-const RESOLUTION_ERRORS: &[&str] = &[
-    "E0412", "E0423", "E0425", "E0433", "E0531", "E0532", "E0573", "E0574", "E0599", "E0609",
-    "E0610", "E0615", "E0616",
-];
-
 /// Maps rustc's JSON diagnostics and panic locations in generated Rust files to the lines and
 /// columns of their Renk sources.
 struct SourceMapper<'a> {
@@ -935,10 +928,7 @@ impl SourceMapper<'_> {
         } else {
             renk.chars().count()
         };
-        line_dots(renk, rust)
-            .iter()
-            .filter(|dot| dot.receiver.start <= end && start <= dot.member.end)
-            .find_map(|dot| dot.hint(renk))
+        dot_hint(renk, rust, start..end)
     }
 
     /// rustc's short form of a diagnostic whose primary span is in a Renk source:

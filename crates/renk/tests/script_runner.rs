@@ -266,7 +266,7 @@ fn add_writes_dependencies_into_the_script_frontmatter_and_keeps_the_rest() {
 }
 
 #[test]
-fn script_execs_the_cached_binary_and_rebuilds_after_edits_unless_told_to_run_cargo() {
+fn script_runs_the_cached_binary_and_rebuilds_after_edits_unless_told_to_run_cargo() {
     let dir = temp_dir("script-cached");
     let script = dir.join("greet.rk");
     let body = |greeting: &str| {

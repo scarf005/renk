@@ -11,7 +11,8 @@
 
 Positions map back to the `.rk` file. A rename fails when it would change Renk text that
 differs from the generated Rust, and a code action is left out when its edit does not map to
-the `.rk` lines; scripts get no code actions.
+the `.rk` lines; scripts get no code actions. A resolution error at an `a.b` dot carries the same
+hint as `renk check` (see [Limits](limits.md)).
 
 A script, which is a `.rk` file with a `#!` line or frontmatter or outside a Cargo package,
 transpiles as `renk script` does. It gets a `rust-analyzer` of its own over its generated

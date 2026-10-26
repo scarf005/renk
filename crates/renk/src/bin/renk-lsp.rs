@@ -28,7 +28,7 @@ use tower_lsp::{
         DocumentSymbolParams, DocumentSymbolResponse, GotoDefinitionParams, GotoDefinitionResponse,
         Hover, HoverContents, HoverParams, InitializeParams, InitializeResult, InitializedParams,
         InlayHint, InlayHintLabel, InlayHintParams, Location, MarkupContent, MarkupKind,
-        MessageType, OneOf, Position, PrepareRenameResponse, PublishDiagnosticsParams, Range,
+        MessageType, NumberOrString, OneOf, Position, PrepareRenameResponse, PublishDiagnosticsParams, Range,
         ReferenceParams, RenameOptions, RenameParams, ResourceOp, ServerCapabilities, SymbolKind,
         TextDocumentContentChangeEvent, TextDocumentEdit, TextDocumentIdentifier, TextDocumentItem,
         TextDocumentPositionParams, TextDocumentSyncCapability, TextDocumentSyncKind,
@@ -40,8 +40,8 @@ use tower_lsp::{
 use renk::{
     SourceMapNode, SourceSyntax, TranspileError, rust_to_renk,
     script::{
-        cache_root, script_body, script_cache_path, script_column, script_package, script_parts,
-        script_rust,
+        RESOLUTION_ERRORS, cache_root, dot_hint, script_body, script_cache_path, script_column,
+        script_package, script_parts, script_rust,
     },
     transpile,
 };
@@ -1522,7 +1522,12 @@ impl Origins {
         self.location(Location::new(rust_uri.clone(), range)).range
     }
 
+    /// A diagnostic of generated Rust at its Renk positions, with a [`Self::dot_hint`].
     fn diagnostic(&mut self, rust_uri: &Url, diagnostic: Diagnostic) -> Diagnostic {
+        let message = match self.dot_hint(rust_uri, &diagnostic) {
+            Some(hint) => format!("{}\n{hint}", diagnostic.message),
+            None => diagnostic.message.clone(),
+        };
         let related_information = diagnostic.related_information.map(|related| {
             related
                 .into_iter()
@@ -1535,8 +1540,40 @@ impl Origins {
         Diagnostic {
             range: self.range(rust_uri, diagnostic.range),
             related_information,
+            message,
             ..diagnostic
         }
+    }
+
+    /// For a resolution error on a Renk line, how renk read a dot that its range touches.
+    fn dot_hint(&mut self, rust_uri: &Url, diagnostic: &Diagnostic) -> Option<String> {
+        let Some(NumberOrString::String(code)) = &diagnostic.code else {
+            return None;
+        };
+        if !RESOLUTION_ERRORS.contains(&code.as_str()) {
+            return None;
+        }
+        let Some(Origin::Renk {
+            text, generated, ..
+        }) = self.origin(rust_uri)
+        else {
+            return None;
+        };
+        let Range { start, end } = diagnostic.range;
+        let (line, false) = *generated.source_lines.get(start.line as usize)? else {
+            return None;
+        };
+        let renk = text.lines().nth(line.checked_sub(1)?)?;
+        let rust = generated.rust.lines().nth(start.line as usize)?;
+        let column = |position: Position| {
+            script_column(renk, rust, char_column(rust, position.character))
+        };
+        let last = if end.line == start.line {
+            column(end)
+        } else {
+            renk.chars().count()
+        };
+        dot_hint(renk, rust, column(start)..last)
     }
 
     fn definition(
@@ -2604,6 +2641,48 @@ mod tests {
         let closing = generated.rust.lines().count() as u32 - 1;
         assert_eq!(line(closing), "}");
         assert_eq!(checked_edit(&generated, source, word(closing, "}")), None);
+    }
+
+    #[test]
+    fn resolution_errors_at_a_dot_say_how_renk_read_it() {
+        let source = "fn run(cfg: Config):\n    let n = String.nope() + cfg.port\n";
+        let uri = module_uri("src/dots.rk");
+        let rust_uri = module_uri("target/renk/src/dots.rs");
+        let mut origins = Origins {
+            documents: HashMap::from([(uri.clone(), source.to_string())]),
+            sources: HashMap::from([(rust_uri.clone(), uri)]),
+            roots: None,
+            cache: HashMap::new(),
+        };
+        let rust = module_rust(source);
+        let line = rust.lines().position(|line| line.contains("nope")).unwrap();
+        let rust_line = rust.lines().nth(line).unwrap();
+        let diagnostic = |code: &str, word: &str| {
+            let start = rust_line.find(word).unwrap() as u32;
+            Diagnostic {
+                range: Range::new(
+                    Position::new(line as u32, start),
+                    Position::new(line as u32, start + word.len() as u32),
+                ),
+                code: Some(NumberOrString::String(code.to_string())),
+                message: "error".to_string(),
+                ..Diagnostic::default()
+            }
+        };
+        let mut message = |code, word| {
+            origins
+                .diagnostic(&rust_uri, diagnostic(code, word))
+                .message
+        };
+        assert_eq!(
+            message("E0599", "nope"),
+            "error\nrenk read `String.nope` as the path `String::nope`; write `(String).nope` for a value"
+        );
+        assert_eq!(
+            message("unresolved-field", "port"),
+            "error\nrenk read `cfg.port` as a member of the value `cfg`; write `cfg::port` for a path"
+        );
+        assert_eq!(message("E0308", "nope"), "error");
     }
 
     #[test]
