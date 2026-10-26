@@ -1185,7 +1185,8 @@ fn supervise<'a>(
 }
 
 /// Copies `input` to `output` a line at a time through `line`, holding a partial line until its
-/// newline comes or 50 ms pass without output.
+/// newline comes or 50 ms pass without output. When `output` fails, as when its reader closes,
+/// `input` closes too, so the child's next write to it fails.
 fn relay(mut input: impl Read + Send, mut output: impl Write, line: Relay) {
     let (sender, chunks) = mpsc::channel::<Vec<u8>>();
     std::thread::scope(|scope| {
@@ -1201,34 +1202,39 @@ fn relay(mut input: impl Read + Send, mut output: impl Write, line: Relay) {
         let mut pending = Vec::new();
         let mut write = |bytes: Option<Vec<u8>>, pending: &mut Vec<u8>| {
             if let Some(bytes) = bytes {
-                let _ = output.write_all(&bytes);
+                output.write_all(&bytes)?;
                 pending.clear();
             }
-            let _ = output.flush();
+            output.flush()
         };
-        loop {
-            let chunk = if pending.is_empty() {
-                chunks.recv().map_err(|_| RecvTimeoutError::Disconnected)
-            } else {
-                chunks.recv_timeout(Duration::from_millis(50))
-            };
-            match chunk {
-                Ok(chunk) => pending.extend(chunk),
-                Err(RecvTimeoutError::Timeout) => {
-                    write(line(&pending, false), &mut pending);
-                    continue;
+        let _ = (|| -> io::Result<()> {
+            loop {
+                let chunk = if pending.is_empty() {
+                    chunks.recv().map_err(|_| RecvTimeoutError::Disconnected)
+                } else {
+                    chunks.recv_timeout(Duration::from_millis(50))
+                };
+                match chunk {
+                    Ok(chunk) => pending.extend(chunk),
+                    Err(RecvTimeoutError::Timeout) => {
+                        write(line(&pending, false), &mut pending)?;
+                        continue;
+                    }
+                    Err(RecvTimeoutError::Disconnected) => break,
                 }
-                Err(RecvTimeoutError::Disconnected) => break,
+                while let Some(newline) = pending.iter().position(|&byte| byte == b'\n') {
+                    let mut rest = pending.split_off(newline + 1);
+                    write(line(&pending, true), &mut pending)?;
+                    pending.append(&mut rest);
+                }
             }
-            while let Some(newline) = pending.iter().position(|&byte| byte == b'\n') {
-                let mut rest = pending.split_off(newline + 1);
-                write(line(&pending, true), &mut pending);
-                pending.append(&mut rest);
+            if !pending.is_empty() {
+                write(line(&pending, true), &mut pending)?;
             }
-        }
-        if !pending.is_empty() {
-            write(line(&pending, true), &mut pending);
-        }
+            Ok(())
+        })();
+        // The reader ends at its next chunk, closing `input`.
+        drop(chunks);
     });
 }
 
