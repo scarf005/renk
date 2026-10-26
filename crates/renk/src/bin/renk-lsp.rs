@@ -1366,7 +1366,8 @@ fn checked_edit(generated: &Generated, text: &str, edit: TextEdit) -> Option<Tex
 }
 
 /// Renk edits of `source` that make the change `edits` make to its generated Rust `rust`, or
-/// `None` when some of it falls where `source` differs from `rust` converted back to Renk.
+/// `None` when some of it falls where `source` differs from `rust` converted back to Renk, or in
+/// a script's frontmatter or `fn main` wrapper header, which do not convert back.
 ///
 /// Both versions of the Rust convert to Renk, as [`rust_to_renk`] or for a script [`script_renk`]
 /// does, and the line hunks between those conversions apply to the lines of `source` that the old
@@ -1385,10 +1386,13 @@ fn renk_edits(source: &str, rust: &str, edits: &[TextEdit], script: bool) -> Opt
     }
     let to_renk = |rust: &str| match script {
         true => script_renk(source, rust),
-        false => rust_to_renk(rust).ok(),
+        false => rust_to_renk(rust).ok().map(|renk| (renk, String::new())),
     };
-    let before = to_renk(rust)?;
-    let after = to_renk(&edited)?;
+    let (before, left_out) = to_renk(rust)?;
+    let (after, edited_left_out) = to_renk(&edited)?;
+    if left_out != edited_left_out {
+        return None;
+    }
     let before = before.lines().collect::<Vec<_>>();
     let after = after.lines().collect::<Vec<_>>();
     let source = source.lines().collect::<Vec<_>>();

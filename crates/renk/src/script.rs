@@ -148,15 +148,24 @@ pub fn script_rust(
 
 /// What `rust`, the Rust [`script_rust`] wrote for the script `source`, converts back to with
 /// [`rust_to_renk`]: without the frontmatter, and with top-level lines taken out of the `fn main`
-/// wrapper. `None` when the Rust does not convert or the wrapper is gone.
-pub fn script_renk(source: &str, rust: &str) -> Option<String> {
+/// wrapper; and the frontmatter and wrapper header it leaves out, so an edit of them can be told
+/// apart. `None` when the Rust does not convert or the wrapper is gone.
+pub fn script_renk(source: &str, rust: &str) -> Option<(String, String)> {
     let lines = rust.split_inclusive('\n').collect::<Vec<_>>();
-    let renk = rust_to_renk(&lines[script_parts(rust).ok()?.body_start..].concat()).ok()?;
-    if wrap_script_statements(&script_body(source).ok()?, SourceSyntax::Renk, None).is_some() {
-        unwrap_script_statements(&renk)
-    } else {
-        Some(renk)
+    let body_start = script_parts(rust).ok()?.body_start;
+    let frontmatter = lines[..body_start].concat();
+    let renk = rust_to_renk(&lines[body_start..].concat()).ok()?;
+    if wrap_script_statements(&script_body(source).ok()?, SourceSyntax::Renk, None).is_none() {
+        return Some((renk, frontmatter));
     }
+    let statements = unwrap_script_statements(&renk)?;
+    // The header is the first line the unwrapping changed; the tail it checks is always the same.
+    let mut unwrapped = statements.lines();
+    let header = renk
+        .lines()
+        .find(|&line| unwrapped.next() != Some(line))
+        .unwrap_or_default();
+    Some((statements, frontmatter + header))
 }
 
 /// The edition renk's generated Rust is written for, pinned in scripts that do not name one so
