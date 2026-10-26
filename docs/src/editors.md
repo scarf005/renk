@@ -20,7 +20,7 @@ cargo-script file in `$XDG_CACHE_HOME/renk/lsp/`, so its frontmatter dependencie
 
 ## Zed
 
-The extension in [`editors/zed`](https://github.com/scarf005/rusk/tree/main/editors/zed)
+The extension in [`editors/zed`](https://github.com/scarf005/renk/tree/main/editors/zed)
 registers the Renk language, starts `renk-lsp`, and highlights with Tree-sitter. Install it
 with **Install Dev Extension** in Zed's extensions page, selecting `editors/zed`.
 

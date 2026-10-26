@@ -31,7 +31,7 @@ pub fn main():
 Then run `renk transpile hello.rk -o hello.rs && rustc --edition 2024 hello.rs && ./hello`, which prints
 `3`.
 
-The [examples](https://github.com/scarf005/rusk/tree/main/examples) directory has more programs.
+The [examples](https://github.com/scarf005/renk/tree/main/examples) directory has more programs.
 
 ## Commands
 

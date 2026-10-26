@@ -6,5 +6,5 @@ src = "src"
 
 [output.html]
 additional-js = ["renk-highlight.js"]
-git-repository-url = "https://github.com/scarf005/rusk"
-edit-url-template = "https://github.com/scarf005/rusk/edit/main/docs/{path}"
+git-repository-url = "https://github.com/scarf005/renk"
+edit-url-template = "https://github.com/scarf005/renk/edit/main/docs/{path}"

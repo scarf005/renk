@@ -19,7 +19,7 @@ cargo-script 파일을 대상으로 자기 전용 `rust-analyzer`를 띄우므�
 
 ## Zed
 
-[`editors/zed`](https://github.com/scarf005/rusk/tree/main/editors/zed)의 확장은 Renk 언어를
+[`editors/zed`](https://github.com/scarf005/renk/tree/main/editors/zed)의 확장은 Renk 언어를
 등록하고 `renk-lsp`를 실행하며 Tree-sitter로 하이라이트한다. Zed 확장 페이지의
 **Install Dev Extension**에서 `editors/zed`를 선택해 설치한다.
 

@@ -31,7 +31,7 @@ pub fn main():
 `renk transpile hello.rk -o hello.rs && rustc --edition 2024 hello.rs && ./hello`를 실행하면 `3`이
 출력된다.
 
-[examples](https://github.com/scarf005/rusk/tree/main/examples) 디렉터리에 예제 프로그램이 더 있다.
+[examples](https://github.com/scarf005/renk/tree/main/examples) 디렉터리에 예제 프로그램이 더 있다.
 
 ## 명령
 

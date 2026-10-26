@@ -4,7 +4,7 @@
 
 Renk is an indentation-based syntax for [Rust](https://rust-lang.org), inspired by [Rust's Ugly Syntax](https://matklad.github.io/2023/01/26/rusts-ugly-syntax.html).
 
-Documentation: <https://scarf005.github.io/rusk/> ([한국어](https://scarf005.github.io/rusk/ko/))
+Documentation: <https://scarf005.github.io/renk/> ([한국어](https://scarf005.github.io/renk/ko/))
 
 ## Example
 
@@ -54,11 +54,11 @@ renk from-rust input.rs -o output.rk
 cat input.rk | renk
 ```
 
-See [Getting started](https://scarf005.github.io/rusk/getting-started.html) and [Syntax](https://scarf005.github.io/rusk/syntax/index.html).
+See [Getting started](https://scarf005.github.io/renk/getting-started.html) and [Syntax](https://scarf005.github.io/renk/syntax/index.html).
 
 ## Formatter
 
-`renk fmt` formats a file with rustfmt's layout; `--check` prints a diff and exits with 1 for unformatted files. [Details](https://scarf005.github.io/rusk/tools.html).
+`renk fmt` formats a file with rustfmt's layout; `--check` prints a diff and exits with 1 for unformatted files. [Details](https://scarf005.github.io/renk/tools.html).
 
 ```sh
 renk fmt src/main.rk -o src/main.rk
@@ -67,7 +67,7 @@ renk fmt --check src/*.rk
 
 ## Cargo wrapper
 
-`renk build`, `renk run`, `renk test`, and `renk cargo ...` transpile `.rk` files under Cargo source roots into `.rs` files, then run Cargo. [Details](https://scarf005.github.io/rusk/cargo.html).
+`renk build`, `renk run`, `renk test`, and `renk cargo ...` transpile `.rk` files under Cargo source roots into `.rs` files, then run Cargo. [Details](https://scarf005.github.io/renk/cargo.html).
 
 ```sh
 renk cargo test
@@ -75,7 +75,7 @@ renk cargo test
 
 ## Scripts
 
-`renk script` runs a single-file script with `cargo +nightly -Zscript`. Dependencies go in `---` frontmatter; `renk add` edits it. [Details](https://scarf005.github.io/rusk/scripts.html).
+`renk script` runs a single-file script with `cargo +nightly -Zscript`. Dependencies go in `---` frontmatter; `renk add` edits it. [Details](https://scarf005.github.io/renk/scripts.html).
 
 ```rk
 #!/usr/bin/env -S renk script
@@ -95,12 +95,12 @@ renk add tool.rk regex
 
 ## Language server
 
-`renk-lsp` is a stdio language server. It reports syntax errors and symbols, and forwards hover, definition, and completion to `rust-analyzer`. [Editor setup](https://scarf005.github.io/rusk/editors.html).
+`renk-lsp` is a stdio language server. It reports syntax errors and symbols, and forwards `rust-analyzer`'s diagnostics, hover, definition, completion, references, rename, code actions, and inlay hints. [Editor setup](https://scarf005.github.io/renk/editors.html).
 
 ## Web runner
 
-`podman compose up --build` serves the web editor at <http://localhost:8080>. `just web` starts it from a checkout. [Details](https://scarf005.github.io/rusk/tools.html#web-runner).
+`podman compose up --build` serves the web editor at <http://localhost:8080>. `just web` starts it from a checkout. [Details](https://scarf005.github.io/renk/tools.html#web-runner).
 
 ## Limits
 
-Renk reads text, not types, so some names are misread. See [Limits](https://scarf005.github.io/rusk/limits.html).
+Renk reads text, not types, so some names are misread. See [Limits](https://scarf005.github.io/renk/limits.html).

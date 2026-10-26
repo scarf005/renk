@@ -6,8 +6,8 @@ src = "src"
 
 [output.html]
 additional-js = ["renk-highlight.js"]
-git-repository-url = "https://github.com/scarf005/rusk"
-edit-url-template = "https://github.com/scarf005/rusk/edit/main/docs/ko/{path}"
+git-repository-url = "https://github.com/scarf005/renk"
+edit-url-template = "https://github.com/scarf005/renk/edit/main/docs/ko/{path}"
 
 [build]
 build-dir = "../book/ko"
