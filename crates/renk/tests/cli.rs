@@ -511,6 +511,33 @@ fn cargo_wrapper_maps_json_and_short_messages_to_renk_sources() {
 }
 
 #[test]
+fn cargo_wrapper_renders_mapped_diagnostics_for_json_render_diagnostics() {
+    let dir = cargo_project("cargo-json-render", UNRESOLVED);
+    for (format, expected) in [
+        ("json-render-diagnostics", "--> src/main.rk:5:20\n"),
+        (
+            "json-render-diagnostics,json-diagnostic-short",
+            "src/main.rk:5:20: error[E0599]",
+        ),
+    ] {
+        let output = cargo_wrapper(&dir, &["check", &format!("--message-format={format}")]);
+        let stderr = text(&output.stderr);
+        assert_eq!(output.status.code(), Some(101), "{stderr}");
+        assert!(stderr.contains(expected), "{stderr}");
+        assert!(stderr.contains("src/other.rs:1:21"), "{stderr}");
+        assert!(!stderr.contains("main.rs"), "{stderr}");
+        // Cargo prints its other messages as JSON.
+        let reasons = text(&output.stdout)
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap()["reason"].clone())
+            .collect::<Vec<_>>();
+        assert!(reasons.contains(&"build-finished".into()), "{reasons:?}");
+        assert!(!reasons.contains(&"compiler-message".into()), "{reasons:?}");
+    }
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
 fn cargo_wrapper_maps_only_its_own_files_in_a_workspace() {
     let dir = temp_dir("cargo-workspace");
     fs::create_dir_all(dir.join("src")).unwrap();
