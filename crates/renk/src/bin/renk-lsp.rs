@@ -3036,6 +3036,42 @@ mod tests {
     }
 
     #[test]
+    fn mirror_refreshes_keep_open_documents_without_a_file_in_the_workspace() {
+        let temp = std::env::temp_dir().join(format!("renk-lsp-unsaved-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&temp);
+        fs::create_dir_all(temp.join("src")).unwrap();
+        fs::write(temp.join("Cargo.toml"), "[package]\nname = \"c\"\n").unwrap();
+        // A module of another package, which maps to the mirror's root.
+        let outside = temp.with_extension("outside");
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("Cargo.toml"), "[package]\nname = \"o\"\n").unwrap();
+        let rust_root = temp.join("target/renk");
+        let module = "pub fn unsaved() = ()\n";
+        let documents = HashMap::from([
+            (
+                Url::from_file_path(temp.join("src/new.rk")).unwrap(),
+                module.to_string(),
+            ),
+            (
+                Url::from_file_path(outside.join("outside.rk")).unwrap(),
+                module.to_string(),
+            ),
+        ]);
+        let rust = module_rust(module);
+        write_generated_rust_file(&rust_root.join("src/new.rs"), &rust);
+        write_generated_rust_file(&rust_root.join("outside.rs"), &rust);
+        write_generated_rust_file(&rust_root.join("src/closed.rs"), &rust);
+
+        mirror_workspace(&temp, &rust_root, &documents);
+
+        assert!(rust_root.join("src/new.rs").is_file());
+        assert!(rust_root.join("outside.rs").is_file());
+        assert!(!rust_root.join("src/closed.rs").exists());
+        let _ = fs::remove_dir_all(temp);
+        let _ = fs::remove_dir_all(outside);
+    }
+
+    #[test]
     fn inlay_hints_on_synthesized_lines_are_dropped_and_the_rest_move_to_renk() {
         let uri = module_uri("src/hints.rk");
         let rust_uri = module_uri("target/renk/src/hints.rs");
