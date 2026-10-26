@@ -511,6 +511,43 @@ fn cargo_wrapper_maps_json_and_short_messages_to_renk_sources() {
 }
 
 #[test]
+fn cargo_wrapper_maps_only_its_own_files_in_a_workspace() {
+    let dir = temp_dir("cargo-workspace");
+    fs::create_dir_all(dir.join("src")).unwrap();
+    fs::create_dir_all(dir.join("b/src")).unwrap();
+    fs::write(
+        dir.join("Cargo.toml"),
+        "[package]\nname = \"root\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[workspace]\nmembers = [\"b\"]\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.join("src/main.rs"),
+        "fn main() {\n    let unused = 1;\n    let v: Vec<i32> = Vec::new();\n    println!(\"{}\", v[3]);\n}\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.join("b/Cargo.toml"),
+        "[package]\nname = \"b\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )
+    .unwrap();
+    fs::write(dir.join("b/src/main.rk"), "fn main():\n    let other = 2\n").unwrap();
+    // rustc names the files of both packages relative to the workspace root.
+    let member = dir.join("b");
+    let output = cargo_wrapper(&member, &["build", "--workspace"]);
+    let stderr = text(&output.stderr);
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(stderr.contains("--> src/main.rs:2:9\n"), "{stderr}");
+    assert!(stderr.contains("--> src/main.rk:2:9\n"), "{stderr}");
+
+    let output = cargo_wrapper(&member, &["run", "-q", "-p", "root"]);
+    let stderr = text(&output.stderr);
+    assert_eq!(output.status.code(), Some(101), "{stderr}");
+    assert!(stderr.contains("panicked at src/main.rs:4:"), "{stderr}");
+    assert!(!stderr.contains("main.rk"), "{stderr}");
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
 fn cargo_wrapper_rewrites_panic_locations_of_run_and_test() {
     let main = "fn main():\n    let v: Vec[i32] = Vec.new()\n    println!(\"{v[3]}\")\n\n#[cfg(test)]\nmod tests:\n    #[test]\n    fn fails():\n        assert_eq!(1 + 1, 3)\n";
     let dir = cargo_project("cargo-panic", main);
