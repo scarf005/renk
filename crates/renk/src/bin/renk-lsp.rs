@@ -1178,40 +1178,48 @@ fn mirror_workspace(source_root: &Path, rust_root: &Path, documents: &HashMap<Ur
                 .collect()
         })
         .unwrap_or_default();
-    prune_mirror(source_root, rust_root, rust_root, &open);
-    mirror_sources(source_root, rust_root, source_root, documents);
+    prune_mirror(source_root, rust_root, &open);
+    mirror_sources(source_root, rust_root, documents);
 }
 
-/// The files under `dir` and the directories to walk, without `target/`, hidden directories, or
-/// symlinked directories, which may lead back up.
-fn walk(dir: &Path) -> impl Iterator<Item = (PathBuf, bool)> {
-    fs::read_dir(dir)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .filter_map(|entry| {
-            let directory = entry.file_type().ok()?.is_dir();
-            let path = entry.path();
-            let name = path.file_name()?.to_str()?;
-            (!directory || name != "target" && !name.starts_with('.')).then_some((path, directory))
-        })
+/// The files under `dir`, without those in `target/` or hidden directories. It follows symlinked
+/// directories, but not into a directory it is already in, which a link back up leads to.
+fn walk(dir: &Path) -> Vec<PathBuf> {
+    fn files(dir: &Path, ancestors: &[PathBuf]) -> Vec<PathBuf> {
+        let Some(canonical) = fs::canonicalize(dir)
+            .ok()
+            .filter(|canonical| !ancestors.contains(canonical))
+        else {
+            return Vec::new();
+        };
+        let ancestors = [ancestors, &[canonical]].concat();
+        fs::read_dir(dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .flat_map(|entry| {
+                let path = entry.path();
+                let walked = path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name != "target" && !name.starts_with('.'));
+                match path.is_dir() {
+                    true if walked => files(&path, &ancestors),
+                    true => Vec::new(),
+                    false => vec![path],
+                }
+            })
+            .collect()
+    }
+    files(dir, &[])
 }
 
-/// Mirrors the crates under `dir` of `source_root` at `rust_root` for `cargo check`: each Renk
-/// module's generated Rust, of its text in `documents` when it is open, each hand-written Rust
-/// file, and each Cargo manifest. It skips what [`walk`] skips and Rust that renk generated next
-/// to its Renk module.
-fn mirror_sources(
-    source_root: &Path,
-    rust_root: &Path,
-    dir: &Path,
-    documents: &HashMap<Url, String>,
-) {
-    for (path, directory) in walk(dir) {
-        if directory {
-            mirror_sources(source_root, rust_root, &path, documents);
-            continue;
-        }
+/// Mirrors the crates of `source_root` at `rust_root` for `cargo check`: each Renk module's
+/// generated Rust, of its text in `documents` when it is open, each hand-written Rust file, and
+/// each Cargo manifest. It skips what [`walk`] skips and Rust that renk generated next to its Renk
+/// module.
+fn mirror_sources(source_root: &Path, rust_root: &Path, documents: &HashMap<Url, String>) {
+    for path in walk(source_root) {
         let Ok(relative) = path.strip_prefix(source_root) else {
             continue;
         };
@@ -1237,22 +1245,18 @@ fn mirror_sources(
                 }
             }
             _ if path.ends_with("Cargo.toml") => {
-                copy_manifest_if_changed(&path, &mirrored, dir == source_root);
+                copy_manifest_if_changed(&path, &mirrored, relative == Path::new("Cargo.toml"));
             }
             _ => {}
         }
     }
 }
 
-/// Removes the Rust files and Cargo manifests under `dir` of the mirror at `rust_root` that
-/// nothing in `source_root` mirrors to any more: a module's generated Rust stays while its Renk
-/// module or a Rust file is there, a copy while its file is there, and the files in `open` stay.
-fn prune_mirror(source_root: &Path, rust_root: &Path, dir: &Path, open: &HashSet<PathBuf>) {
-    for (path, directory) in walk(dir) {
-        if directory {
-            prune_mirror(source_root, rust_root, &path, open);
-            continue;
-        }
+/// Removes the Rust files and Cargo manifests of the mirror at `rust_root` that nothing in
+/// `source_root` mirrors to any more: a module's generated Rust stays while its Renk module or a
+/// Rust file is there, a copy while its file is there, and the files in `open` stay.
+fn prune_mirror(source_root: &Path, rust_root: &Path, open: &HashSet<PathBuf>) {
+    for path in walk(rust_root) {
         let Ok(relative) = path.strip_prefix(rust_root) else {
             continue;
         };
@@ -2928,7 +2932,7 @@ mod tests {
         fs::write(temp.join(".hidden/skip.rs"), "").unwrap();
         let rust_root = temp.join("target/renk");
 
-        mirror_sources(&temp, &rust_root, &temp, &HashMap::new());
+        mirror_sources(&temp, &rust_root, &HashMap::new());
 
         let util = fs::read_to_string(rust_root.join("src/util.rs")).unwrap();
         assert!(util.starts_with(GENERATED_HEADER) && util.contains("pub fn helper() -> i32 {"));
