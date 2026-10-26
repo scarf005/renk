@@ -155,9 +155,7 @@ fn hover_after_edits(name: &str, texts: &[&str]) -> Option<Value> {
             }}),
         );
         let hover = response(id);
-        if hover["contents"].to_string().contains("fn from")
-            || Instant::now() > deadline
-        {
+        if hover["contents"].to_string().contains("fn from") || Instant::now() > deadline {
             break hover;
         }
         id += 1;

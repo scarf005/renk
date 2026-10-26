@@ -814,11 +814,14 @@ fn generated(uri: &Url, text: &str) -> std::result::Result<Generated, TranspileE
     if source_syntax(uri) == SourceSyntax::Rust {
         return Ok(Generated {
             rust: text.to_string(),
-            source_lines: (1..=text.lines().count()).map(|line| (line, false)).collect(),
+            source_lines: (1..=text.lines().count())
+                .map(|line| (line, false))
+                .collect(),
         });
     }
     if is_script(uri, text) {
-        let package = script_rust_path(uri).map_or_else(|| "script".to_string(), |path| script_package(&path));
+        let package = script_rust_path(uri)
+            .map_or_else(|| "script".to_string(), |path| script_package(&path));
         let script = script_rust(text, SourceSyntax::Renk, &package)?;
         return Ok(Generated {
             rust: script.rust,
@@ -865,7 +868,10 @@ fn char_column(line: &str, character: u32) -> usize {
 
 /// The UTF-16 column of a character index of `line`.
 fn utf16_column(line: &str, column: usize) -> u32 {
-    line.chars().take(column).map(|c| c.len_utf16() as u32).sum()
+    line.chars()
+        .take(column)
+        .map(|c| c.len_utf16() as u32)
+        .sum()
 }
 
 fn source_position_to_rust_position(uri: &Url, text: &str, position: Position) -> Option<Position> {
@@ -928,9 +934,7 @@ fn rust_definition_to_renk_definition(
         GotoDefinitionResponse::Array(locations) => GotoDefinitionResponse::Array(
             locations
                 .into_iter()
-                .map(|location| {
-                    rust_location_to_renk_location(text, renk_uri, rust_uri, location)
-                })
+                .map(|location| rust_location_to_renk_location(text, renk_uri, rust_uri, location))
                 .collect(),
         ),
         GotoDefinitionResponse::Link(links) => GotoDefinitionResponse::Link(
@@ -1579,10 +1583,22 @@ mod tests {
         let module = "pub fn f() = ()\n";
 
         assert!(!is_script(&uri("crate/src/lib.rk"), module));
-        assert!(is_script(&uri("crate/src/tool.rk"), "#!/usr/bin/env -S renk script\nlet x = 1\n"));
-        assert!(is_script(&uri("crate/src/tool.rk"), "---\n[dependencies]\n---\n"));
-        assert!(is_script(&uri("crate/src/tool.rk"), "---\n[dependencies]\n"));
-        assert!(!is_script(&uri("crate/src/lib.rk"), "#![allow(unused)]\npub fn f() = ()\n"));
+        assert!(is_script(
+            &uri("crate/src/tool.rk"),
+            "#!/usr/bin/env -S renk script\nlet x = 1\n"
+        ));
+        assert!(is_script(
+            &uri("crate/src/tool.rk"),
+            "---\n[dependencies]\n---\n"
+        ));
+        assert!(is_script(
+            &uri("crate/src/tool.rk"),
+            "---\n[dependencies]\n"
+        ));
+        assert!(!is_script(
+            &uri("crate/src/lib.rk"),
+            "#![allow(unused)]\npub fn f() = ()\n"
+        ));
         assert!(is_script(&uri("tool.rk"), module));
         assert!(!is_script(&uri("tool.rs"), module));
         let _ = fs::remove_dir_all(temp);
@@ -1596,14 +1612,20 @@ mod tests {
         let script_line = "let 이름 = String.from(\"a\")";
         let from = Position {
             line: 4,
-            character: utf16_column(script_line, script_line.chars().position(|c| c == 'f').unwrap()),
+            character: utf16_column(
+                script_line,
+                script_line.chars().position(|c| c == 'f').unwrap(),
+            ),
         };
 
         let rust = source_position_to_rust_position(&uri, text, from).unwrap();
         let rust_line = generated.rust.lines().nth(rust.line as usize).unwrap();
         assert_eq!(rust_line, "    let 이름 = String::from(\"a\");");
         let column = char_column(rust_line, rust.character);
-        assert_eq!(rust_line.chars().skip(column).take(4).collect::<String>(), "from");
+        assert_eq!(
+            rust_line.chars().skip(column).take(4).collect::<String>(),
+            "from"
+        );
         assert_eq!(rust_position_to_source_position(&uri, text, rust), from);
 
         let main = generated
@@ -1611,24 +1633,44 @@ mod tests {
             .lines()
             .position(|line| line.starts_with("fn main()"))
             .unwrap();
-        let header = rust_position_to_source_position(&uri, text, Position { line: main as u32, character: 3 });
+        let header = rust_position_to_source_position(
+            &uri,
+            text,
+            Position {
+                line: main as u32,
+                character: 3,
+            },
+        );
         assert_eq!(header.line, 4);
         assert_eq!(
-            source_position_to_rust_position(&uri, text, Position { line: 1, character: 0 })
-                .map(|position| position.line),
+            source_position_to_rust_position(
+                &uri,
+                text,
+                Position {
+                    line: 1,
+                    character: 0
+                }
+            )
+            .map(|position| position.line),
             Some(0)
         );
     }
 
     #[test]
     fn script_diagnostics_point_at_script_lines() {
-        let uri = Url::from_file_path(std::env::temp_dir().join("renk-lsp-diagnostics/tool.rk")).unwrap();
+        let uri =
+            Url::from_file_path(std::env::temp_dir().join("renk-lsp-diagnostics/tool.rk")).unwrap();
         assert!(generated(&uri, "---\n[dependencies]\nregex = \"1\"\n---\nlet x = 1\n").is_ok());
-        let error = generated(&uri, "---\n[package]\n---\nlet x = 1\nif x > 0:\n\tprintln!()\n")
+        let error = generated(
+            &uri,
+            "---\n[package]\n---\nlet x = 1\nif x > 0:\n\tprintln!()\n",
+        )
+        .err()
+        .unwrap();
+        assert_eq!(error.line, 6);
+        let error = generated(&uri, "#!/usr/bin/env -S renk script\n---\n[package]\n")
             .err()
             .unwrap();
-        assert_eq!(error.line, 6);
-        let error = generated(&uri, "#!/usr/bin/env -S renk script\n---\n[package]\n").err().unwrap();
         assert_eq!(error.line, 2);
     }
 
