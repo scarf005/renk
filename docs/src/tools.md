@@ -2,12 +2,16 @@
 
 ## Formatter
 
-`renk fmt` checks that the file parses, trims trailing whitespace, empties whitespace-only
-lines, and ends the file with one newline. It does not reflow expressions or change
-indentation.
+`renk fmt` lays out a file the way rustfmt lays out Rust: indentation, line breaks, and spacing.
+It runs `rustfmt --edition 2024` on the generated Rust, so it needs rustfmt
+(`rustup component add rustfmt`) and follows the `rustfmt.toml` of the working directory.
+Comments, blank lines, and string contents stay. A script keeps its `#!` line and frontmatter.
+An item that cannot be formatted without changing its Rust keeps its lines, with trailing
+whitespace trimmed.
 
 ```sh
 renk fmt src/main.rk -o src/main.rk
+renk fmt --check src/*.rk    # prints a diff and exits with 1 if a file is not formatted
 ```
 
 ## Source maps

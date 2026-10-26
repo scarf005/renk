@@ -2,11 +2,15 @@
 
 ## 포매터
 
-`renk fmt`는 파일이 파싱되는지 확인하고, 줄 끝 공백을 지우고, 공백뿐인 줄을 비우고, 파일을 개행
-하나로 끝낸다. 표현식을 다시 배치하거나 들여쓰기를 바꾸지는 않는다.
+`renk fmt`는 rustfmt가 Rust를 배치하듯 파일의 들여쓰기, 줄바꿈, 공백을 정리한다. 생성한 Rust에
+`rustfmt --edition 2024`를 돌리므로 rustfmt(`rustup component add rustfmt`)가 필요하고, 작업
+디렉터리의 `rustfmt.toml`을 따른다. 주석, 빈 줄, 문자열 내용은 그대로 둔다. 스크립트의 `#!` 줄과
+frontmatter도 그대로다. Rust를 바꾸지 않고는 정리할 수 없는 항목은 줄 끝 공백만 지우고 원래 줄을
+유지한다.
 
 ```sh
 renk fmt src/main.rk -o src/main.rk
+renk fmt --check src/*.rk    # 정리되지 않은 파일이 있으면 diff를 출력하고 1로 끝난다
 ```
 
 ## 소스 맵

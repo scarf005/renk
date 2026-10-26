@@ -58,10 +58,11 @@ See [Getting started](https://scarf005.github.io/rusk/getting-started.html) and 
 
 ## Formatter
 
-`renk fmt` checks that the file parses and trims trailing whitespace. It does not reflow code.
+`renk fmt` formats a file with rustfmt's layout; `--check` prints a diff and exits with 1 for unformatted files. [Details](https://scarf005.github.io/rusk/tools.html).
 
 ```sh
 renk fmt src/main.rk -o src/main.rk
+renk fmt --check src/*.rk
 ```
 
 ## Cargo wrapper
