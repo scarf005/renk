@@ -153,7 +153,18 @@ impl LanguageServer for Backend {
     }
 
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
+        let _sync = self.sync.lock().await;
         if let Some((rust_analyzer, uri)) = self.rust_analyzer(&params.text_document.uri).await {
+            // Its check reads the mirror, which files changed or added outside the editor miss.
+            if self
+                .rust_analyzer
+                .read()
+                .await
+                .as_ref()
+                .is_some_and(|workspace| Arc::ptr_eq(workspace, &rust_analyzer))
+            {
+                self.refresh_mirror().await;
+            }
             rust_analyzer
                 .notify(
                     "textDocument/didSave",
@@ -599,14 +610,8 @@ impl Backend {
                 &rust_path,
             ));
         } else {
-            let source_root_uri = source_root_uri(&params)?;
-            let rust_root_uri = target_renk_root_uri(&source_root_uri)?;
-            let source_root = source_root_uri.to_file_path().ok()?;
-            mirror_sources(
-                &source_root,
-                &rust_root_uri.to_file_path().ok()?,
-                &source_root,
-            );
+            let rust_root_uri = target_renk_root_uri(&source_root_uri(&params)?)?;
+            self.refresh_mirror().await;
             params = rust_initialize_params(params, &rust_root_uri);
         }
         let (notifications, mut received) = mpsc::unbounded_channel();
@@ -727,6 +732,16 @@ impl Backend {
         let source_root_uri = source_root_uri(params.as_ref()?)?;
         let rust_root_uri = target_renk_root_uri(&source_root_uri)?;
         rust_uri_for_renk_uri(uri, &source_root_uri, &rust_root_uri)
+    }
+
+    /// Brings the workspace mirror up to date with the workspace and the open documents.
+    async fn refresh_mirror(&self) {
+        let Origins {
+            documents, roots, ..
+        } = self.origins().await;
+        if let Some((source_root, rust_root)) = roots {
+            mirror_workspace(&source_root, &rust_root, &documents);
+        }
     }
 
     async fn copy_generated_cargo_manifests(&self, uri: &Url) {
@@ -1131,34 +1146,54 @@ fn write_if_changed(path: &Path, content: &str) {
     let _ = fs::write(path, content);
 }
 
-/// Mirrors the crates under `dir` of `source_root` at `rust_root` for `cargo check`: each Renk
-/// module's generated Rust, each hand-written Rust file, and each Cargo manifest. It skips
-/// `target/`, hidden directories, and Rust that renk generated next to its Renk module.
-fn mirror_sources(source_root: &Path, rust_root: &Path, dir: &Path) {
-    for path in fs::read_dir(dir)
+/// Brings the mirror at `rust_root` up to date with `source_root` and the open `documents`:
+/// prunes what is gone first, so a module's generated Rust replaces a removed file's copy.
+fn mirror_workspace(source_root: &Path, rust_root: &Path, documents: &HashMap<Url, String>) {
+    prune_mirror(source_root, rust_root, rust_root);
+    mirror_sources(source_root, rust_root, source_root, documents);
+}
+
+/// The files under `dir` and the directories to walk, without `target/`, hidden directories, or
+/// symlinked directories, which may lead back up.
+fn walk(dir: &Path) -> impl Iterator<Item = (PathBuf, bool)> {
+    fs::read_dir(dir)
         .into_iter()
         .flatten()
         .flatten()
-        .map(|entry| entry.path())
-    {
+        .filter_map(|entry| {
+            let directory = entry.file_type().ok()?.is_dir();
+            let path = entry.path();
+            let name = path.file_name()?.to_str()?;
+            (!directory || name != "target" && !name.starts_with('.')).then_some((path, directory))
+        })
+}
+
+/// Mirrors the crates under `dir` of `source_root` at `rust_root` for `cargo check`: each Renk
+/// module's generated Rust, of its text in `documents` when it is open, each hand-written Rust
+/// file, and each Cargo manifest. It skips what [`walk`] skips and Rust that renk generated next
+/// to its Renk module.
+fn mirror_sources(
+    source_root: &Path,
+    rust_root: &Path,
+    dir: &Path,
+    documents: &HashMap<Url, String>,
+) {
+    for (path, directory) in walk(dir) {
+        if directory {
+            mirror_sources(source_root, rust_root, &path, documents);
+            continue;
+        }
         let Ok(relative) = path.strip_prefix(source_root) else {
             continue;
         };
         let mirrored = rust_root.join(relative);
-        let name = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or_default();
-        if path.is_dir() {
-            if name != "target" && !name.starts_with('.') {
-                mirror_sources(source_root, rust_root, &path);
-            }
-            continue;
-        }
         match path.extension().and_then(|extension| extension.to_str()) {
             Some("rk") => {
                 if let Ok(uri) = Url::from_file_path(&path)
-                    && let Ok(text) = fs::read_to_string(&path)
+                    && let Some(text) = documents
+                        .get(&uri)
+                        .cloned()
+                        .or_else(|| fs::read_to_string(&path).ok())
                     && !is_script(&uri, &text)
                     && let Ok(generated) = generated(&uri, &text)
                 {
@@ -1172,10 +1207,35 @@ fn mirror_sources(source_root: &Path, rust_root: &Path, dir: &Path) {
                     write_if_changed(&mirrored, &text);
                 }
             }
-            _ if name == "Cargo.toml" => {
+            _ if path.ends_with("Cargo.toml") => {
                 copy_manifest_if_changed(&path, &mirrored, dir == source_root);
             }
             _ => {}
+        }
+    }
+}
+
+/// Removes the Rust files and Cargo manifests under `dir` of the mirror at `rust_root` that
+/// nothing in `source_root` mirrors to any more: a module's generated Rust stays while its Renk
+/// module or a Rust file is there, and a copy while its file is there.
+fn prune_mirror(source_root: &Path, rust_root: &Path, dir: &Path) {
+    for (path, directory) in walk(dir) {
+        if directory {
+            prune_mirror(source_root, rust_root, &path);
+            continue;
+        }
+        let Ok(relative) = path.strip_prefix(rust_root) else {
+            continue;
+        };
+        let source = source_root.join(relative);
+        let generated = || {
+            fs::read_to_string(&path).is_ok_and(|rust| rust.starts_with(GENERATED_HEADER))
+                && source.with_extension("rk").is_file()
+        };
+        let mirrored = path.extension().is_some_and(|extension| extension == "rs")
+            || path.ends_with("Cargo.toml");
+        if mirrored && !source.is_file() && !generated() {
+            let _ = fs::remove_file(&path);
         }
     }
 }
@@ -2853,7 +2913,7 @@ mod tests {
         fs::write(temp.join(".hidden/skip.rs"), "").unwrap();
         let rust_root = temp.join("target/renk");
 
-        mirror_sources(&temp, &rust_root, &temp);
+        mirror_sources(&temp, &rust_root, &temp, &HashMap::new());
 
         let util = fs::read_to_string(rust_root.join("src/util.rs")).unwrap();
         assert!(util.starts_with(GENERATED_HEADER) && util.contains("pub fn helper() -> i32 {"));
@@ -2908,6 +2968,44 @@ mod tests {
         );
         let outside = Location::new(Url::parse("file:///usr/lib/rust/lib.rs").unwrap(), range);
         assert_eq!(origins.location(outside.clone()), outside);
+        let _ = fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn mirror_refreshes_follow_the_workspace_but_not_symlinked_directories() {
+        let temp = std::env::temp_dir().join(format!("renk-lsp-refresh-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&temp);
+        fs::create_dir_all(temp.join("src")).unwrap();
+        fs::write(temp.join("Cargo.toml"), "[package]\nname = \"c\"\n").unwrap();
+        fs::write(temp.join("src/util.rk"), "pub fn helper() -> i32 = 1\n").unwrap();
+        fs::write(temp.join("src/extra.rs"), "pub const EXTRA: i32 = 2;\n").unwrap();
+        fs::write(temp.join("src/swapped.rs"), "pub fn hand() {}\n").unwrap();
+        std::os::unix::fs::symlink(temp.join("src"), temp.join("src/cycle")).unwrap();
+        let rust_root = temp.join("target/renk");
+        mirror_workspace(&temp, &rust_root, &HashMap::new());
+        assert!(rust_root.join("src/util.rs").is_file());
+        assert!(rust_root.join("src/extra.rs").is_file());
+        assert!(!rust_root.join("src/cycle").exists());
+        fs::create_dir_all(rust_root.join("target/debug")).unwrap();
+        fs::write(rust_root.join("target/debug/build.rs"), "").unwrap();
+
+        fs::write(temp.join("src/util.rk"), "pub fn helper() -> i32 = 3\n").unwrap();
+        fs::write(temp.join("src/fresh.rs"), "pub fn fresh() {}\n").unwrap();
+        fs::remove_file(temp.join("src/extra.rs")).unwrap();
+        fs::remove_file(temp.join("src/swapped.rs")).unwrap();
+        fs::write(temp.join("src/swapped.rk"), "pub fn swapped() = ()\n").unwrap();
+        fs::write(temp.join("src/open.rk"), "pub fn saved() = ()\n").unwrap();
+        let open = Url::from_file_path(temp.join("src/open.rk")).unwrap();
+        let documents = HashMap::from([(open, "pub fn unsaved() = ()\n".to_string())]);
+        mirror_workspace(&temp, &rust_root, &documents);
+        let mirrored = |path: &str| fs::read_to_string(rust_root.join(path)).unwrap_or_default();
+        assert!(mirrored("src/util.rs").contains("3"));
+        assert!(mirrored("src/fresh.rs").contains("fn fresh()"));
+        assert!(!rust_root.join("src/extra.rs").exists());
+        assert!(mirrored("src/swapped.rs").contains("fn swapped()"));
+        assert!(mirrored("src/open.rs").contains("fn unsaved()"));
+        assert!(rust_root.join("Cargo.toml").is_file());
+        assert!(rust_root.join("target/debug/build.rs").is_file());
         let _ = fs::remove_dir_all(temp);
     }
 
