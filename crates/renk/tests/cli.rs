@@ -1,6 +1,6 @@
 use std::{
     env, fs,
-    io::Write,
+    io::{Read, Write},
     path::{Path, PathBuf},
     process::{Command, Output, Stdio},
 };
@@ -562,6 +562,43 @@ fn cargo_wrapper_run_shows_a_prompt_without_its_newline() {
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
     assert_eq!(stdout.collect::<String>(), "hi Ada\n");
     let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn cargo_wrapper_run_ends_when_its_reader_closes() {
+    let dir = cargo_project(
+        "cargo-pipe",
+        "fn main():\n    loop:\n        println!(\"y\")\n",
+    );
+    fs::remove_file(dir.join("src/other.rs")).unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_renk"))
+        .args(["run", "-q"])
+        .current_dir(&dir)
+        .env("CARGO_TARGET_DIR", dir.join("target"))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    // Like `renk run -q | head -1`.
+    let mut first = [0; 2];
+    child.stdout.take().unwrap().read_exact(&mut first).unwrap();
+    assert_eq!(&first, b"y\n");
+    assert!(exits_within(&mut child, 10), "renk kept running");
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Whether `child` exits within `seconds`; it is killed if not.
+fn exits_within(child: &mut std::process::Child, seconds: u64) -> bool {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(seconds);
+    while std::time::Instant::now() < deadline {
+        if child.try_wait().unwrap().is_some() {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    false
 }
 
 /// Reads `stream` until its text so far is `expected`, failing after two minutes, and returns the

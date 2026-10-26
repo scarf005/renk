@@ -614,3 +614,38 @@ fn script_prompts_on_stderr_show_without_their_newline() {
     );
     let _ = fs::remove_dir_all(dir);
 }
+
+#[test]
+fn script_ends_when_the_reader_of_its_stderr_closes() {
+    use std::io::BufRead;
+
+    let dir = temp_dir("script-pipe");
+    let script = dir.join("endless.rk");
+    fs::write(&script, "loop:\n    eprintln!(\"y\")\n").unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_renk"))
+        .arg(&script)
+        .env("XDG_CACHE_HOME", dir.join("cache"))
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    // Like `renk endless.rk 2>&1 >/dev/null | head -1`, past the build's warnings.
+    let stderr = std::io::BufReader::new(child.stderr.take().unwrap());
+    assert!(stderr.lines().map_while(Result::ok).any(|line| line == "y"));
+    assert!(exits_within(&mut child, 10), "renk kept running");
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Whether `child` exits within `seconds`; it is killed if not.
+fn exits_within(child: &mut std::process::Child, seconds: u64) -> bool {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(seconds);
+    while std::time::Instant::now() < deadline {
+        if child.try_wait().unwrap().is_some() {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    false
+}
