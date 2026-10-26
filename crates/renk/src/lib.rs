@@ -5347,7 +5347,8 @@ fn named_format_argument(argument: &str) -> Option<&str> {
 
 /// `"{} {:?}", a, b.c` as `"{a} {b.c:?}"` when each argument fills one placeholder, in order, so
 /// the inline form evaluates the same expressions in the same order. Arguments that would be hard
-/// to read or to split back out of a placeholder (literals, blocks, closures, `:`) stay positional.
+/// to read or to split back out of a placeholder (literals, blocks, closures, `:`) stay positional;
+/// strings inside an argument, as in `f("a")`, keep their plain quotes.
 fn inline_format_arguments(arguments: &str, prefix: usize) -> Option<String> {
     let arguments = split_macro_arguments(arguments, true);
     let literal = arguments.get(prefix)?.trim();
@@ -5360,7 +5361,8 @@ fn inline_format_arguments(arguments: &str, prefix: usize) -> Option<String> {
     if values.is_empty()
         || values.iter().any(|value| {
             value.is_empty()
-                || value.contains(['"', '\'', '{', '}', '|', '$', '\n'])
+                || opaque_span_end(&value.chars().collect::<Vec<_>>(), 0).is_some()
+                || value.contains(['{', '}', '|', '$', '\n'])
                 || value.replace("::", "").contains(':')
                 || named_format_argument(value).is_some()
         })
@@ -5431,9 +5433,19 @@ fn inline_format_arguments(arguments: &str, prefix: usize) -> Option<String> {
 }
 
 /// Generated Rust with format arguments inlined, so `"{}", a.b` and `"{a.b}"` compare equal; line
-/// breaks inside an inlined invocation are kept so lines still align with the source map.
+/// breaks inside an inlined invocation are kept so lines still align with the source map. An
+/// argument with a quote, which Renk always lowers back to a positional one, stays positional so
+/// the text still lexes as Rust.
 fn canonical_format_macros(rust: &str) -> String {
     rewrite_format_macros(rust, |arguments, prefix| {
+        let values = split_macro_arguments(arguments, true);
+        if values
+            .iter()
+            .skip(prefix + 1)
+            .any(|value| value.contains(['"', '\'']))
+        {
+            return None;
+        }
         let inlined = inline_format_arguments(arguments, prefix)?;
         Some(inlined + &"\n".repeat(arguments.matches('\n').count()))
     })
