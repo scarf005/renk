@@ -691,6 +691,108 @@ fn script_output_keeps_its_order_on_one_stream() {
     let _ = fs::remove_dir_all(dir);
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn killing_renk_ends_its_script() {
+    use std::io::BufRead;
+
+    let dir = temp_dir("script-orphan");
+    let script = dir.join("sleeper.rk");
+    fs::write(
+        &script,
+        "println!(\"{}\", std.process.id())\nstd.thread.sleep(std.time.Duration.from_secs(30))\n",
+    )
+    .unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_renk"))
+        .arg(&script)
+        .env("XDG_CACHE_HOME", dir.join("cache"))
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut pid = String::new();
+    std::io::BufReader::new(child.stdout.take().unwrap())
+        .read_line(&mut pid)
+        .unwrap();
+    child.kill().unwrap();
+    child.wait().unwrap();
+    let stat = format!("/proc/{}/stat", pid.trim());
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    // The script is gone, or dead and not yet reaped.
+    while fs::read_to_string(&stat)
+        .is_ok_and(|stat| !stat.rsplit(") ").next().unwrap().starts_with('Z'))
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the script outlived renk"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn script_terminal_follows_the_window_size() {
+    use std::{
+        io::{Read, Write},
+        os::fd::{AsRawFd, FromRawFd, OwnedFd},
+    };
+
+    let dir = temp_dir("script-resize");
+    let script = dir.join("size.rk");
+    fs::write(
+        &script,
+        "fn size() -> String:\n    let output = std.process.Command.new(\"stty\").args([\"-F\", \"/dev/stderr\", \"size\"]).stderr(std.process.Stdio.inherit()).output().unwrap()\n    String.from_utf8(output.stdout).unwrap()\n\nprint!(\"{}\", size())\nstd.io.stdin().read_line(&mut String.new())?\nprint!(\"{}\", size())\n",
+    )
+    .unwrap();
+    let size = |rows, cols| libc::winsize {
+        ws_row: rows,
+        ws_col: cols,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
+    let (mut parent, mut child) = (0, 0);
+    // SAFETY: `openpty` gets valid pointers and opens two descriptors only the files own.
+    let (mut parent, child) = unsafe {
+        let opened = libc::openpty(
+            &mut parent,
+            &mut child,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &size(24, 80),
+        );
+        assert_eq!(opened, 0);
+        (fs::File::from_raw_fd(parent), OwnedFd::from_raw_fd(child))
+    };
+    let mut renk = Command::new(env!("CARGO_BIN_EXE_renk"))
+        .arg(&script)
+        .env("XDG_CACHE_HOME", dir.join("cache"))
+        .stdin(std::process::Stdio::piped())
+        .stdout(child.try_clone().unwrap())
+        .stderr(child)
+        .spawn()
+        .unwrap();
+    let mut output = String::new();
+    let mut buffer = [0; 1024];
+    while !output.contains("24 80") {
+        let read = parent.read(&mut buffer).unwrap();
+        output += &String::from_utf8_lossy(&buffer[..read]);
+    }
+    // SAFETY: the call gets a valid pointer.
+    unsafe { libc::ioctl(parent.as_raw_fd(), libc::TIOCSWINSZ, &size(40, 100)) };
+    // renk copies the size within 50 ms.
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    renk.stdin.take().unwrap().write_all(b"\n").unwrap();
+    let mut rest = Vec::new();
+    // The terminal fails to read once renk and the script close it.
+    let _ = parent.read_to_end(&mut rest);
+    renk.wait().unwrap();
+    let rest = String::from_utf8_lossy(&rest);
+    assert!(rest.contains("40 100"), "{output:?} {rest:?}");
+    let _ = fs::remove_dir_all(dir);
+}
+
 /// Whether `child` exits within `seconds`; it is killed if not.
 fn exits_within(child: &mut std::process::Child, seconds: u64) -> bool {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(seconds);
