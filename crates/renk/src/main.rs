@@ -361,9 +361,11 @@ fn run_cargo_wrapper(cargo_args: Vec<OsString>) -> CliResult<i32> {
     let runs = matches!(name, Some("run" | "test" | "bench"));
     // libtest prints the captured output of a failed test, panics included, on stdout.
     let rewrite_stdout = matches!(name, Some("test" | "bench"));
+    let workspace = workspace_root(&cargo_args[..end]).unwrap_or(root);
     let (format, cargo_args) = message_format(cargo_args, command, io::stderr().is_terminal());
     let mapper = SourceMapper {
         files: &files,
+        root: &workspace,
         script: None,
         styled: format.styled,
     };
@@ -410,6 +412,33 @@ fn run_cargo_wrapper(cargo_args: Vec<OsString>) -> CliResult<i32> {
         Some(&mut stdout),
         runs.then_some(&mut stderr as Relay),
     )
+}
+
+/// The root of the workspace that cargo, given `args`, builds in, which rustc names files relative
+/// to.
+fn workspace_root(args: &[OsString]) -> Option<PathBuf> {
+    let manifest = args
+        .iter()
+        .enumerate()
+        .find_map(|(index, arg)| match arg.to_str()? {
+            "--manifest-path" => args.get(index + 1).cloned(),
+            flag => flag.strip_prefix("--manifest-path=").map(OsString::from),
+        });
+    let output = Command::new("cargo")
+        .args(["locate-project", "--workspace", "--message-format", "plain"])
+        .args(
+            manifest
+                .iter()
+                .flat_map(|path| [OsString::from("--manifest-path"), path.clone()]),
+        )
+        .stderr(process::Stdio::null())
+        .output()
+        .ok()?;
+    let manifest = PathBuf::from(String::from_utf8(output.stdout).ok()?.trim_end());
+    output
+        .status
+        .success()
+        .then(|| manifest.parent().map(Path::to_path_buf))?
 }
 
 /// How the user asked cargo to print diagnostics, read from the `--message-format` flags.
@@ -514,6 +543,7 @@ fn run_script(
     }];
     let mapper = SourceMapper {
         files: &files,
+        root: rust_path.parent().unwrap_or(&rust_path),
         script: Some(&shown),
         styled: io::stderr().is_terminal(),
     };
@@ -794,6 +824,8 @@ impl Generated {
 /// columns of their Renk sources.
 struct SourceMapper<'a> {
     files: &'a [Generated],
+    /// The directory rustc ran in, which the relative file names it prints start from.
+    root: &'a Path,
     /// The script being built, which `renk add` edits.
     script: Option<&'a str>,
     styled: bool,
@@ -805,12 +837,10 @@ fn text(value: &serde_json::Value) -> &str {
 }
 
 impl SourceMapper<'_> {
-    /// The generated file rustc names `name`, relative to the workspace or absolute.
+    /// The generated file rustc names `name`, relative to `root` or absolute.
     fn file(&self, name: &str) -> Option<&Generated> {
-        let name = Path::new(name.strip_prefix("./").unwrap_or(name));
-        self.files
-            .iter()
-            .find(|file| !name.as_os_str().is_empty() && file.rust_path.ends_with(name))
+        let path = self.root.join(name);
+        self.files.iter().find(|file| file.rust_path == path)
     }
 
     /// Maps the spans of a rustc diagnostic in generated files to their Renk sources and renders
