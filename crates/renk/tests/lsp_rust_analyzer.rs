@@ -147,6 +147,41 @@ impl Session {
         }
     }
 
+    /// The first cargo check errors of `uri` after saving `saved`, which is saved again every five
+    /// seconds, as rust-analyzer checks on a save once it has loaded the crate.
+    fn check_errors(&mut self, saved: &str, uri: &str) -> Vec<Value> {
+        let deadline = Instant::now() + Duration::from_secs(120);
+        loop {
+            assert!(Instant::now() < deadline, "no cargo check errors arrived");
+            self.notify(
+                "textDocument/didSave",
+                json!({"textDocument": {"uri": saved}}),
+            );
+            let waited = Instant::now() + Duration::from_secs(5);
+            while let Some(left) = waited.checked_duration_since(Instant::now()) {
+                let Ok(message) = self.messages.recv_timeout(left) else {
+                    break;
+                };
+                if message["method"] != "textDocument/publishDiagnostics"
+                    || message["params"]["uri"] != uri
+                {
+                    continue;
+                }
+                let diagnostics = message["params"]["diagnostics"].as_array().unwrap().clone();
+                // rust-analyzer may report a type error too, but only cargo check is "rustc".
+                let errors = diagnostics
+                    .into_iter()
+                    .filter(|diagnostic| {
+                        diagnostic["severity"] == 1 && diagnostic["source"] == "rustc"
+                    })
+                    .collect::<Vec<_>>();
+                if !errors.is_empty() {
+                    return errors;
+                }
+            }
+        }
+    }
+
     fn change(&mut self, path: &str, version: i32, text: &str) {
         let uri = self.uri(path);
         self.notify(
@@ -202,36 +237,7 @@ fn cargo_check_type_errors_appear_at_the_renk_line_after_save() {
         return;
     };
     let uri = session.uri("src/main.rk");
-
-    // rust-analyzer checks on a save once it has loaded the crate.
-    let deadline = Instant::now() + Duration::from_secs(120);
-    let errors = 'saved: loop {
-        assert!(Instant::now() < deadline, "no cargo check errors arrived");
-        session.notify(
-            "textDocument/didSave",
-            json!({"textDocument": {"uri": uri}}),
-        );
-        let waited = Instant::now() + Duration::from_secs(5);
-        while let Some(left) = waited.checked_duration_since(Instant::now()) {
-            let Ok(message) = session.messages.recv_timeout(left) else {
-                break;
-            };
-            if message["method"] != "textDocument/publishDiagnostics"
-                || message["params"]["uri"] != uri
-            {
-                continue;
-            }
-            let diagnostics = message["params"]["diagnostics"].as_array().unwrap().clone();
-            // rust-analyzer may report the type error too, but only cargo check is "rustc".
-            let errors = diagnostics
-                .into_iter()
-                .filter(|diagnostic| diagnostic["severity"] == 1 && diagnostic["source"] == "rustc")
-                .collect::<Vec<_>>();
-            if !errors.is_empty() {
-                break 'saved errors;
-            }
-        }
-    };
+    let errors = session.check_errors(&uri, &uri);
 
     // The hand-written and Renk modules are in the mirror, so the type error is the only one.
     assert_eq!(errors.len(), 1, "{errors:?}");
@@ -246,6 +252,28 @@ fn cargo_check_type_errors_appear_at_the_renk_line_after_save() {
         json!({"uri": uri, "range": range(9, 15, 17)}),
         "{error}"
     );
+}
+
+#[test]
+fn cargo_check_on_save_reads_modules_changed_outside_the_editor() {
+    let Some(mut session) = Session::open("lsp-check-disk", MAIN) else {
+        return;
+    };
+    let (main, util) = (session.uri("src/main.rk"), session.uri("src/util.rk"));
+    // rust-analyzer has started, so the mirror has been written.
+    session.request_until(
+        "textDocument/hover",
+        json!({"textDocument": {"uri": main}, "position": position(6, 13)}),
+        |hover| !hover.is_null(),
+    );
+    fs::write(
+        session.dir.join("src/util.rk"),
+        "pub fn helper() -> i32 = \"text\"\n",
+    )
+    .unwrap();
+    let errors = session.check_errors(&main, &util);
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert_eq!(errors[0]["range"]["start"]["line"], 0, "{errors:?}");
 }
 
 #[test]
