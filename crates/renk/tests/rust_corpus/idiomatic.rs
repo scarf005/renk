@@ -97,6 +97,20 @@ fn own_line_tail<T: Iterator>(mut items: T) -> Option<T::Item>
     items.next()
 }
 
+fn quoted_args(out: &mut impl fmt::Write, name: &str) -> fmt::Result {
+    println!("{}", name.replace("a", "b, c"));
+    println!("{{{}}} {:?}", name.len(), name.split(',').count());
+    println!("{}", name.trim_start_matches("\""));
+    println!("{}", name.trim_matches('"'));
+    println!("{} {x}", name.replace("a", "b"), x = 1);
+    println!("{}", "literal");
+    println!(r#"{} "q""#, name.replace("-", "\""));
+    write!(out, "{}", String::from("a, b"))?;
+    let _ = dbg!(name.replace("a", "b"));
+    let _ = vec![name.replace("a", "b")];
+    Ok(())
+}
+
 fn main() {
     let mut counter = Counter::new();
     for word in WORDS.iter() {
@@ -109,4 +123,5 @@ fn main() {
     let _ = read("/nonexistent");
     let _ = long_body(&[1]);
     println!("{} {:?}", own_line_body(1), own_line_tail([2].iter()));
+    let _ = quoted_args(&mut String::new(), "a-b");
 }
