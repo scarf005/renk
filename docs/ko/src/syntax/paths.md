@@ -6,7 +6,7 @@
 패턴으로 묶인 값이면 `a.b`는 필드나 메서드다. 그 밖의 `a`는 타입, 모듈, 크레이트의 이름이므로
 `a.b`는 경로다.
 
-| Rusk | Rust |
+| Renk | Rust |
 | --- | --- |
 | `std.io.Read` | `std::io::Read` |
 | `Foo.new()` | `Foo::new()` |
@@ -28,7 +28,7 @@
 
 제네릭 매개변수와 인자는 `[T]`를 쓴다:
 
-```rsk
+```rk
 pub struct Boxed[T]:
     pub value: T
 
@@ -40,7 +40,7 @@ pub fn parse(raw: &str) -> Result[Boxed[i32], std.num.ParseIntError]:
     Ok(Boxed.new(value))
 ```
 
-| Rusk | Rust |
+| Renk | Rust |
 | --- | --- |
 | `values.iter().collect[Vec[i32]]()` | `values.iter().collect::<Vec<i32>>()` |
 | `size_of[T]()` | `size_of::<T>()` |

@@ -1,0 +1,12 @@
+// Renk has Rust's tokens plus `then`, so its grammar extends the bundled Rust one. mdBook
+// highlights before this script runs and leaves blocks in unknown languages untouched.
+hljs.registerLanguage("rk", (hljs) => {
+  const rust = hljs.getLanguage("rust").rawDefinition(hljs)
+  return {
+    ...rust,
+    name: "Renk",
+    aliases: ["renk"],
+    keywords: { ...rust.keywords, keyword: `${rust.keywords.keyword} then` },
+  }
+})
+document.querySelectorAll("code.language-rk").forEach((block) => hljs.highlightBlock(block))

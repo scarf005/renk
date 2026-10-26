@@ -1,6 +1,6 @@
 {
   "tasks": {
-    "wasmbuild": "cd .. && deno run -A jsr:@deno/wasmbuild@0.19.3 -p rusk --out web/src/wasm --inline --skip-opt",
+    "wasmbuild": "cd .. && deno run -A jsr:@deno/wasmbuild@0.19.3 -p renk --out web/src/wasm --inline --skip-opt",
     "dev": "deno task wasmbuild && deno run -A dev.ts",
     "build": "deno task wasmbuild && deno run -A --node-modules-dir npm:vite build",
     "test": "deno task wasmbuild && deno test src/",

@@ -1,6 +1,6 @@
 # 문법
 
-Rusk는 네 군데에서 Rust와 다르다:
+Renk는 네 군데에서 Rust와 다르다:
 
 - [블록](blocks.md)은 `:`로 열고 들여쓰기로 닫는다. 문장은 줄 끝에서 끝난다.
 - [표현식](expressions.md)에 `if c then a else b`가 있고, `if`, `match`, 클로저 블록을 값 자리에

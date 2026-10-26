@@ -2,11 +2,11 @@ import { useEffect, useRef } from "preact/hooks"
 import { computed, signal, useSignal } from "@preact/signals"
 import { useLocation } from "wouter-preact"
 import {
-  convert_rust_to_rusk,
-  format_rusk,
+  convert_rust_to_renk,
+  format_renk,
   transpile_syntax_tree_json,
   transpile_to_rust,
-} from "./wasm/rusk.js"
+} from "./wasm/renk.js"
 import { InputEditor, OutputDisplay } from "./Editor.tsx"
 import { Header, Layout, Main, Panel } from "./Layout.tsx"
 import {
@@ -44,7 +44,7 @@ const BYTES_PER_KIB = 1024
 const RUN_SOURCE_LIMIT_KIB = 64
 const RUN_SOURCE_LIMIT_BYTES = RUN_SOURCE_LIMIT_KIB * BYTES_PER_KIB
 const RUN_SOURCE_LIMIT_LABEL = `${RUN_SOURCE_LIMIT_KIB} KiB`
-const AUTO_RUN_STORAGE_KEY = "rusk:auto-run"
+const AUTO_RUN_STORAGE_KEY = "renk:auto-run"
 const AUTO_RUN_DELAY_MS = 1_000
 
 const editSide = signal<EditSide>("source")
@@ -65,21 +65,21 @@ const converted = computed(() => {
       : transpile_to_rust(sourceCode.value)
     const rustMs = performance.now() - rustStarted
 
-    const ruskStarted = performance.now()
-    const rusk = editSide.value === "rust"
-      ? convert_rust_to_rusk(rust)
+    const renkStarted = performance.now()
+    const renk = editSide.value === "rust"
+      ? convert_rust_to_renk(rust)
       : sourceCode.value
-    const ruskMs = performance.now() - ruskStarted
+    const renkMs = performance.now() - renkStarted
 
     const syntaxTreeStarted = performance.now()
-    const syntaxTree = transpile_syntax_tree_json(rusk)
+    const syntaxTree = transpile_syntax_tree_json(renk)
     const syntaxTreeMs = performance.now() - syntaxTreeStarted
     return {
       rust,
-      rusk,
+      renk,
       syntaxTree,
       rustMs,
-      ruskMs,
+      renkMs,
       syntaxTreeMs,
       error: "",
     }
@@ -87,10 +87,10 @@ const converted = computed(() => {
     const elapsedMs = performance.now() - started
     return {
       rust: "",
-      rusk: "",
+      renk: "",
       syntaxTree: "",
       rustMs: elapsedMs,
-      ruskMs: elapsedMs,
+      renkMs: elapsedMs,
       syntaxTreeMs: elapsedMs,
       error: stringifyError(error),
     }
@@ -157,7 +157,7 @@ export function App() {
     editSide.value = "rust"
     rustCode.value = value
     try {
-      sourceCode.value = convert_rust_to_rusk(value)
+      sourceCode.value = convert_rust_to_renk(value)
     } catch (_) {
       // Keep the last source panel text while the Rust panel is invalid.
     }
@@ -176,7 +176,7 @@ export function App() {
 
   useEffect(() => {
     const path = location === "/" ? globalThis.location.pathname : location
-    const ruskName = path === "/"
+    const renkName = path === "/"
       ? DEFAULT_EXAMPLE_NAME
       : exampleNameFromPath(path)
 
@@ -185,12 +185,12 @@ export function App() {
       return
     }
 
-    if (ruskName) {
+    if (renkName) {
       if (
-        selectedExample.value === ruskName &&
-        sourceCode.value === exampleSource(ruskName)
+        selectedExample.value === renkName &&
+        sourceCode.value === exampleSource(renkName)
       ) return
-      showExample(ruskName)
+      showExample(renkName)
       return
     }
 
@@ -246,7 +246,7 @@ export function App() {
     setTimeout(() => copied.value = false, 900)
   }
 
-  const formatInput = () => setSourceCode(format_rusk(sourceCode.value))
+  const formatInput = () => setSourceCode(format_renk(sourceCode.value))
 
   const runRust = async () => {
     if (converted.value.error || runState.value === "running") return
@@ -304,7 +304,7 @@ export function App() {
       <Header>
         <div class="flex-none flex items-center px-4 py-3 border-b-2 lg:border-b-0 lg:border-r-2 border-black min-w-[200px] bg-black text-white">
           <h1 class="text-lg font-bold tracking-tighter uppercase">
-            RUSK DEMO
+            RENK DEMO
           </h1>
         </div>
 
@@ -385,7 +385,7 @@ export function App() {
 
       <Main>
         <Panel
-          title={`RUSK (${stats.value.sourceLines} lines)`}
+          title={`RENK (${stats.value.sourceLines} lines)`}
           class="w-full md:w-1/2 h-1/2 md:h-full"
           action={
             <button
@@ -400,7 +400,7 @@ export function App() {
           <InputEditor
             editorRef={sourceRef}
             value={sourcePanelText.value}
-            language="rusk"
+            language="renk"
             onChange={setSourceCode}
             onScroll={() => handleScroll("source")}
           />

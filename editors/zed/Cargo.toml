@@ -1,12 +1,12 @@
 [package]
-name = "zed_rusk"
+name = "zed_renk"
 version = "0.1.0"
 edition = "2024"
 publish = false
 license = "GPL-3.0-or-later"
 
 [lib]
-path = "src/rusk.rs"
+path = "src/renk.rs"
 crate-type = ["cdylib"]
 
 [dependencies]

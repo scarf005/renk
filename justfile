@@ -1,7 +1,7 @@
 default:
     @just --list
 
-# Start the Rusk web demo from the repository root.
+# Start the Renk web demo from the repository root.
 web:
     cd web && deno task dev
 

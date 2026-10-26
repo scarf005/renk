@@ -1,11 +1,11 @@
 [book]
-title = "Rusk"
+title = "Renk"
 authors = ["scarf"]
 language = "ko"
 src = "src"
 
 [output.html]
-additional-js = ["rusk-highlight.js"]
+additional-js = ["renk-highlight.js"]
 git-repository-url = "https://github.com/scarf005/rusk"
 edit-url-template = "https://github.com/scarf005/rusk/edit/main/docs/ko/{path}"
 

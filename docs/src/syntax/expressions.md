@@ -4,7 +4,7 @@
 
 `if condition then a else b` is a one-line `if` expression:
 
-```rsk
+```rk
 pub fn clamp(total: i32) -> i32 = if total < 0 then 0 else total
 ```
 
@@ -13,7 +13,7 @@ An `if` that opens blocks can stand where a value goes, as in `let x = if c:`, `
 `if`'s indent. So can a `match`, as in `let x = match y:`, `.filter(|v| match v:`, or
 `[match x:`, and `else:` branches after `f(if c {`.
 
-```rsk
+```rk
 pub fn sign(value: i32) -> i32:
     let sign = if value > 0:
         1
@@ -26,7 +26,7 @@ pub fn sign(value: i32) -> i32:
 
 A `}` line at the head's indent continues the value with an operator:
 
-```rsk
+```rk
 pub fn bucket(value: i32) -> i32:
     let base = match value:
         0 => 1
@@ -37,7 +37,7 @@ pub fn bucket(value: i32) -> i32:
 
 ## `let ... else`
 
-```rsk
+```rk
 pub fn first(values: &[i32]) -> i32:
     let [first, ..] = values else:
         return 0
@@ -50,7 +50,7 @@ A closure head can open a block, as in `let f = |n: u8| -> String:`, `move ||:`,
 `xs.sort_by(|a, b|:`. A block whose head leaves `(` or `[` open ends with a line
 at the head's indent that closes them, and the rest of that line continues the expression:
 
-```rsk
+```rk
 pub fn sorted(mut values: Vec[i32]) -> Vec[i32]:
     values.sort_by(|a, b|:
         b.cmp(a)
@@ -68,7 +68,7 @@ its suffix after a `{` block, a trailing `match` head, or the last `else` of a c
 ends with `{`. A last `else` on one line ends the chain with what closes the group, as in
 `else { floor })`:
 
-```rsk
+```rk
 pub fn raised(values: &[i32], floor: i32) -> i32:
     values.iter().map(|value| if *value > floor:
         *value
@@ -77,7 +77,7 @@ pub fn raised(values: &[i32], floor: i32) -> i32:
 
 A closing line can open the next block argument:
 
-```rsk
+```rk
 pub fn size(value: Option[usize]) -> usize:
     value.map_or_else(||:
         0
@@ -91,7 +91,7 @@ pub fn size(value: Option[usize]) -> usize:
 A match arm body that opens a block owns the indented lines after it, as in
 `Some(x) => match x:`, `Ok(v) => unsafe:`, or `None => Ok(unsafe:`.
 
-```rsk
+```rk
 pub fn describe(value: Option[i32]) -> &'static str:
     match value:
         Some(x) => match x:

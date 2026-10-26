@@ -6,7 +6,7 @@ std 포맷 매크로에는 인라인 표현식을 쓸 수 있다. `{expr}`와 `{
 자리표시자 안의 문자열은 `"{tags.join(\", \")}"`처럼 리터럴의 이스케이프로 쓰고, raw 리터럴에서는
 `r#"{v.join("-")}"#`처럼 따옴표를 그대로 쓴다.
 
-```rsk
+```rk
 pub fn report(name: &str, values: &[i32], tags: &[&str]):
     println!("{name} has {values.len()} values")
     println!("{tags.join(\", \")}")
@@ -28,7 +28,7 @@ pub fn report(name: &str, values: &[i32], tags: &[&str]) {
 
 적용되는 매크로는 `format!`, `print!`, `println!`, `eprint!`, `eprintln!`, `write!`, `writeln!`,
 `panic!`, `format_args!`, `todo!`, `unreachable!`, `unimplemented!`이다. 이 매크로들과 `assert!`,
-`assert_eq!`, `assert_ne!`, 이들의 `debug_` 형태, `dbg!`, `vec!`, `matches!`의 인자는 Rusk
+`assert_eq!`, `assert_ne!`, 이들의 `debug_` 형태, `dbg!`, `vec!`, `matches!`의 인자는 Renk
 표현식이다: `vec![Foo.new(); 3]`은 `vec![Foo::new(); 3]`이다.
 
 `log::info!` 같은 다른 매크로는 `#[...]`, `#![...]` 속성의 내용과 마찬가지로 해석하지 않는 Rust
@@ -38,7 +38,7 @@ pub fn report(name: &str, values: &[i32], tags: &[&str]) {
 
 arm은 들여쓰기로 구분한다. 패턴과 본문은 Rust 토큰이며 쓴 그대로 유지된다.
 
-```rsk
+```rk
 macro_rules! make_message:
     ($name:expr) => format!("hello {}", $name)
     ($name:expr, $greeting:expr) =>:

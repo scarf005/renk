@@ -1,6 +1,6 @@
 # Limits
 
-Rusk is a syntax front end. It reads text, not types, so:
+Renk is a syntax front end. It reads text, not types, so:
 
 - `a.b` is decided by name binding, not by type. A misread name usually fails to compile. Use
   `foo::new()` to force a path, or `(Unit).method()` to force a value receiver.
@@ -12,7 +12,7 @@ Rusk is a syntax front end. It reads text, not types, so:
 
 ## Conversion gaps
 
-`rusk from-rust` keeps the compiled meaning but not always the exact text:
+`renk from-rust` keeps the compiled meaning but not always the exact text:
 
 - A unit or diverging expression that ends a block can gain a `;`, as after `panic!()` or a
   `match` statement whose arms are expressions such as `None => v.clear()`.

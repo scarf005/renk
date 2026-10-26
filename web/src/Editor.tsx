@@ -39,11 +39,11 @@ import {
   searchKeymap,
 } from "@codemirror/search"
 
-type CodeLanguage = "rusk" | "rust" | "json" | "text"
+type CodeLanguage = "renk" | "rust" | "json" | "text"
 
-type RuskStringFrame = { depth: number; interpolated: boolean }
-type RuskState = {
-  strings: RuskStringFrame[]
+type RenkStringFrame = { depth: number; interpolated: boolean }
+type RenkState = {
+  strings: RenkStringFrame[]
   interpolationDepth: number
   pendingFormatString: boolean
 }
@@ -96,8 +96,8 @@ const tokenRustInterpolation = (stream: StringStream): string | null => {
   return null
 }
 
-const rusk = StreamLanguage.define<RuskState>({
-  name: "rusk",
+const renk = StreamLanguage.define<RenkState>({
+  name: "renk",
   languageData: {
     commentTokens: { line: "//", block: { open: "/*", close: "*/" } },
   },
@@ -212,7 +212,7 @@ const languageExtension = (language: CodeLanguage): Extension => {
   if (language === "rust") return rust()
   if (language === "json") return json()
   if (language === "text") return []
-  return rusk
+  return renk
 }
 
 const extensions = ({
@@ -377,7 +377,7 @@ class CodeMirror extends Component<CodeMirrorProps> {
 
 interface InputEditorProps {
   value: string
-  language?: "rusk" | "rust"
+  language?: "renk" | "rust"
   onChange: (value: string) => void
   onScroll?: () => void
   editorRef?: Ref<HTMLElement>
@@ -385,7 +385,7 @@ interface InputEditorProps {
 
 export const InputEditor = ({
   value,
-  language = "rusk",
+  language = "renk",
   onChange,
   onScroll,
   editorRef,
@@ -402,7 +402,7 @@ export const InputEditor = ({
 
 interface OutputDisplayProps {
   value: string
-  language: "rusk" | "rust" | "json" | "text"
+  language: "renk" | "rust" | "json" | "text"
   error?: string
   onScroll?: () => void
   outputRef?: Ref<HTMLElement>

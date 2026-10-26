@@ -4,9 +4,9 @@
 
 `:`로 끝나는 줄은 그 뒤에 오는 더 깊이 들여쓴 줄들을 담는 블록을 연다. `struct`, `enum`, `union`,
 `trait`, `impl`, `mod`, `macro_rules!`, `fn`, `if`, `else`, `match`, `loop`, `while`, `for`,
-`unsafe`, `async`에 쓸 수 있다. 중괄호, 필드와 arm 뒤의 `,`, 문장 뒤의 `;`는 Rusk가 써 넣는다.
+`unsafe`, `async`에 쓸 수 있다. 중괄호, 필드와 arm 뒤의 `,`, 문장 뒤의 `;`는 Renk가 써 넣는다.
 
-```rsk
+```rk
 pub enum Shape:
     Circle(f64)
     Square(f64)
@@ -27,7 +27,7 @@ pub fn area(shape: &Shape) -> f64:
 남겨 둘 수 있다. 닫는 `}`는 필요 없다. Rust `{` 블록은 어디서나 쓸 수 있으므로, 예를 들어
 한 줄짜리 본문을 그대로 둘 수 있다:
 
-```rsk
+```rk
 pub fn main():
     let value = { 1 + 2 }
     if value > 2 { println!("big") }
@@ -35,14 +35,14 @@ pub fn main():
 
 ## 세미콜론
 
-문장은 줄 끝에서 끝난다. Rusk는 시그니처를 보고 `;`를 추론한다. 값을 반환하는 함수는 마지막
+문장은 줄 끝에서 끝난다. Renk는 시그니처를 보고 `;`를 추론한다. 값을 반환하는 함수는 마지막
 표현식을 값으로 남기고, unit 함수는 마지막 표현식 뒤에 `;`를 붙인다. 추론이 남기는 값을 버리고
 싶을 때만 `;`를 직접 쓴다.
 
 `#[cfg(...)]`로 고르는 꼬리 표현식은 각각 값이다. Rust는 문장과 블록에만 속성을 허용하므로,
 블록이 아닌 꼬리는 블록이 된다:
 
-```rsk
+```rk
 pub fn separator() -> char:
     #[cfg(unix)]
     '/'
@@ -57,7 +57,7 @@ pub fn separator() -> char:
 `fn name(...) -> T = expr`는 본문이 표현식 하나인 함수다. `= match n:` 뒤에 arm을 들여써 두는
 것처럼, 그 표현식이 블록을 열 수도 있다.
 
-```rsk
+```rk
 pub fn twice(value: i32) -> i32 = value * 2
 
 pub fn name(n: i32) -> &'static str = match n:
@@ -70,7 +70,7 @@ pub fn name(n: i32) -> &'static str = match n:
 `where` 절이나 긴 조건처럼 더 깊이 들여쓴 줄로 이어지는 헤더는 마지막 줄을 `:`로 끝낸다. 본문은
 헤더 첫 줄보다 한 단계 깊게 들여쓴다:
 
-```rsk
+```rk
 pub fn show[T](value: T) -> String
 where
     T: std.fmt.Debug:
@@ -92,7 +92,7 @@ pub fn check(a: bool, b: bool) -> bool:
 `=`는 그룹이 닫힐 때까지 이어진다. 그룹 안은 Rust 문법이다. 그 뒤 같은 들여쓰기의 `.method()`나
 `?` 줄은 표현식을 이어 간다.
 
-```rsk
+```rk
 pub fn total(values: &[i32]) -> i32:
     values
         .iter()

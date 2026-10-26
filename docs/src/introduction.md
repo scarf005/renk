@@ -2,11 +2,11 @@
 
 [한국어](ko/index.html)
 
-Rusk is an indentation-based syntax for [Rust](https://rust-lang.org), inspired by
-[Rust's Ugly Syntax](https://matklad.github.io/2023/01/26/rusts-ugly-syntax.html). `rusk`
-transpiles `.rsk` files to Rust and converts Rust back to Rusk.
+Renk is an indentation-based syntax for [Rust](https://rust-lang.org), inspired by
+[Rust's Ugly Syntax](https://matklad.github.io/2023/01/26/rusts-ugly-syntax.html). `renk`
+transpiles `.rk` files to Rust and converts Rust back to Renk.
 
-```rsk
+```rk
 #[derive(Debug, Clone)]
 pub struct User:
     pub id: u64
@@ -43,6 +43,6 @@ pub fn main() {
 }
 ```
 
-Rusk changes syntax only. Types, borrowing, macros, and crates are Rust's, and tokens the
+Renk changes syntax only. Types, borrowing, macros, and crates are Rust's, and tokens the
 transpiler does not rewrite pass through as Rust. A Rust `{ ... }` block, a `::` path, or a
 `::<T>` turbofish is always accepted.

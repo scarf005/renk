@@ -13,9 +13,9 @@ dist-ssr
 .vite
 .wrangler
 *.local
-/src/wasm/rusk.d.ts
-/src/wasm/rusk.internal.js
-/src/wasm/rusk.js
+/src/wasm/renk.d.ts
+/src/wasm/renk.internal.js
+/src/wasm/renk.js
 
 # Editor directories and files
 .vscode/*

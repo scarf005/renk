@@ -750,7 +750,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "zed_rusk"
+name = "zed_renk"
 version = "0.1.0"
 dependencies = [
  "zed_extension_api",

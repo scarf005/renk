@@ -6,7 +6,7 @@ type Example = {
   source: string
 }
 
-const ruskExampleModules = import.meta.glob<string>("../../examples/*.rsk", {
+const renkExampleModules = import.meta.glob<string>("../../examples/*.rk", {
   eager: true,
   import: "default",
   query: "?raw",
@@ -34,7 +34,7 @@ const examplesFromModules = (modules: Record<string, string>) =>
     })
     .sort((left, right) => left.name.localeCompare(right.name))
 
-export const EXAMPLES = examplesFromModules(ruskExampleModules)
+export const EXAMPLES = examplesFromModules(renkExampleModules)
 export const RUST_EXAMPLES = examplesFromModules(rustExampleModules)
 
 export type ExampleName = (typeof EXAMPLES)[number]["name"]
@@ -49,7 +49,7 @@ export const DEFAULT_EXAMPLE_NAME: ExampleName = defaultExample(
 ).name
 export const DEFAULT_RUST_EXAMPLE_NAME: RustExampleName = defaultExample(
   RUST_EXAMPLES,
-  "rust-to-rusk",
+  "rust-to-renk",
 ).name
 export const EXAMPLE_NAMES = EXAMPLES.map(({ name }) => name) as ExampleName[]
 export const RUST_EXAMPLE_NAMES = RUST_EXAMPLES.map(({ name }) =>

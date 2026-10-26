@@ -21,7 +21,7 @@ const WASMBUILD_ARGS = [
   "-A",
   "jsr:@deno/wasmbuild@0.19.3",
   "-p",
-  "rusk",
+  "renk",
   "--out",
   "web/src/wasm",
   "--inline",
@@ -73,7 +73,7 @@ const wasmAutoRebuild = (): Plugin => {
     running = (async () => {
       do {
         pending = false
-        server.config.logger.info("rebuilding rusk wasm...")
+        server.config.logger.info("rebuilding renk wasm...")
         const result = await runCommandWithTimeout(
           "deno",
           WASMBUILD_ARGS,
@@ -92,10 +92,10 @@ const wasmAutoRebuild = (): Plugin => {
   }
 
   return {
-    name: "rusk-wasm-auto-rebuild",
+    name: "renk-wasm-auto-rebuild",
     apply: "serve",
     configureServer: (server) => {
-      const sourceRoot = resolve("../crates/rusk/src")
+      const sourceRoot = resolve("../crates/renk/src")
       server.watcher.add(`${sourceRoot}/**/*.rs`)
       server.watcher.on("change", (path) => {
         if (path.startsWith(sourceRoot) && path.endsWith(".rs")) {

@@ -1,19 +1,19 @@
 services:
-  rusk-web:
+  renk-web:
     build:
       context: .
       dockerfile: Containerfile
-    image: localhost/rusk-web:latest
+    image: localhost/renk-web:latest
     ports:
       - "127.0.0.1:8080:8080"
     environment:
-      RUSK_WEB_ADDR: 0.0.0.0:8080
-      RUSK_WEB_DIST: /app/web/dist
-      RUSK_RUN_TIMEOUT_MS: "5000"
-      RUSK_REQUEST_TIMEOUT_MS: "10000"
-      RUSK_MAX_REQUESTS: "32"
-      RUSK_MAX_CONCURRENT_RUNS: "2"
-      RUSK_RUN_RATE_LIMIT_PER_MINUTE: "10"
+      RENK_WEB_ADDR: 0.0.0.0:8080
+      RENK_WEB_DIST: /app/web/dist
+      RENK_RUN_TIMEOUT_MS: "5000"
+      RENK_REQUEST_TIMEOUT_MS: "10000"
+      RENK_MAX_REQUESTS: "32"
+      RENK_MAX_CONCURRENT_RUNS: "2"
+      RENK_RUN_RATE_LIMIT_PER_MINUTE: "10"
     user: "10001:10001"
     privileged: false
     read_only: true
@@ -30,7 +30,7 @@ services:
       nofile: { soft: 256, hard: 256 }
       nproc: { soft: 128, hard: 128 }
     networks:
-      - rusk-web
+      - renk-web
     healthcheck:
       test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/8080; printf \"GET / HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n\" >&3; head -n 1 <&3 | grep -q \"200\"'"]
       interval: 30s
@@ -40,5 +40,5 @@ services:
     restart: unless-stopped
 
 networks:
-  rusk-web:
+  renk-web:
     internal: true

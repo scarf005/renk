@@ -1,14 +1,14 @@
-# Rusk Zed extension
+# Renk Zed extension
 
-Local Zed extension for `.rsk` files.
+Local Zed extension for `.rk` files.
 
 ## Install the LSP
 
 ```sh
-cargo install --path crates/rusk --bin rusk-lsp
+cargo install --path crates/renk --bin renk-lsp
 ```
 
-`rusk-lsp` is a standard stdio Language Server Protocol server and can be used by Zed, Vim, VS Code, or any other LSP client.
+`renk-lsp` is a standard stdio Language Server Protocol server and can be used by Zed, Vim, VS Code, or any other LSP client.
 
 ## Install the Zed extension locally
 
@@ -16,16 +16,16 @@ cargo install --path crates/rusk --bin rusk-lsp
 2. Choose `Install Dev Extension`.
 3. Select this directory: `editors/zed`.
 
-The extension registers the `Rusk` language, starts `rusk-lsp`, and provides Tree-sitter highlighting for `.rsk` files.
+The extension registers the `Renk` language, starts `renk-lsp`, and provides Tree-sitter highlighting for `.rk` files.
 
-If `rusk-lsp` is not on Zed's PATH, configure it in Zed settings:
+If `renk-lsp` is not on Zed's PATH, configure it in Zed settings:
 
 ```json
 {
   "lsp": {
-    "rusk-lsp": {
+    "renk-lsp": {
       "binary": {
-        "path": "/absolute/path/to/rusk-lsp"
+        "path": "/absolute/path/to/renk-lsp"
       }
     }
   }

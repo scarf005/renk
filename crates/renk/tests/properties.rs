@@ -1,0 +1,172 @@
+use proptest::prelude::*;
+use renk::{format_source, rust_to_renk, rust_to_renk_aggressive, transpile};
+
+const FRAGMENTS: &[&str] = &[
+    "fn ",
+    "pub ",
+    "main",
+    "f",
+    "x",
+    "X",
+    "Self",
+    "(",
+    ")",
+    "[",
+    "]",
+    "{",
+    "}",
+    "<",
+    ">",
+    ":",
+    "::",
+    ".",
+    ",",
+    ";",
+    "=",
+    "==",
+    "=>",
+    "->",
+    "|",
+    "||",
+    "&",
+    "?",
+    "!",
+    "#[",
+    "#![",
+    "'a",
+    "'",
+    "\"",
+    "r#\"",
+    "\"#",
+    "\\",
+    "//",
+    "/*",
+    "*/",
+    "0",
+    "1.5",
+    "if ",
+    "then ",
+    "else",
+    "else if ",
+    "match ",
+    "let ",
+    "loop",
+    "while ",
+    "for ",
+    " in ",
+    "return",
+    "struct ",
+    "enum ",
+    "impl ",
+    "trait ",
+    "mod ",
+    "use ",
+    "macro_rules! ",
+    "$x:expr",
+    "$(",
+    ")*",
+    "async ",
+    "move ",
+    "unsafe ",
+    "where ",
+    "dyn ",
+    "Vec",
+    "Option",
+    "println!",
+    "format!",
+    "é",
+    "목록",
+    " ",
+    "    ",
+    "\n",
+    "\n    ",
+    "\n        ",
+    "\r\n",
+    "\t",
+];
+
+fn renk_like() -> impl Strategy<Value = String> {
+    prop::collection::vec(prop::sample::select(FRAGMENTS), 0..80).prop_map(|parts| parts.concat())
+}
+
+fn config() -> ProptestConfig {
+    ProptestConfig {
+        cases: std::env::var("PROPTEST_CASES")
+            .ok()
+            .and_then(|cases| cases.parse().ok())
+            .unwrap_or(2048),
+        failure_persistence: None,
+        ..ProptestConfig::default()
+    }
+}
+
+proptest! {
+    #![proptest_config(config())]
+
+    #[test]
+    fn conversions_never_panic_on_token_soup(source in renk_like()) {
+        let _ = transpile(&source);
+        let _ = format_source(&source);
+        let _ = rust_to_renk(&source);
+        let _ = rust_to_renk_aggressive(&source);
+    }
+
+    #[test]
+    fn conversions_never_panic_on_arbitrary_text(source in any::<String>()) {
+        let _ = transpile(&source);
+        let _ = format_source(&source);
+        let _ = rust_to_renk(&source);
+    }
+
+    #[test]
+    fn transpile_errors_name_an_existing_line(source in renk_like()) {
+        if let Err(error) = transpile(&source) {
+            let lines = source.lines().count().max(1);
+            prop_assert!((1..=lines + 1).contains(&error.line), "{error} for {source:?}");
+        }
+    }
+
+    #[test]
+    fn transpile_is_deterministic(source in renk_like()) {
+        prop_assert_eq!(transpile(&source), transpile(&source));
+    }
+
+    #[test]
+    fn accepted_sources_keep_their_rust_after_formatting(source in renk_like()) {
+        if let Ok(output) = transpile(&source) {
+            let formatted = format_source(&source);
+            prop_assert!(formatted.is_ok(), "fmt rejected a transpilable source {source:?}: {formatted:?}");
+            let formatted = formatted.unwrap();
+            prop_assert_eq!(&format_source(&formatted).unwrap(), &formatted);
+            prop_assert_eq!(transpile(&formatted).map(|o| o.rust), Ok(output.rust));
+        }
+    }
+}
+
+#[test]
+fn deep_nesting_converts_on_a_small_caller_stack() {
+    let parens = 5_000;
+    let parens = format!(
+        "fn f() -> u8 {{\n    {}1{}\n}}\n",
+        "(".repeat(parens),
+        ")".repeat(parens)
+    );
+    let closures = (0..300).fold("1".to_string(), |body, depth| {
+        let indent = "    ".repeat(300 - depth);
+        format!("g(|| {{\n{indent}    {body}\n{indent}}})")
+    });
+    let closures = format!("fn f() -> u8 {{\n    {closures}\n}}\n");
+    // The parsers recurse once per level, past the stack of the calling thread.
+    std::thread::Builder::new()
+        .stack_size(1 << 20)
+        .spawn(move || {
+            for rust in [parens, closures] {
+                let renk = rust_to_renk(&rust).unwrap();
+                assert_eq!(transpile(&renk).unwrap().rust, rust);
+                format_source(&renk).unwrap();
+            }
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}

@@ -1,6 +1,6 @@
 # Syntax
 
-Rusk differs from Rust in four places:
+Renk differs from Rust in four places:
 
 - [Blocks](blocks.md) open with `:` and end by indentation. Statements end at line ends.
 - [Expressions](expressions.md) add `if c then a else b`, and `if`, `match`, and closure blocks

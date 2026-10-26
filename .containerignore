@@ -4,6 +4,6 @@ target
 web/node_modules
 web/dist
 web/src/wasm
-crates/rusk/target
+crates/renk/target
 editors/zed/target
 **/*.tmp

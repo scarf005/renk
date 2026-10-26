@@ -29,7 +29,7 @@ RUN curl -fsSL "https://github.com/denoland/deno/releases/download/v${DENO_VERSI
     && unzip /tmp/deno.zip -d /usr/local/bin \
     && rm /tmp/deno.zip
 COPY . .
-RUN cargo build --release -p rusk --bin rusk --bin rusk-web
+RUN cargo build --release -p renk --bin renk --bin renk-web
 RUN cargo build --manifest-path runner/Cargo.toml --release
 RUN cd web && VITE_RUN_API=1 deno task build
 
@@ -46,24 +46,24 @@ FROM ${FEDORA_MINIMAL_IMAGE} AS runtime
 ENV CARGO_HOME=/usr/local/cargo \
     RUSTUP_HOME=/usr/local/rustup \
     PATH=/usr/local/cargo/bin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
-    RUSK_WEB_ADDR=0.0.0.0:8080 \
-    RUSK_WEB_DIST=/app/web/dist \
-    RUSK_RUN_DEPS=/app/runner/target/release/deps \
-    RUSK_RUN_TIMEOUT_MS=5000 \
-    RUSK_REQUEST_TIMEOUT_MS=10000 \
-    RUSK_MAX_REQUESTS=32 \
-    RUSK_MAX_CONCURRENT_RUNS=2 \
-    RUSK_RUN_RATE_LIMIT_PER_MINUTE=10
+    RENK_WEB_ADDR=0.0.0.0:8080 \
+    RENK_WEB_DIST=/app/web/dist \
+    RENK_RUN_DEPS=/app/runner/target/release/deps \
+    RENK_RUN_TIMEOUT_MS=5000 \
+    RENK_REQUEST_TIMEOUT_MS=10000 \
+    RENK_MAX_REQUESTS=32 \
+    RENK_MAX_CONCURRENT_RUNS=2 \
+    RENK_RUN_RATE_LIMIT_PER_MINUTE=10
 RUN microdnf --setopt=install_weak_deps=0 install -y ca-certificates gcc glibc-devel tini \
     && microdnf clean all
 COPY --from=runtime-rust /usr/local/cargo /usr/local/cargo
 COPY --from=runtime-rust /usr/local/rustup /usr/local/rustup
 WORKDIR /app
-COPY --from=build /app/target/release/rusk /usr/local/bin/rusk
-COPY --from=build /app/target/release/rusk-web /usr/local/bin/rusk-web
+COPY --from=build /app/target/release/renk /usr/local/bin/renk
+COPY --from=build /app/target/release/renk-web /usr/local/bin/renk-web
 COPY --from=build /app/web/dist /app/web/dist
 COPY --from=build /app/runner/target/release /app/runner/target/release
 USER 10001:10001
 EXPOSE 8080
 ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["/usr/local/bin/rusk-web"]
+CMD ["/usr/local/bin/renk-web"]

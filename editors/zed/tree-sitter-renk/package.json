@@ -1,0 +1,15 @@
+{
+  "name": "tree-sitter-renk",
+  "version": "0.1.0",
+  "description": "Tree-sitter token grammar for Renk",
+  "license": "GPL-3.0-or-later",
+  "devDependencies": {
+    "tree-sitter-cli": "^0.25.10"
+  },
+  "tree-sitter": [
+    {
+      "scope": "source.renk",
+      "file-types": ["rk"]
+    }
+  ]
+}

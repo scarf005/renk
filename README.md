@@ -1,14 +1,14 @@
-# Rusk
+# Renk
 
 ![](./thumbnail.webp)
 
-Rusk is an indentation-based syntax for [Rust](https://rust-lang.org), inspired by [Rust's Ugly Syntax](https://matklad.github.io/2023/01/26/rusts-ugly-syntax.html).
+Renk is an indentation-based syntax for [Rust](https://rust-lang.org), inspired by [Rust's Ugly Syntax](https://matklad.github.io/2023/01/26/rusts-ugly-syntax.html).
 
 Documentation: <https://scarf005.github.io/rusk/> ([한국어](https://scarf005.github.io/rusk/ko/))
 
 ## Example
 
-```rsk
+```rk
 #[derive(Debug, Clone)]
 pub struct User:
     pub id: u64
@@ -48,36 +48,36 @@ pub fn main() {
 ## Usage
 
 ```sh
-cargo install --path crates/rusk --bin rusk --bin rusk-lsp
-rusk transpile input.rsk -o output.rs
-rusk from-rust input.rs -o output.rsk
-cat input.rsk | rusk
+cargo install --path crates/renk --bin renk --bin renk-lsp
+renk transpile input.rk -o output.rs
+renk from-rust input.rs -o output.rk
+cat input.rk | renk
 ```
 
 See [Getting started](https://scarf005.github.io/rusk/getting-started.html) and [Syntax](https://scarf005.github.io/rusk/syntax/index.html).
 
 ## Formatter
 
-`rusk fmt` checks that the file parses and trims trailing whitespace. It does not reflow code.
+`renk fmt` checks that the file parses and trims trailing whitespace. It does not reflow code.
 
 ```sh
-rusk fmt src/main.rsk -o src/main.rsk
+renk fmt src/main.rk -o src/main.rk
 ```
 
 ## Cargo wrapper
 
-`rusk build`, `rusk run`, `rusk test`, and `rusk cargo ...` transpile `.rsk` files under Cargo source roots into `.rs` files, then run Cargo. [Details](https://scarf005.github.io/rusk/cargo.html).
+`renk build`, `renk run`, `renk test`, and `renk cargo ...` transpile `.rk` files under Cargo source roots into `.rs` files, then run Cargo. [Details](https://scarf005.github.io/rusk/cargo.html).
 
 ```sh
-rusk cargo test
+renk cargo test
 ```
 
 ## Scripts
 
-`rusk script` runs a single-file script with `cargo +nightly -Zscript`. Dependencies go in `---` frontmatter; `rusk add` edits it. [Details](https://scarf005.github.io/rusk/scripts.html).
+`renk script` runs a single-file script with `cargo +nightly -Zscript`. Dependencies go in `---` frontmatter; `renk add` edits it. [Details](https://scarf005.github.io/rusk/scripts.html).
 
-```rsk
-#!/usr/bin/env -S rusk script
+```rk
+#!/usr/bin/env -S renk script
 ---
 [dependencies]
 regex = "1"
@@ -88,13 +88,13 @@ fn main():
 ```
 
 ```sh
-rusk script tool.rsk arg
-rusk add tool.rsk regex
+renk script tool.rk arg
+renk add tool.rk regex
 ```
 
 ## Language server
 
-`rusk-lsp` is a stdio language server. It reports syntax errors and symbols, and forwards hover, definition, and completion to `rust-analyzer`. [Editor setup](https://scarf005.github.io/rusk/editors.html).
+`renk-lsp` is a stdio language server. It reports syntax errors and symbols, and forwards hover, definition, and completion to `rust-analyzer`. [Editor setup](https://scarf005.github.io/rusk/editors.html).
 
 ## Web runner
 
@@ -102,4 +102,4 @@ rusk add tool.rsk regex
 
 ## Limits
 
-Rusk reads text, not types, so some names are misread. See [Limits](https://scarf005.github.io/rusk/limits.html).
+Renk reads text, not types, so some names are misread. See [Limits](https://scarf005.github.io/rusk/limits.html).

@@ -3,7 +3,7 @@ import { resolve } from "node:path"
 const repoRoot = resolve("..")
 const runnerManifest = resolve("../runner/Cargo.toml")
 const runnerDeps = resolve("../runner/target/debug/deps")
-const backendPath = resolve("../target/debug/rusk-web")
+const backendPath = resolve("../target/debug/renk-web")
 const backendAddress = "127.0.0.1:8081"
 const backendUrl = `http://${backendAddress}/`
 
@@ -34,12 +34,12 @@ const waitForBackend = async (): Promise<void> => {
       await new Promise((resolve) => setTimeout(resolve, 50))
     }
   }
-  throw new Error(`rusk-web did not start at ${backendUrl}`)
+  throw new Error(`renk-web did not start at ${backendUrl}`)
 }
 
 await runChecked(
   "cargo",
-  ["build", "-p", "rusk", "--bin", "rusk-web"],
+  ["build", "-p", "renk", "--bin", "renk-web"],
   repoRoot,
 )
 await runChecked(
@@ -52,9 +52,9 @@ const backend = new Deno.Command(backendPath, {
   cwd: repoRoot,
   env: {
     ...Deno.env.toObject(),
-    RUSK_WEB_ADDR: backendAddress,
-    RUSK_WEB_DIST: resolve("dist"),
-    RUSK_RUN_DEPS: runnerDeps,
+    RENK_WEB_ADDR: backendAddress,
+    RENK_WEB_DIST: resolve("dist"),
+    RENK_RUN_DEPS: runnerDeps,
   },
   stdin: "null",
   stdout: "inherit",
@@ -65,7 +65,7 @@ try {
   await Promise.race([
     waitForBackend(),
     backend.status.then((status) => {
-      throw new Error(`rusk-web exited with status ${status.code}`)
+      throw new Error(`renk-web exited with status ${status.code}`)
     }),
   ])
 

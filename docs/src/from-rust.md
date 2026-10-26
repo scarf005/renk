@@ -1,10 +1,10 @@
 # Converting from Rust
 
-`rusk from-rust` converts Rust to Rusk:
+`renk from-rust` converts Rust to Renk:
 
 ```sh
-rusk from-rust src/lib.rs -o src/lib.rsk
-rusk from-rust src/lib.rs -o src/lib.rsk --aggressive
+renk from-rust src/lib.rs -o src/lib.rk
+renk from-rust src/lib.rs -o src/lib.rk --aggressive
 ```
 
 The output uses dotted paths, `[T]` generics, `fn f() -> T = expr`, inferred `;`, and
@@ -20,19 +20,19 @@ and `(std.cmp.Ordering.Less).reverse()`.
 `--aggressive` also accepts rewrites that keep the Rust tokens but not their line layout, such
 as multi-line `if`/`else` value chains.
 
-Comments, string literals, and macro bodies are kept as written. Anything Rusk has no
+Comments, string literals, and macro bodies are kept as written. Anything Renk has no
 indentation form for, such as a `{` block holding a `match` scrutinee, stays Rust syntax.
 
 ## Round-trip tests
 
-The repository tests the round trip `Rust -> Rusk -> Rust` on a corpus of Rust files and on
+The repository tests the round trip `Rust -> Renk -> Rust` on a corpus of Rust files and on
 pinned real crates. For each real crate, the round-tripped crate must compile, keep
 every comment, and produce the same MIR as the original after normalizing source locations,
 local and basic block numbering, and unit temporaries. MIR is compared with default features,
 with every feature, and for the unit tests, wherever the original builds that way.
 
 ```sh
-cargo test -p rusk --test real_crates -- --ignored --nocapture
+cargo test -p renk --test real_crates -- --ignored --nocapture
 ```
 
 The test downloads the crates from crates.io and needs a nightly toolchain for

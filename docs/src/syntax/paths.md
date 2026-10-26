@@ -6,7 +6,7 @@
 around it by a `let`, a parameter (const generics included), or a pattern. Any other `a` names
 a type, module, or crate, so `a.b` is a path.
 
-| Rusk | Rust |
+| Renk | Rust |
 | --- | --- |
 | `std.io.Read` | `std::io::Read` |
 | `Foo.new()` | `Foo::new()` |
@@ -29,7 +29,7 @@ the rule misses, as in `(env).len()`. Unicode identifiers follow Rust's XID rule
 
 Generic parameters and arguments use `[T]`:
 
-```rsk
+```rk
 pub struct Boxed[T]:
     pub value: T
 
@@ -41,7 +41,7 @@ pub fn parse(raw: &str) -> Result[Boxed[i32], std.num.ParseIntError]:
     Ok(Boxed.new(value))
 ```
 
-| Rusk | Rust |
+| Renk | Rust |
 | --- | --- |
 | `values.iter().collect[Vec[i32]]()` | `values.iter().collect::<Vec<i32>>()` |
 | `size_of[T]()` | `size_of::<T>()` |
