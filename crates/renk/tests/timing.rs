@@ -61,3 +61,22 @@ fn deep_closures_convert_in_time_linear_in_their_text() {
     let (short, long) = (fastest(|| convert(200)), fastest(|| convert(400)));
     assert!(long < short * 6, "{short:?} {long:?}");
 }
+
+#[test]
+fn long_view_blocks_convert_in_linear_time() {
+    let _serial = SERIAL.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let convert = |statements: usize| {
+        let statements = (0..statements)
+            .map(|n| format!("            n.set({n});\n"))
+            .collect::<String>();
+        let rust = format!(
+            "fn f(n: u8) {{\n    view! {{\n        <b on:click=move |_| {{\n{statements}        }}></b>\n    }}\n}}\n"
+        );
+        let start = std::time::Instant::now();
+        rust_to_renk(&rust).unwrap();
+        start.elapsed()
+    };
+    let (short, long) = (fastest(|| convert(50)), fastest(|| convert(200)));
+    // Four times the statements take about four times as long, not sixteen.
+    assert!(long < short * 8, "{short:?} {long:?}");
+}

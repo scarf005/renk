@@ -817,7 +817,7 @@ fn idiomatic_renk(lines: Vec<String>, aggressive: bool) -> Vec<String> {
     let expected = canonical_format_macros(&expected.rust);
     let expected_tokens = rust_tokens(&expected);
     type Pass = fn(&[String]) -> Vec<Rewrite>;
-    let passes: [Pass; 7] = [
+    let passes: [Pass; 8] = [
         |lines| line_rewrites(lines, drop_semicolon),
         |lines| {
             line_rewrites(lines, |line| {
@@ -830,6 +830,7 @@ fn idiomatic_renk(lines: Vec<String>, aggressive: bool) -> Vec<String> {
         if_chain_rewrites,
         expression_body_rewrites,
         |lines| line_rewrites(lines, let_else_rewrite),
+        |lines| line_rewrites(lines, view_blocks_as_renk),
     ];
     passes
         .into_iter()
@@ -4879,6 +4880,7 @@ fn closing_delimiters(text: &str) -> String {
 }
 
 fn lower_basic_expr(text: &str) -> String {
+    let text = &lower_view_blocks(text);
     // Std macro arguments see the parameters of the closures around them, as `env` in
     // `.map(|env| format!("{}", env.len()))`.
     let outer = closures(&text.chars().collect::<Vec<_>>());
@@ -5226,6 +5228,259 @@ fn format_macro_prefix(name: &str) -> Option<usize> {
 /// lowers like any other expression; other macro token trees stay Rust tokens.
 fn is_std_expression_macro(name: &str) -> bool {
     format_macro_prefix(name).is_some() || matches!(name, "dbg" | "matches" | "vec")
+}
+
+/// Multi-line `{` blocks in a `view!` body, as in a Leptos handler `on:click=move |_| {`, hold
+/// Renk statements; the rest of the body stays Rust tokens.
+fn lower_view_blocks(text: &str) -> String {
+    map_view_blocks(text, &lower_view_block)
+}
+
+/// `text` with the text between the braces of each multi-line `{` block in a `view!` body
+/// replaced by `block(inner, names)`, where `names` are the parameters of the closures the block
+/// is the body of; nested blocks are `block`'s to map.
+fn map_view_blocks(text: &str, block: &dyn Fn(&str, Vec<String>) -> String) -> String {
+    let chars = text.chars().collect::<Vec<_>>();
+    let mut output = String::new();
+    let mut index = 0usize;
+    while index < chars.len() {
+        if let Some(end) = opaque_span_end(&chars, index) {
+            output.extend(&chars[index..=end]);
+            index = end + 1;
+            continue;
+        }
+        let path_start =
+            index == 0 || !(is_ident_continue(chars[index - 1]) || chars[index - 1] == ':');
+        let Some(end) = path_start
+            .then(|| macro_invocation_end(&chars, index))
+            .flatten()
+        else {
+            output.push(chars[index]);
+            index += 1;
+            continue;
+        };
+        let bang = (index..end).find(|&at| chars[at] == '!').unwrap_or(end);
+        let open = (bang..end)
+            .find(|&at| matches!(chars[at], '(' | '[' | '{'))
+            .unwrap_or(end);
+        let path = chars[index..bang].iter().collect::<String>();
+        output.extend(&chars[index..=open]);
+        let body = chars[open + 1..end].iter().collect::<String>();
+        if path.trim_end().rsplit("::").next() == Some("view") {
+            output.push_str(&map_view_body(&body, block));
+        } else {
+            output.push_str(&body);
+        }
+        output.push(chars[end]);
+        index = end + 1;
+    }
+    output
+}
+
+/// A `view!` body with its multi-line `{` blocks and nested `view!` invocations mapped as
+/// [`map_view_blocks`] says.
+fn map_view_body(body: &str, block: &dyn Fn(&str, Vec<String>) -> String) -> String {
+    let chars = body.chars().collect::<Vec<_>>();
+    let closures = closures(&chars);
+    let mut output = String::new();
+    let mut index = 0usize;
+    while index < chars.len() {
+        if let Some(end) = opaque_span_end(&chars, index) {
+            output.extend(&chars[index..=end]);
+            index = end + 1;
+        } else if let Some(end) = macro_invocation_end(&chars, index)
+            .filter(|_| index == 0 || !is_ident_continue(chars[index - 1]))
+        {
+            let invocation = chars[index..=end].iter().collect::<String>();
+            output.push_str(&map_view_blocks(&invocation, block));
+            index = end + 1;
+        } else if chars[index] == '{'
+            && let Some(close) = matching_bracket(&chars, index, '{', '}')
+        {
+            let inner = chars[index + 1..close].iter().collect::<String>();
+            // The parameters of the closure whose body the block is, as `ev` in `move |ev| {`.
+            let names = closures
+                .iter()
+                .filter(|closure| {
+                    closure.body.start <= index
+                        && chars[closure.body.start..index].iter().all(|c| c.is_whitespace())
+                })
+                .flat_map(|closure| closure.parameters.clone())
+                .collect();
+            output.push('{');
+            output.push_str(&if inner.contains('\n') {
+                block(&inner, names)
+            } else {
+                map_view_body(&inner, block)
+            });
+            output.push('}');
+            index = close + 1;
+        } else {
+            output.push(chars[index]);
+            index += 1;
+        }
+    }
+    output
+}
+
+/// A Rust `line` with each line of a multi-line `{` block in a `view!` body written as Renk,
+/// without its `;` and with dotted paths, where the block still lowers to the same Rust.
+fn view_blocks_as_renk(line: &str) -> Option<String> {
+    let renk = map_view_blocks(line, &|inner, names| {
+        let expected = lower_view_block(inner, names.clone());
+        let in_literal = lines_ending_in_literal(inner);
+        let mut lines = inner.split('\n').map(str::to_string).collect::<Vec<_>>();
+        let rewrite = |line: &str| {
+            let (code, comment) = split_trailing_comment(line);
+            let dotted = dot_rust_paths(code).unwrap_or_else(|| code.to_string());
+            format!("{}{comment}", strip_rust_semicolon(&dotted))
+        };
+        // Most blocks take every rewrite at once, or all but the last line before each `}`, which
+        // saves lowering the block once per line; the lines left are tried one at a time.
+        let rewritten = |keep: &dyn Fn(usize) -> bool| {
+            (0..lines.len())
+                .map(|index| match in_literal.get(index) {
+                    _ if keep(index) => lines[index].clone(),
+                    Some(true) => lines[index].clone(),
+                    _ => rewrite(&lines[index]),
+                })
+                .collect::<Vec<_>>()
+        };
+        let before_closer = |index: usize| {
+            lines[index + 1..]
+                .iter()
+                .find(|line| !line.trim().is_empty())
+                .is_none_or(|next| next.trim_start().starts_with('}'))
+        };
+        if let Some(accepted) = [rewritten(&|_| false), rewritten(&before_closer)]
+            .into_iter()
+            .find(|trial| lower_view_block(&trial.join("\n"), names.clone()) == expected)
+        {
+            lines = accepted;
+        }
+        let pending = (0..lines.len())
+            .filter(|&index| rewrite(&lines[index]) != lines[index])
+            .collect::<Vec<_>>();
+        for index in pending {
+            let (code, comment) = split_trailing_comment(&lines[index]);
+            if in_literal.get(index).copied().unwrap_or(false) || is_comment(code.trim()) {
+                continue;
+            }
+            let dotted = dot_rust_paths(code).unwrap_or_else(|| code.to_string());
+            let candidates = [
+                strip_rust_semicolon(&dotted),
+                strip_rust_semicolon(code),
+                dotted,
+            ];
+            for candidate in candidates.map(|candidate| format!("{candidate}{comment}")) {
+                let mut trial = lines.clone();
+                trial[index] = candidate;
+                if lower_view_block(&trial.join("\n"), names.clone()) == expected {
+                    lines = trial;
+                    break;
+                }
+            }
+        }
+        lines.join("\n")
+    });
+    (renk != line).then_some(renk)
+}
+
+/// `inner`, the text between the braces of a multi-line `{` block in a `view!` body, with its
+/// lines emitted as the statements of a Renk block whose last line is its value, where `names`
+/// are values. Each line keeps its place and the whitespace around its code; text that does not
+/// lower line for line stays as written.
+fn lower_view_block(inner: &str, names: Vec<String>) -> String {
+    let lines = inner.split('\n').collect::<Vec<_>>();
+    let rest = lines[1..].iter().filter(|line| !line.trim().is_empty());
+    let closing = rest
+        .clone()
+        .filter(|line| line.trim_start().starts_with([')', ']', '}']))
+        .map(|line| raw_indent(line))
+        .min();
+    let statements = rest
+        .filter(|line| !line.trim_start().starts_with([')', ']', '}']))
+        .map(|line| raw_indent(line))
+        .min();
+    // Text after the `{`, as `move || {` in `{move || {`, sits at the indent of the line closing
+    // what it opens, or just outside the continuation lines after it, as `.max(1)`; a comment or a
+    // statement sits with the statements.
+    let head = lines[0].trim();
+    let continued = lines[1..]
+        .iter()
+        .find(|line| !line.trim().is_empty())
+        .is_some_and(|next| {
+            next.trim_start().starts_with(['.', '?']) || starts_with_binary_operator(next.trim())
+        });
+    let indent = match (closing, statements) {
+        _ if is_comment(head) => statements.or(closing),
+        (Some(closing), _) => Some(closing),
+        (None, Some(statements)) if continued => Some(statements.saturating_sub(1)),
+        (None, statements) => statements,
+    };
+    let source = std::iter::once("fn view():".to_string())
+        .chain(lines.iter().enumerate().map(|(index, line)| match index {
+            0 => format!("{}{head}", spaces(indent.unwrap_or(0).max(1))),
+            _ => line.to_string(),
+        }))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let Some([function]) = source_lines(&source)
+        .and_then(|lines| parse_source_tree(&lines))
+        .ok()
+        .and_then(|nodes| <[Node; 1]>::try_from(nodes).ok())
+    else {
+        return inner.to_string();
+    };
+    let mut emitter = Emitter {
+        source_lines: source.lines().map(str::to_string).collect(),
+        ..Emitter::default()
+    };
+    let outer = BLOCK_BINDINGS.replace(names);
+    emit_sequence(&function.children, Context::Block, true, &mut emitter);
+    BLOCK_BINDINGS.set(outer);
+    for (line, comment) in &emitter.comments {
+        emitter.lines[*line].push_str(comment);
+    }
+    emitter.join_split_lines();
+    let mut emitted = emitter.lines.iter().filter(|line| !line.trim().is_empty());
+    let code_lines = lines.iter().filter(|line| !line.trim().is_empty()).count();
+    if emitted.clone().count() != code_lines {
+        // A Renk `:` block adds the line of its `}`, so the block takes the emitted lines.
+        let lead = &lines[0][..lines[0].len() - lines[0].trim_start().len()];
+        let first = match head {
+            "" => lines[0].to_string(),
+            _ => format!("{lead}{}", emitter.lines[0].trim_start()),
+        };
+        let body = &emitter.lines[usize::from(!head.is_empty())..];
+        // The emitter leaves out the blank lines around the block's lines, which stay.
+        let blank = |line: &&&str| line.trim().is_empty();
+        // After a head, as `if c:` in `{ if c:`, the emitted lines hold them already.
+        let leading = match head {
+            "" => lines[1..].iter().take_while(blank).count(),
+            _ => 0,
+        };
+        let trailing = lines[1 + leading..].iter().rev().take_while(blank).count();
+        return std::iter::once(first)
+            .chain(lines[1..1 + leading].iter().map(|line| line.to_string()))
+            .chain(body.iter().cloned())
+            .chain(lines[lines.len() - trailing..].iter().map(|line| line.to_string()))
+            .collect::<Vec<_>>()
+            .join("\n");
+    }
+    lines
+        .iter()
+        .map(|line| match line.trim() {
+            "" => line.to_string(),
+            code => {
+                let start = line.len() - line.trim_start().len();
+                let end = start + code.len();
+                let lowered = emitted.next().map_or(code, |lowered| lowered.trim());
+                format!("{}{lowered}{}", &line[..start], &line[end..])
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// `text` with each argument of every std expression macro outside literals and comments replaced

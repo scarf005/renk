@@ -35,6 +35,36 @@ macros, `assert!`, `assert_eq!`, `assert_ne!`, their `debug_` forms, `dbg!`, `ve
 Other macros, such as `log::info!`, are opaque Rust tokens, as are the payloads of `#[...]` and
 `#![...]` attributes.
 
+## `view!`
+
+In a `view!` body, such as Leptos's, each `{` block that spans several lines holds Renk
+statements, so they need no `;`. Tags, attributes, and one-line blocks such as `{count}` stay
+Rust tokens.
+
+```rk,ignore
+view! {
+    <button on:click=move |_| {
+        set_count.update(|n| *n += 1)
+        log::info!("clicked")
+    }>
+        {count}
+    </button>
+}
+```
+
+becomes
+
+```rust
+view! {
+    <button on:click=move |_| {
+        set_count.update(|n| *n += 1);
+        log::info!("clicked")
+    }>
+        {count}
+    </button>
+}
+```
+
 ## `macro_rules!`
 
 Arms are indentation-based. Patterns and bodies are Rust tokens, kept as written.

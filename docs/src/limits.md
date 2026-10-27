@@ -10,7 +10,7 @@ Renk is a syntax front end. It reads text, not types, so:
   `Name[...]` before `::` or `.name`. Any other generic application uses Rust `::<...>`.
 - Macro and attribute token trees are opaque Rust tokens. Only the std format and expression
   macros listed in [Macros](syntax/macros.md) are rewritten.
-- Proc-macro DSLs are not parsed.
+- Proc-macro DSLs are not parsed, except the multi-line `{` blocks of `view!`.
 
 ## Conversion gaps
 

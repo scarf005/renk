@@ -1,0 +1,83 @@
+use std.cell.Cell
+
+// A stand-in for `leptos::view!` that type-checks its handler and child blocks.
+macro_rules! view:
+    (<$tag:ident on:click=move |$event:tt| $handler:block> $($child:block)* </$close:ident>) =>:
+        {
+            let handler = move |$event: u8| $handler;
+            handler(1);
+            $(let _ = $child;)*
+            stringify!($tag)
+        }
+    (<$tag:ident> $($child:block)* </$close:ident>) =>:
+        {
+            $(let _ = $child;)*
+            stringify!($tag)
+        }
+#[allow(unused_imports)]
+pub(crate) use view
+
+pub fn button(count: &Cell[u8]) -> &'static str:
+    view! {
+        <button on:click=move |ev| {
+            let next = count.get() + ev // a comment ending in {
+            count.set(next)
+            count.set(count.get()
+                .max(1))
+            let total = next
+                + 1
+            if total > 1 {
+                count.set(0)
+            } else {
+                count.set(1)
+            }
+            match next {
+                0 => count.set(1),
+                _ => {
+                    count.set(2)
+                    count.set(3)
+                }
+            }
+            let text = "}{ a()\n b()"
+            assert!(!text.is_empty(), "{text.len()}")
+            let cell = Cell.new(next)
+            cell.set(cell.get() / 2)
+        }>
+            {count.get()}
+            {u8::MAX}
+            {
+                let doubled = count.get() * 2
+                doubled
+            }
+            {move || {
+                count.get()
+            }}
+            {view! { <p>{"nested"}</p> }}
+            {
+                let inner = view! {
+                    <b on:click=move |_| {
+                        count.set(2)
+                        count.set(3)
+                    }></b>
+                }
+                inner
+            }
+        </button>
+    }
+
+pub fn path_form(count: &Cell[u8]) -> &'static str:
+    crate::view! {
+        <i on:click=move |_| {
+            count.set(4)
+            count.set(5)
+        }></i>
+    }
+
+pub fn assigned(count: &Cell[u8]) -> usize:
+    let tag = view! {
+        <p>{
+            count.set(6)
+            count.get()
+        }</p>
+    }
+    tag.len()

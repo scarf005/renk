@@ -34,6 +34,35 @@ pub fn report(name: &str, values: &[i32], tags: &[&str]) {
 `log::info!` 같은 다른 매크로는 `#[...]`, `#![...]` 속성의 내용과 마찬가지로 해석하지 않는 Rust
 토큰이다.
 
+## `view!`
+
+Leptos 등의 `view!` 본문에서 여러 줄에 걸친 `{` 블록은 Renk 문장을 담으므로 `;`가 필요 없다.
+태그, 속성, `{count}` 같은 한 줄 블록은 Rust 토큰으로 남는다.
+
+```rk,ignore
+view! {
+    <button on:click=move |_| {
+        set_count.update(|n| *n += 1)
+        log::info!("clicked")
+    }>
+        {count}
+    </button>
+}
+```
+
+는 다음이 된다.
+
+```rust
+view! {
+    <button on:click=move |_| {
+        set_count.update(|n| *n += 1);
+        log::info!("clicked")
+    }>
+        {count}
+    </button>
+}
+```
+
 ## `macro_rules!`
 
 arm은 들여쓰기로 구분한다. 패턴과 본문은 Rust 토큰이며 쓴 그대로 유지된다.

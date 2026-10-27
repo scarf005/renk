@@ -1620,3 +1620,46 @@ fn closure_parameters_are_values_in_std_macro_arguments() {
         "fn f(xs: Vec<String>) -> String {\n    let v = xs.iter().map(|env| format!(\"{}\", env.len())).count();\n    let w = xs.iter().map(|env| env.len()).count() + vec![env::len()][0];\n    format!(\"{v}{w}\")\n}\n"
     );
 }
+
+#[test]
+fn multi_line_blocks_in_view_macros_hold_renk_statements() {
+    let source = "fn f(n: Cell[u8]):\n    let v = view! {\n        <b on:click=move |_| {\n            n.set(1)\n            n.set(Cell.new(2).get())\n        }>{n.get()}</b>\n    }\n    let w = html! {\n        <b on:click=move |_| {\n            n.set(1)\n            n.set(2)\n        }></b>\n    }\n    let s = \"view! { {\\n a()\\n b()\\n} }\"\n";
+    assert_eq!(
+        rust(source),
+        "fn f(n: Cell<u8>) {\n    let v = view! {\n        <b on:click=move |_| {\n            n.set(1);\n            n.set(Cell::new(2).get())\n        }>{n.get()}</b>\n    };\n    let w = html! {\n        <b on:click=move |_| {\n            n.set(1)\n            n.set(2)\n        }></b>\n    };\n    let s = \"view! { {\\n a()\\n b()\\n} }\";\n}\n"
+    );
+}
+
+#[test]
+fn view_blocks_keep_their_layout_and_own_closure_parameters() {
+    let source = "use std.fs\n\nfn f(n: Cell[u8]):\n    let v = view! {\n        <b on:click=move |fs| fs.get()></b>\n        <i on:click=move |_| { // head\n\n            fs.read(\"y\")\n            n.set(2) }></i>\n        <p>{ n.get()\n            + 1\n\n        }</p>\n    }\n";
+    let output = rust(source);
+    assert_eq!(
+        output,
+        "use std::fs;\n\nfn f(n: Cell<u8>) {\n    let v = view! {\n        <b on:click=move |fs| fs.get()></b>\n        <i on:click=move |_| { // head\n\n            fs::read(\"y\");\n            n.set(2) }></i>\n        <p>{ n.get()\n            + 1\n\n        }</p>\n    };\n}\n"
+    );
+    assert_eq!(rust_to_renk(&output).unwrap().matches('\n').count(), source.matches('\n').count());
+    assert_eq!(format_source(source).unwrap(), source);
+}
+
+#[test]
+fn colon_blocks_in_view_blocks_lower_with_their_closing_lines() {
+    let output = rust(
+        "fn f(n: Cell[u8]):\n    view! {\n        <d on:click=move |_| {\n\n            if n.get() > 1:\n                n.set(0)\n            n.set(Cell.new(2).get())\n\n        }></d>\n    }\n",
+    );
+    assert_eq!(
+        output,
+        "fn f(n: Cell<u8>) {\n    view! {\n        <d on:click=move |_| {\n\n            if n.get() > 1 {\n                n.set(0);\n            }\n            n.set(Cell::new(2).get())\n\n        }></d>\n    }\n}\n"
+    );
+    let output = rust("fn f(n: u8):\n    view! {\n        <d>{ if n > 1:\n\n            n.max(0)\n        else:\n            n\n        }</d>\n    }\n");
+    assert!(
+        output.contains("<d>{ if n > 1 {\n\n            n.max(0)\n        } else {\n            n\n        }\n        }</d>"),
+        "{output}"
+    );
+    // A statement after the `{` is the block's first; a `.method` line after it continues it.
+    let output = rust(
+        "fn f(n: u8):\n    view! {\n        <c>{ n.set(1)\n            n.set(2)\n        }</c>\n        <c>{move || n.get()\n            .max(1)\n        }</c>\n    }\n",
+    );
+    assert!(output.contains("<c>{ n.set(1);\n            n.set(2)\n"), "{output}");
+    assert!(output.contains("<c>{move || n.get()\n            .max(1)\n"), "{output}");
+}
