@@ -209,6 +209,12 @@ macro_rules! view:
             let _ = (class(), handler(1));
             "sh"
         }
+    (<ol on:click=move |$e:tt| $f:ident() > Count $child:block </ol>) =>:
+        {
+            let handler = move |$e: u8| $f();
+            let _ = (handler(1), $child);
+            "ol"
+        }
     (<sp class="x" > Find a match $child:block </sp>) =>:
         {
             let _ = $child;
@@ -225,6 +231,8 @@ pub struct Arr[const N: usize]:
     pub x: [u8; N]
 
 pub fn pick[const N: usize, T](_t: T) -> bool = N > 0
+
+pub fn go() -> u8 = 0
 
 pub fn check(n: u8) -> bool = n > 0
 
@@ -647,4 +655,17 @@ pub fn spaced_tag_end_text() -> &'static str:
                 z
             }
         </sp>
+    }
+
+pub fn own_line_tag_end_after_closure() -> &'static str:
+    view! {
+        <ol
+            on:click=move |_| go()
+        >
+            Count
+            {
+                let z = 1
+                z
+            }
+        </ol>
     }
