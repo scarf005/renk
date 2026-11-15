@@ -37,9 +37,12 @@ Other macros, such as `log::info!`, are opaque Rust tokens, as are the payloads 
 
 ## `view!`
 
-In a `view!` body, such as Leptos's, each `{` block that spans several lines holds Renk
-statements, so they need no `;`. Tags, attributes, and one-line blocks such as `{count}` stay
-Rust tokens.
+In a Leptos `view!` body, each `{` block that spans several lines holds Renk statements, so they
+need no `;`. These blocks are children and attribute values (`<p>{`, `class={`), closure and
+`match` arm bodies, and bodies of `if`, `else`, `for`, `while`, `loop`, `async`, and `unsafe`.
+All other text stays Rust tokens: tags, one-line blocks such as `{count}`, struct literals such
+as `Point {`, `match` arm lists, and element bodies of other `view!` macros, such as Sycamore's
+`div(class="x") {`.
 
 ```rk,ignore
 view! {

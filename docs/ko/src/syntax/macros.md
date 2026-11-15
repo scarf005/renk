@@ -36,8 +36,11 @@ pub fn report(name: &str, values: &[i32], tags: &[&str]) {
 
 ## `view!`
 
-Leptos 등의 `view!` 본문에서 여러 줄에 걸친 `{` 블록은 Renk 문장을 담으므로 `;`가 필요 없다.
-태그, 속성, `{count}` 같은 한 줄 블록은 Rust 토큰으로 남는다.
+Leptos `view!` 본문에서 여러 줄에 걸친 `{` 블록은 Renk 문장을 담으므로 `;`가 필요 없다.
+자식과 속성 값(`<p>{`, `class={`), 클로저와 `match` 팔의 본문, `if`, `else`, `for`, `while`,
+`loop`, `async`, `unsafe`의 본문이 이런 블록이다. 나머지는 Rust 토큰으로 남는다. 태그,
+`{count}` 같은 한 줄 블록, `Point {` 같은 구조체 리터럴, `match` 팔 목록, Sycamore의
+`div(class="x") {` 같은 다른 `view!` 매크로의 요소 본문이 그렇다.
 
 ```rk,ignore
 view! {

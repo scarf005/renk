@@ -5308,7 +5308,7 @@ fn map_view_body(body: &str, block: &dyn Fn(&str, Vec<String>) -> String) -> Str
                 .flat_map(|closure| closure.parameters.clone())
                 .collect();
             output.push('{');
-            output.push_str(&if inner.contains('\n') {
+            output.push_str(&if inner.contains('\n') && view_block_opens(&chars, index, &closures) {
                 block(&inner, names)
             } else {
                 map_view_body(&inner, block)
@@ -5321,6 +5321,68 @@ fn map_view_body(body: &str, block: &dyn Fn(&str, Vec<String>) -> String) -> Str
         }
     }
     output
+}
+
+/// Whether the `{` at `open` in a `view!` body opens a block: a child or attribute value, as
+/// `<p>{` or `class={`, the body of a closure or `match` arm, or the body of a keyword on its line,
+/// as `if` in `if n > 1 {` or `else`. Struct literals, `match` arms, and element bodies, as
+/// `Point {`, `match n {`, and Sycamore's `div(class="x") {`, are not.
+fn view_block_opens(chars: &[char], open: usize, closures: &[Closure]) -> bool {
+    let follows_closure = |closure: &Closure| {
+        let head = chars[closure.body.start.min(open)..open].iter().collect::<String>();
+        closure.body.start <= open && (head.trim().is_empty() || head.trim().starts_with("->"))
+    };
+    if chars[..open]
+        .iter()
+        .rfind(|c| !c.is_whitespace())
+        .is_none_or(|c| matches!(c, '>' | '=' | '(' | '[' | '{' | '}' | ',' | ';'))
+        || closures.iter().any(follows_closure)
+    {
+        return true;
+    }
+    // The last keyword of each group open on the line; a `}`, `,`, or `;` ends it, and so does
+    // the `=` of an attribute such as `for=x`, but not the `=` of `if let`.
+    let mut heads = vec![None];
+    let mut at = chars[..open].iter().rposition(|&c| c == '\n').map_or(0, |line| line + 1);
+    while at < open {
+        if let Some(end) = opaque_span_end(chars, at) {
+            at = end + 1;
+            continue;
+        }
+        let assigns = chars[at] == '='
+            && !matches!(chars.get(at + 1), Some('=' | '>'))
+            && (at == 0 || !matches!(chars[at - 1], '=' | '!' | '<' | '>'));
+        let mut head = heads.pop().flatten();
+        match chars[at] {
+            '(' | '[' | '{' => {
+                heads.push(head);
+                head = None;
+            }
+            close @ (')' | ']' | '}') => {
+                if close == '}' || heads.is_empty() {
+                    heads.pop();
+                    head = None;
+                } else {
+                    head = heads.pop().flatten();
+                }
+            }
+            ',' | ';' => head = None,
+            _ if assigns => head = head.filter(|head| matches!(*head, "if" | "while")),
+            c if is_ident_start(c) && (at == 0 || !is_ident_continue(chars[at - 1])) => {
+                let end = read_ident(chars, at);
+                let word = chars[at..end].iter().collect::<String>();
+                let keywords = ["if", "while", "for", "else", "async", "unsafe", "loop", "match"];
+                head = keywords.into_iter().find(|keyword| *keyword == word).or(head);
+                heads.push(head);
+                at = end;
+                continue;
+            }
+            _ => {}
+        }
+        heads.push(head);
+        at += 1;
+    }
+    heads.pop().flatten().is_some_and(|head| head != "match")
 }
 
 /// A Rust `line` with each line of a multi-line `{` block in a `view!` body written as Renk,
