@@ -59,11 +59,30 @@ macro_rules! view:
             handler(1);
             "w"
         }
+    (<n class=match $scrutinee:literal { $($arm:tt)* }></n>) =>:
+        {
+            let _ = match $scrutinee { $($arm)* };
+            "n"
+        }
+    (<p class=move || match $scrutinee:ident { $($arm:tt)* }></p>) =>:
+        {
+            let class = move || match $scrutinee { $($arm)* };
+            let _ = class();
+            "p"
+        }
+    (<f on:click=move |$event:tt| if $check:ident($($argument:tt)*) $then:block></f>) =>:
+        {
+            let handler = move |$event: u8| if $check($($argument)*) $then;
+            handler(1);
+            "f"
+        }
     (div(class=$class:literal) { $($child:ident { $text:literal })* }) =>:
         {
             $(let _ = (stringify!($child), $text);)*
             $class
         }
+pub fn check(n: u8) -> bool = n > 0
+
 #[allow(unused_imports)]
 pub(crate) use view
 
@@ -155,4 +174,50 @@ pub fn wrapped_condition(count: &Cell[u8], ok: bool) -> &'static str:
             count.set(1)
             count.set(2)
         }></w>
+    }
+
+pub fn string_scrutinee() -> &'static str:
+    view! {
+        <n class=match "a" {
+            "a" => 1,
+            _ => 2,
+        }></n>
+    }
+
+pub fn turbofish_pattern(pair: Pair[u8]) -> &'static str:
+    view! {
+        <p class=move || match pair {
+            Pair::<u8> { x, .. } => {
+                let y = 1
+                x + y
+            }
+        }></p>
+    }
+
+pub fn commented_literal() -> &'static str:
+    view! {
+        <s value=Point // the point
+        {
+            x: 1,
+            y: 2,
+        } />
+    }
+
+pub fn trailing_operator(count: &Cell[u8], ok: bool) -> &'static str:
+    view! {
+        <w on:click=move |ev| if ev > 0 &&
+            ok {
+            count.set(1)
+            count.set(2)
+        }></w>
+    }
+
+pub fn wrapped_call(count: &Cell[u8]) -> &'static str:
+    view! {
+        <f on:click=move |ev| if check(
+            ev,
+        ) {
+            count.set(1)
+            count.set(2)
+        }></f>
     }

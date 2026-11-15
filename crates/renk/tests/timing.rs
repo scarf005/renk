@@ -44,6 +44,23 @@ fn long_block_argument_chains_convert_in_linear_time() {
 }
 
 #[test]
+fn long_view_chains_of_struct_literals_transpile_in_linear_time() {
+    let _serial = SERIAL.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let convert = |links: usize| {
+        let links = (0..links)
+            .map(|_| "            .map(|x| Foo { a: x })\n")
+            .collect::<String>();
+        let renk = format!("fn f():\n    view! {{\n        <s value=items\n{links}        />\n    }}\n");
+        let start = std::time::Instant::now();
+        transpile(&renk).unwrap();
+        start.elapsed()
+    };
+    let (short, long) = (fastest(|| convert(250)), fastest(|| convert(1_000)));
+    // Four times the links take about four times as long, not sixty-four.
+    assert!(long < short * 8, "{short:?} {long:?}");
+}
+
+#[test]
 fn deep_closures_convert_in_time_linear_in_their_text() {
     let _serial = SERIAL.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let convert = |depth: usize| {
