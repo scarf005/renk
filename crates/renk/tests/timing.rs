@@ -76,6 +76,21 @@ fn long_view_lists_of_multi_line_literals_transpile_in_linear_time() {
 }
 
 #[test]
+fn long_view_lines_of_keyword_tags_transpile_in_linear_time() {
+    let _serial = SERIAL.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let convert = |tags: usize| {
+        let tags = "match>".repeat(tags);
+        let renk = format!("fn f():\n    view! {{\n        <p>{tags}</p>\n    }}\n");
+        let start = std::time::Instant::now();
+        transpile(&renk).unwrap();
+        start.elapsed()
+    };
+    let (short, long) = (fastest(|| convert(5_000)), fastest(|| convert(20_000)));
+    // Four times the tags take about four times as long, not sixteen.
+    assert!(long < short * 8, "{short:?} {long:?}");
+}
+
+#[test]
 fn deep_closures_convert_in_time_linear_in_their_text() {
     let _serial = SERIAL.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let convert = |depth: usize| {

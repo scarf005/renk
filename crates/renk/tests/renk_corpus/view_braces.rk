@@ -109,11 +109,24 @@ macro_rules! view:
             handler(Box::new(|_| {}));
             "h"
         }
+    (<u class=move || if let $pattern:pat = $value:ident $then:block else $otherwise:block></u>) =>:
+        {
+            let class = move || if let $pattern = $value $then else $otherwise;
+            let _ = class();
+            "u"
+        }
+    (<z class=match $scrutinee:ident as $ty:ty { $($arm:tt)* }></z>) =>:
+        {
+            let _ = match $scrutinee as $ty { $($arm)* };
+            "z"
+        }
     (div(class=$class:literal) { $($child:ident { $text:literal })* }) =>:
         {
             $(let _ = (stringify!($child), $text);)*
             $class
         }
+pub type Same[T] = T
+
 pub fn check(n: u8) -> bool = n > 0
 
 #[allow(unused_imports)]
@@ -354,4 +367,35 @@ pub fn higher_ranked() -> &'static str:
             let a = 1
             ev(&a)
         }></h>
+    }
+
+pub fn nested_turbofish(pair: Pair[Vec[u8]]) -> &'static str:
+    view! {
+        <u class=move || if let Pair::<Vec<u8>> { x, .. } = pair {
+            let n = x.len()
+            n
+        } else {
+            0
+        }></u>
+    }
+
+pub fn turbofish_list(result: Result[Vec[u8], ()]) -> &'static str:
+    view! {
+        <u class=move || if let Ok::<Vec<u8>, ()>(v) = result {
+            let n = v.len()
+            n
+        } else {
+            0
+        }></u>
+    }
+
+pub fn cast_scrutinee(n: u8) -> &'static str:
+    view! {
+        <z class=match n as Same<u8> {
+            0 => Point {
+                x: 1,
+                y: 2,
+            },
+            _ => Point { x: 0, y: 0 },
+        }></z>
     }
