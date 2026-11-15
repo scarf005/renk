@@ -82,6 +82,17 @@ macro_rules! view:
             let _ = class();
             "q"
         }
+    (<o class=move || if let Some($x:ident) = $value:ident $then:block else $otherwise:block></o>) =>:
+        {
+            let class = move || if let Some($x) = $value $then else $otherwise;
+            let _ = class();
+            "o"
+        }
+    (<r value=for $head:ident { $($field:tt)* } in $items:ident $body:block></r>) =>:
+        {
+            for $head { $($field)* } in $items $body
+            "r"
+        }
     (div(class=$class:literal) { $($child:ident { $text:literal })* }) =>:
         {
             $(let _ = (stringify!($child), $text);)*
@@ -249,4 +260,55 @@ pub fn let_pattern(point: Point) -> &'static str:
         } else {
             0
         }></q>
+    }
+
+pub fn let_pattern_statements(point: Point) -> &'static str:
+    view! {
+        <q class=move || if let Point { x, y } = point {
+            let s = x + y
+            s
+        } else {
+            0
+        }></q>
+    }
+
+pub fn wrapped_condition_brace(count: &Cell[u8], ok: bool) -> &'static str:
+    view! {
+        <w on:click=move |ev| if ev > 0
+            && ok
+        {
+            count.set(1)
+            count.set(2)
+        }></w>
+    }
+
+pub fn wrapped_let(value: Option[u8]) -> &'static str:
+    view! {
+        <o class=move || if let Some(x) =
+            value {
+            let y = x + 1
+            y
+        } else {
+            0
+        }></o>
+    }
+
+pub fn wrapped_comparison(count: &Cell[u8]) -> &'static str:
+    view! {
+        <i on:click=move |ev| if ev >
+            0 {
+            count.set(1)
+            count.set(2)
+        }></i>
+    }
+
+pub fn for_pattern(points: Vec[Point]) -> &'static str:
+    view! {
+        <r value=for Point {
+            x,
+            y,
+        } in points {
+            let s = x + y
+            drop(s)
+        }></r>
     }
