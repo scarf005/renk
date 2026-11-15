@@ -215,6 +215,20 @@ macro_rules! view:
             let _ = (handler(1), $child);
             "ol"
         }
+    (<wg class:big=move || $n:ident >= 5 on:click=move |$e:tt| match $s:ident { $($arm:tt)* }> Count </wg>) =>:
+        {
+            let class = move || $n >= 5;
+            let handler = move |$e: u8| match $s { $($arm)* };
+            let _ = (class(), handler(1));
+            "wg"
+        }
+    (<wt class:big=move || $n:ident > 5 on:click=move |$e:tt| match $s:ident { $($arm:tt)* }> Count </wt>) =>:
+        {
+            let class = move || $n > 5;
+            let handler = move |$e: u8| match $s { $($arm)* };
+            let _ = (class(), handler(1));
+            "wt"
+        }
     (<sp class="x" > Find a match $child:block </sp>) =>:
         {
             let _ = $child;
@@ -668,4 +682,32 @@ pub fn own_line_tag_end_after_closure() -> &'static str:
                 z
             }
         </ol>
+    }
+
+pub fn wrapped_greater_equal_attribute(n: u8) -> &'static str:
+    view! {
+        <wg
+            class:big=move || n
+                >= 5
+            on:click=move |_| match n {
+                1 => 2,
+                _ => 3,
+            }
+        >
+            Count
+        </wg>
+    }
+
+pub fn wrapped_greater_attribute(n: u8) -> &'static str:
+    view! {
+        <wt
+            class:big=move || n
+                > 5
+            on:click=move |_| match n {
+                1 => 2,
+                _ => 3,
+            }
+        >
+            Count
+        </wt>
     }
