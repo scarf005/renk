@@ -93,6 +93,22 @@ macro_rules! view:
             for $head { $($field)* } in $items $body
             "r"
         }
+    (<l for> $child:block </l>) =>:
+        {
+            let _ = $child;
+            "l"
+        }
+    (<x>Find a match</x> $child:block) =>:
+        {
+            let _ = $child;
+            "x"
+        }
+    (<h on:click=move |$event:ident: $ty:ty| $body:block></h>) =>:
+        {
+            let handler = move |$event: $ty| $body;
+            handler(Box::new(|_| {}));
+            "h"
+        }
     (div(class=$class:literal) { $($child:ident { $text:literal })* }) =>:
         {
             $(let _ = (stringify!($child), $text);)*
@@ -311,4 +327,31 @@ pub fn for_pattern(points: Vec[Point]) -> &'static str:
             let s = x + y
             drop(s)
         }></r>
+    }
+
+pub fn for_attribute() -> &'static str:
+    view! {
+        <l for>
+            {
+                let a = 1
+                a
+            }
+        </l>
+    }
+
+pub fn keyword_text() -> &'static str:
+    view! {
+        <x>Find a match</x>
+        {
+            let a = 1
+            a
+        }
+    }
+
+pub fn higher_ranked() -> &'static str:
+    view! {
+        <h on:click=move |ev: Box<dyn for<'a> Fn(&'a u8)>| {
+            let a = 1
+            ev(&a)
+        }></h>
     }
