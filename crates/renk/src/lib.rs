@@ -5296,8 +5296,14 @@ fn map_view_body(body: &str, block: &dyn Fn(&str, Vec<String>) -> String) -> Str
     // one, a `.`, or a `?`, as `&& ok {` after `if n > 0`. The `=` of `if let` and the pattern
     // of `if let`, `while let`, or `for` do not end it.
     let mut heads = vec![None::<&str>];
+    // The depth of generic `<` in each open `(` or `[` while a head is set, as in `Ok::<Vec<u8>,`,
+    // so its `,` and `>` do not end the head.
+    let mut angles = vec![0usize];
     while index < chars.len() {
         let top = heads.len() - 1;
+        if heads[top].is_none() {
+            angles[top] = 0;
+        }
         if let Some(end) = opaque_span_end(&chars, index) {
             output.extend(&chars[index..=end]);
             if !(chars[index] == '/' && matches!(chars.get(index + 1), Some('/' | '*'))) {
@@ -5383,15 +5389,28 @@ fn map_view_body(body: &str, block: &dyn Fn(&str, Vec<String>) -> String) -> Str
                     || heads[top].is_some() && line.starts_with('{')
             };
             match chars[at] {
-                '(' | '[' => heads.push(None),
-                ')' | ']' if heads.len() > 1 => drop(heads.pop()),
+                '(' | '[' => {
+                    heads.push(None);
+                    angles.push(0);
+                }
+                ')' | ']' if heads.len() > 1 => {
+                    heads.pop();
+                    angles.pop();
+                }
+                '<' if at > 0
+                    && (is_ident_continue(chars[at - 1]) || chars[at - 1] == ':')
+                    && !matches!(next, Some('/' | '=')) =>
+                {
+                    angles[top] += 1
+                }
+                '>' if angles[top] > 0 && !matches!(chars[at - 1], '-' | '=') => angles[top] -= 1,
+                ',' if angles[top] > 0 => {}
                 ',' | ';' | ')' | ']' | '}' => heads[top] = None,
                 '=' if next == Some('>') => heads[top] = None,
-                // A tag end, as in `<label for>` or `match</p>`, and not `Pair::<u8>` or `a > b`.
+                // A tag end, as in `<label for>` or `match</p>`, and not `a > b` or `->`.
                 '>' if matches!(heads[top], Some("match" | "if let" | "while let" | "for"))
                     && !matches!(chars[at - 1], ' ' | '\t' | '-' | '=')
-                    && next != Some('=')
-                    && !ends_turbofish(&chars, at) =>
+                    && next != Some('=') =>
                 {
                     heads[top] = None
                 }
@@ -5431,6 +5450,20 @@ fn view_block_opens(
     if let Some(head) = head {
         return !matches!(head, "match" | "if let" | "while let" | "for");
     }
+    // Whether the `>` at `close` ends a turbofish, as in `Pair::<u8> {`, and not `=>` or `->`.
+    let turbofish = |close: usize| {
+        let mut depth = 0usize;
+        for at in (0..=close).rev().take_while(|&at| chars[at] != '\n') {
+            match chars[at] {
+                '>' if at == 0 || !matches!(chars[at - 1], '=' | '-') => depth += 1,
+                '>' if at == close => return false,
+                '<' if depth == 1 => return chars[..at].ends_with(&[':', ':']),
+                '<' => depth = depth.saturating_sub(1),
+                _ => {}
+            }
+        }
+        false
+    };
     let follows_closure = |closure: &Closure| {
         let start = closure.body.start;
         let mut head = chars[start.min(open)..open].iter().skip_while(|c| c.is_whitespace());
@@ -5438,25 +5471,10 @@ fn view_block_opens(
     };
     let child = match previous {
         None => true,
-        Some(('>', close)) => !ends_turbofish(chars, close),
+        Some(('>', close)) => !turbofish(close),
         Some((c, _)) => matches!(c, '"' | '=' | '(' | '[' | '{' | '}' | ',' | ';'),
     };
     child || closures.iter().any(follows_closure)
-}
-
-/// Whether the `>` at `close` ends a turbofish, as in `Pair::<u8> {`, and not `=>` or `->`.
-fn ends_turbofish(chars: &[char], close: usize) -> bool {
-    let mut depth = 0usize;
-    for at in (0..=close).rev().take_while(|&at| chars[at] != '\n') {
-        match chars[at] {
-            '>' if at == 0 || !matches!(chars[at - 1], '=' | '-') => depth += 1,
-            '>' if at == close => return false,
-            '<' if depth == 1 => return chars[..at].ends_with(&[':', ':']),
-            '<' => depth = depth.saturating_sub(1),
-            _ => {}
-        }
-    }
-    false
 }
 
 /// A Rust `line` with each line of a multi-line `{` block in a `view!` body written as Renk,
