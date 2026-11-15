@@ -2,9 +2,13 @@
 
 ![](./thumbnail.webp)
 
-Renk is an indentation-based syntax for [Rust](https://rust-lang.org), inspired by [Rust's Ugly Syntax](https://matklad.github.io/2023/01/26/rusts-ugly-syntax.html).
+Renk is an indentation-based syntax for [Rust](https://rust-lang.org).
+It is inspired by the post [Rust's Ugly Syntax](https://matklad.github.io/2023/01/26/rusts-ugly-syntax.html).
 
 Documentation: <https://scarf005.github.io/renk/> ([한국어](https://scarf005.github.io/renk/ko/))
+
+> [!NOTE] why this syntax?
+> because i have this irrational hatred towards semicolons. i also like scala, how did you find out?
 
 ## Example
 
