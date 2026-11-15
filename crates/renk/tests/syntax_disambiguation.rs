@@ -1663,3 +1663,16 @@ fn colon_blocks_in_view_blocks_lower_with_their_closing_lines() {
     assert!(output.contains("<c>{ n.set(1);\n            n.set(2)\n"), "{output}");
     assert!(output.contains("<c>{move || n.get()\n            .max(1)\n"), "{output}");
 }
+
+#[test]
+fn view_blocks_drop_semicolons_when_a_path_keeps_its_colons() {
+    // `m::insert` keeps `::`, as Renk reads `m.insert` as a method of the `m` value, and the other
+    // lines still drop their `;`.
+    let rust = "fn f(n: u8) {\n    let m = 1;\n    view! {\n        <b on:click=move |_| {\n            n.set(1);\n            m::insert(1);\n            n.set(0);\n        }></b>\n    }\n}\n";
+    let renk = rust_to_renk(rust).unwrap();
+    assert_eq!(
+        renk,
+        "fn f(n: u8):\n    let m = 1\n    view! {\n        <b on:click=move |_| {\n            n.set(1)\n            m::insert(1)\n            n.set(0);\n        }></b>\n    }\n"
+    );
+    assert_eq!(self::rust(&renk), rust);
+}

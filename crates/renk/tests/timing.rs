@@ -69,8 +69,10 @@ fn long_view_blocks_convert_in_linear_time() {
         let statements = (0..statements)
             .map(|n| format!("            n.set({n});\n"))
             .collect::<String>();
+        // `fs::read` keeps its `::`, as `fs.read` would read the `fs` value, and the last `n.set`
+        // keeps its `;`.
         let rust = format!(
-            "fn f(n: u8) {{\n    view! {{\n        <b on:click=move |_| {{\n{statements}        }}></b>\n    }}\n}}\n"
+            "fn f(n: u8) {{\n    view! {{\n        <b on:click=move |_| {{\n            let fs = 0;\n            fs::read(fs);\n{statements}        }}></b>\n    }}\n}}\n"
         );
         let start = std::time::Instant::now();
         rust_to_renk(&rust).unwrap();
