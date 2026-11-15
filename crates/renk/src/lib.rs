@@ -817,7 +817,7 @@ fn idiomatic_renk(lines: Vec<String>, aggressive: bool) -> Vec<String> {
     let expected = canonical_format_macros(&expected.rust);
     let expected_tokens = rust_tokens(&expected);
     type Pass = fn(&[String]) -> Vec<Rewrite>;
-    let passes: [Pass; 8] = [
+    let passes: [Pass; 9] = [
         |lines| line_rewrites(lines, drop_semicolon),
         |lines| {
             line_rewrites(lines, |line| {
@@ -830,7 +830,10 @@ fn idiomatic_renk(lines: Vec<String>, aggressive: bool) -> Vec<String> {
         if_chain_rewrites,
         expression_body_rewrites,
         |lines| line_rewrites(lines, let_else_rewrite),
-        |lines| line_rewrites(lines, view_blocks_as_renk),
+        // A view block keeps its dropped `;` when one of its paths, checked without the scope
+        // around the block, cannot take a `.`.
+        |lines| line_rewrites(lines, |line| view_blocks_as_renk(line, false)),
+        |lines| line_rewrites(lines, |line| view_blocks_as_renk(line, true)),
     ];
     passes
         .into_iter()
@@ -5386,61 +5389,42 @@ fn view_block_opens(chars: &[char], open: usize, closures: &[Closure]) -> bool {
 }
 
 /// A Rust `line` with each line of a multi-line `{` block in a `view!` body written as Renk,
-/// without its `;` and with dotted paths, where the block still lowers to the same Rust.
-fn view_blocks_as_renk(line: &str) -> Option<String> {
+/// without its `;`, or with dotted paths when `dot`, where the block still lowers to the same Rust.
+fn view_blocks_as_renk(line: &str, dot: bool) -> Option<String> {
     let renk = map_view_blocks(line, &|inner, names| {
-        let expected = lower_view_block(inner, names.clone());
-        let in_literal = lines_ending_in_literal(inner);
+        let lower = |lines: &[String]| lower_view_block(&lines.join("\n"), names.clone());
         let mut lines = inner.split('\n').map(str::to_string).collect::<Vec<_>>();
+        let expected = lower(&lines);
+        let in_literal = lines_ending_in_literal(inner);
         let rewrite = |line: &str| {
             let (code, comment) = split_trailing_comment(line);
-            let dotted = dot_rust_paths(code).unwrap_or_else(|| code.to_string());
-            format!("{}{comment}", strip_rust_semicolon(&dotted))
+            let code = match dot {
+                true => dot_rust_paths(code).unwrap_or_else(|| code.to_string()),
+                false => strip_rust_semicolon(code),
+            };
+            format!("{code}{comment}")
         };
-        // Most blocks take every rewrite at once, or all but the last line before each `}`, which
-        // saves lowering the block once per line; the lines left are tried one at a time.
-        let rewritten = |keep: &dyn Fn(usize) -> bool| {
-            (0..lines.len())
-                .map(|index| match in_literal.get(index) {
-                    _ if keep(index) => lines[index].clone(),
-                    Some(true) => lines[index].clone(),
-                    _ => rewrite(&lines[index]),
-                })
-                .collect::<Vec<_>>()
-        };
-        let before_closer = |index: usize| {
-            lines[index + 1..]
-                .iter()
-                .find(|line| !line.trim().is_empty())
-                .is_none_or(|next| next.trim_start().starts_with('}'))
-        };
-        if let Some(accepted) = [rewritten(&|_| false), rewritten(&before_closer)]
-            .into_iter()
-            .find(|trial| lower_view_block(&trial.join("\n"), names.clone()) == expected)
-        {
-            lines = accepted;
-        }
         let pending = (0..lines.len())
-            .filter(|&index| rewrite(&lines[index]) != lines[index])
+            .filter(|&index| {
+                !in_literal.get(index).copied().unwrap_or(false)
+                    && !is_comment(split_trailing_comment(&lines[index]).0.trim())
+                    && rewrite(&lines[index]) != lines[index]
+            })
             .collect::<Vec<_>>();
-        for index in pending {
-            let (code, comment) = split_trailing_comment(&lines[index]);
-            if in_literal.get(index).copied().unwrap_or(false) || is_comment(code.trim()) {
-                continue;
+        // Lines are rewritten a group at a time, and a group that changes the Rust is halved, so a
+        // block with a few lines that must stay, as the last line before a `}`, lowers a few times
+        // per such line instead of once per line.
+        let mut groups = vec![pending.as_slice()];
+        while let Some(group) = groups.pop() {
+            let mut trial = lines.clone();
+            for &index in group {
+                trial[index] = rewrite(&lines[index]);
             }
-            let dotted = dot_rust_paths(code).unwrap_or_else(|| code.to_string());
-            let candidates = [
-                strip_rust_semicolon(&dotted),
-                strip_rust_semicolon(code),
-                dotted,
-            ];
-            for candidate in candidates.map(|candidate| format!("{candidate}{comment}")) {
-                let mut trial = lines.clone();
-                trial[index] = candidate;
-                if lower_view_block(&trial.join("\n"), names.clone()) == expected {
-                    lines = trial;
-                    break;
-                }
+            if lower(&trial) == expected {
+                lines = trial;
+            } else if let [_, _, ..] = group {
+                let (first, second) = group.split_at(group.len() / 2);
+                groups.extend([second, first]);
             }
         }
         lines.join("\n")
