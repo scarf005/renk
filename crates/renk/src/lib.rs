@@ -5436,12 +5436,9 @@ fn map_view_body(
                     heads.pop();
                     angles.pop();
                 }
-                // Not `n<5`, `n< m`, `n<=5`, or `1<<n`.
                 '<' if at > 0
                     && (is_ident_continue(chars[at - 1]) || chars[at - 1] == ':')
-                    && next.is_some_and(|c| {
-                        !c.is_ascii_digit() && !c.is_whitespace() && !matches!(c, '/' | '=' | '<')
-                    }) =>
+                    && !matches!(next, Some('/' | '=')) =>
                 {
                     angles[top] += 1
                 }
