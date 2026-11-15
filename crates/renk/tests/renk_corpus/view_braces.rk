@@ -181,6 +181,20 @@ macro_rules! view:
             handler(1);
             $text
         }
+    (<ql items=Vec::<<$t:ty as IntoIterator>::Item>::new() on:click=move |$e:tt| match $s:ident { $($arm:tt)* }/>) =>:
+        {
+            let _ = Vec::<<$t as IntoIterator>::Item>::new();
+            let handler = move |$e: u8| match $s { $($arm)* };
+            let _ = handler(1);
+            "ql"
+        }
+    (<gt class:big=move || $n:ident > 5 on:click=move |$e:tt| match $s:ident { $($arm:tt)* }></gt>) =>:
+        {
+            let class = move || $n > 5;
+            let handler = move |$e: u8| match $s { $($arm)* };
+            let _ = (class(), handler(1));
+            "gt"
+        }
     (div(class=$class:literal) { $($child:ident { $text:literal })* }) =>:
         {
             $(let _ = (stringify!($child), $text);)*
@@ -572,4 +586,20 @@ pub fn const_turbofish_condition(n: u8) -> &'static str:
         }) {
             "x"
         }
+    }
+
+pub fn qualified_turbofish_attribute(n: u8) -> &'static str:
+    view! {
+        <ql items=Vec::<<Vec<u8> as IntoIterator>::Item>::new() on:click=move |_| match n {
+            1 => 2,
+            _ => 3,
+        }/>
+    }
+
+pub fn spaced_comparison_attribute(n: u8) -> &'static str:
+    view! {
+        <gt class:big=move || n > 5 on:click=move |_| match n {
+            1 => 2,
+            _ => 3,
+        }></gt>
     }
