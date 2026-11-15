@@ -5270,7 +5270,7 @@ fn map_view_blocks(text: &str, block: &dyn Fn(&str, Vec<String>) -> String) -> S
         output.extend(&chars[index..=open]);
         let body = chars[open + 1..end].iter().collect::<String>();
         if path.trim_end().rsplit("::").next() == Some("view") {
-            output.push_str(&map_view_body(&body, block));
+            output.push_str(&map_view_body(&body, true, block));
         } else {
             output.push_str(&body);
         }
@@ -5281,8 +5281,13 @@ fn map_view_blocks(text: &str, block: &dyn Fn(&str, Vec<String>) -> String) -> S
 }
 
 /// A `view!` body with its multi-line `{` blocks and nested `view!` invocations mapped as
-/// [`map_view_blocks`] says.
-fn map_view_body(body: &str, block: &dyn Fn(&str, Vec<String>) -> String) -> String {
+/// [`map_view_blocks`] says. `markup` is false for the Rust code in braces in such a body, which
+/// has no tags.
+fn map_view_body(
+    body: &str,
+    markup: bool,
+    block: &dyn Fn(&str, Vec<String>) -> String,
+) -> String {
     let chars = body.chars().collect::<Vec<_>>();
     let closures = closures(&chars);
     let mut output = String::new();
@@ -5296,12 +5301,15 @@ fn map_view_body(body: &str, block: &dyn Fn(&str, Vec<String>) -> String) -> Str
     // one, a `.`, or a `?`, as `&& ok {` after `if n > 0`. The `=` of `if let` and the pattern
     // of `if let`, `while let`, or `for` do not end it.
     let mut heads = vec![None::<&str>];
-    // The depth of generic `<` in each open `(` or `[` while a head is set, as in `Ok::<Vec<u8>,`,
-    // so its `,` and `>` do not end the head.
+    // The depth of generic `<` in each open `(` or `[` while a head is set or in a tag, as in
+    // `Ok::<Vec<u8>,` or `|ev: Box<dyn Fn()>|`, so its `,` and `>` end no head or tag.
     let mut angles = vec![0usize];
+    // Whether `index` is in a tag, as `<p class=x>`, or in the text after one, as `Find a match`
+    // in `<p>Find a match</p>`; `None` before the first tag and in code without tags.
+    let mut tag = None::<bool>;
     while index < chars.len() {
         let top = heads.len() - 1;
-        if heads[top].is_none() {
+        if heads[top].is_none() && tag != Some(true) {
             angles[top] = 0;
         }
         if let Some(end) = opaque_span_end(&chars, index) {
@@ -5335,7 +5343,7 @@ fn map_view_body(body: &str, block: &dyn Fn(&str, Vec<String>) -> String) -> Str
             output.push_str(&if inner.contains('\n') && opens() {
                 block(&inner, names)
             } else {
-                map_view_body(&inner, block)
+                map_view_body(&inner, false, block)
             });
             output.push('}');
             // A pattern, as `Point { x, y }` in `if let Point { x, y } = p {`, keeps the head.
@@ -5348,7 +5356,16 @@ fn map_view_body(body: &str, block: &dyn Fn(&str, Vec<String>) -> String) -> Str
             let end = read_ident(&chars, index);
             let word = chars[index..end].iter().collect::<String>();
             let keywords = ["if", "while", "for", "else", "async", "unsafe", "loop", "match"];
+            // Text, as `match` in `<p>Find a match</p>`, or an attribute name, as `for` in
+            // `<label for>`, and not a value, as `if` in `on:click=move |_| if`.
+            let markup_word = top == 0
+                && match tag {
+                    Some(false) => true,
+                    Some(true) => previous.is_some_and(|(c, _)| is_ident_continue(c) || c == '"'),
+                    None => false,
+                };
             heads[top] = match (heads[top], word.as_str()) {
+                (None, _) if markup_word => None,
                 // A bound, as `for<'a> Fn(&'a u8)`.
                 (head, "for") if chars.get(end) == Some(&'<') => head,
                 (Some("if"), "let") => Some("if let"),
@@ -5388,7 +5405,20 @@ fn map_view_body(body: &str, block: &dyn Fn(&str, Vec<String>) -> String) -> Str
                     || line.starts_with(['.', '?'])
                     || heads[top].is_some() && line.starts_with('{')
             };
+            let starts_tag = || {
+                next.is_some_and(|c| is_ident_start(c) || matches!(c, '/' | '>'))
+                    && (tag == Some(false)
+                        || previous.is_none_or(|(c, _)| !is_ident_continue(c) && c != ':'))
+            };
             match chars[at] {
+                '<' if markup
+                    && top == 0
+                    && tag != Some(true)
+                    && heads[top].is_none()
+                    && starts_tag() =>
+                {
+                    tag = Some(true)
+                }
                 '(' | '[' => {
                     heads.push(None);
                     angles.push(0);
@@ -5404,16 +5434,17 @@ fn map_view_body(body: &str, block: &dyn Fn(&str, Vec<String>) -> String) -> Str
                     angles[top] += 1
                 }
                 '>' if angles[top] > 0 && !matches!(chars[at - 1], '-' | '=') => angles[top] -= 1,
+                // A tag end, and not `a > b` in `if a > b`, or `->`.
+                '>' if tag == Some(true)
+                    && top == 0
+                    && heads[top].is_none()
+                    && !matches!(chars[at - 1], '-' | '=') =>
+                {
+                    tag = Some(false)
+                }
                 ',' if angles[top] > 0 => {}
                 ',' | ';' | ')' | ']' | '}' => heads[top] = None,
                 '=' if next == Some('>') => heads[top] = None,
-                // A tag end, as in `<label for>` or `match</p>`, and not `a > b` or `->`.
-                '>' if matches!(heads[top], Some("match" | "if let" | "while let" | "for"))
-                    && !matches!(chars[at - 1], ' ' | '\t' | '-' | '=')
-                    && next != Some('=') =>
-                {
-                    heads[top] = None
-                }
                 '=' if assigns => {
                     heads[top] = match heads[top] {
                         Some("if" | "if let") => Some("if"),
