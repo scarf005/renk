@@ -76,6 +76,12 @@ macro_rules! view:
             handler(1);
             "f"
         }
+    (<q class=move || if let $head:ident { $($field:tt)* } = $value:ident $then:block else $otherwise:block></q>) =>:
+        {
+            let class = move || if let $head { $($field)* } = $value $then else $otherwise;
+            let _ = class();
+            "q"
+        }
     (div(class=$class:literal) { $($child:ident { $text:literal })* }) =>:
         {
             $(let _ = (stringify!($child), $text);)*
@@ -220,4 +226,27 @@ pub fn wrapped_call(count: &Cell[u8]) -> &'static str:
             count.set(1)
             count.set(2)
         }></f>
+    }
+
+pub fn guard(n: u8) -> &'static str:
+    view! {
+        <m class=match n {
+            m if m > 0 => Point {
+                x: 1,
+                y: 2,
+            },
+            _ => Point { x: 0, y: 0 },
+        }></m>
+    }
+
+pub fn let_pattern(point: Point) -> &'static str:
+    view! {
+        <q class=move || if let Point {
+            x,
+            y,
+        } = point {
+            x + y
+        } else {
+            0
+        }></q>
     }
