@@ -5343,6 +5343,8 @@ fn map_view_body(body: &str, block: &dyn Fn(&str, Vec<String>) -> String) -> Str
             let word = chars[index..end].iter().collect::<String>();
             let keywords = ["if", "while", "for", "else", "async", "unsafe", "loop", "match"];
             heads[top] = match (heads[top], word.as_str()) {
+                // A bound, as `for<'a> Fn(&'a u8)`.
+                (head, "for") if chars.get(end) == Some(&'<') => head,
                 (Some("if"), "let") => Some("if let"),
                 (Some("while"), "let") => Some("while let"),
                 (Some("for"), "in") => Some("for in"),
@@ -5385,6 +5387,14 @@ fn map_view_body(body: &str, block: &dyn Fn(&str, Vec<String>) -> String) -> Str
                 ')' | ']' if heads.len() > 1 => drop(heads.pop()),
                 ',' | ';' | ')' | ']' | '}' => heads[top] = None,
                 '=' if next == Some('>') => heads[top] = None,
+                // A tag end, as in `<label for>` or `match</p>`, and not `Pair::<u8>` or `a > b`.
+                '>' if matches!(heads[top], Some("match" | "if let" | "while let" | "for"))
+                    && !matches!(chars[at - 1], ' ' | '\t' | '-' | '=')
+                    && next != Some('=')
+                    && !ends_turbofish(&chars, at) =>
+                {
+                    heads[top] = None
+                }
                 '=' if assigns => {
                     heads[top] = match heads[top] {
                         Some("if" | "if let") => Some("if"),
@@ -5421,20 +5431,6 @@ fn view_block_opens(
     if let Some(head) = head {
         return !matches!(head, "match" | "if let" | "while let" | "for");
     }
-    // Whether the `>` at `close` ends a turbofish, as in `Pair::<u8> {`, and not `=>` or `->`.
-    let turbofish = |close: usize| {
-        let mut depth = 0usize;
-        for at in (0..=close).rev().take_while(|&at| chars[at] != '\n') {
-            match chars[at] {
-                '>' if at == 0 || !matches!(chars[at - 1], '=' | '-') => depth += 1,
-                '>' if at == close => return false,
-                '<' if depth == 1 => return chars[..at].ends_with(&[':', ':']),
-                '<' => depth = depth.saturating_sub(1),
-                _ => {}
-            }
-        }
-        false
-    };
     let follows_closure = |closure: &Closure| {
         let start = closure.body.start;
         let mut head = chars[start.min(open)..open].iter().skip_while(|c| c.is_whitespace());
@@ -5442,10 +5438,25 @@ fn view_block_opens(
     };
     let child = match previous {
         None => true,
-        Some(('>', close)) => !turbofish(close),
+        Some(('>', close)) => !ends_turbofish(chars, close),
         Some((c, _)) => matches!(c, '"' | '=' | '(' | '[' | '{' | '}' | ',' | ';'),
     };
     child || closures.iter().any(follows_closure)
+}
+
+/// Whether the `>` at `close` ends a turbofish, as in `Pair::<u8> {`, and not `=>` or `->`.
+fn ends_turbofish(chars: &[char], close: usize) -> bool {
+    let mut depth = 0usize;
+    for at in (0..=close).rev().take_while(|&at| chars[at] != '\n') {
+        match chars[at] {
+            '>' if at == 0 || !matches!(chars[at - 1], '=' | '-') => depth += 1,
+            '>' if at == close => return false,
+            '<' if depth == 1 => return chars[..at].ends_with(&[':', ':']),
+            '<' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+    false
 }
 
 /// A Rust `line` with each line of a multi-line `{` block in a `view!` body written as Renk,
