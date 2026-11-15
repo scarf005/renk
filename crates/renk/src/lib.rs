@@ -5338,7 +5338,11 @@ fn map_view_body(
                 })
                 .flat_map(|closure| closure.parameters.clone())
                 .collect();
-            let opens = || view_block_opens(&chars, index, previous, heads[top], &closures);
+            // A block after text, as in `<p>Find a match {`, is a child.
+            let opens = || {
+                top == 0 && tag == Some(false)
+                    || view_block_opens(&chars, index, previous, heads[top], &closures)
+            };
             output.push('{');
             output.push_str(&if inner.contains('\n') && opens() {
                 block(&inner, names)
@@ -5357,11 +5361,16 @@ fn map_view_body(
             let word = chars[index..end].iter().collect::<String>();
             let keywords = ["if", "while", "for", "else", "async", "unsafe", "loop", "match"];
             // Text, as `match` in `<p>Find a match</p>`, or an attribute name, as `for` in
-            // `<label for>`, and not a value, as `if` in `on:click=move |_| if`.
+            // `<label for>` or `<label class={a} for>`, and not a value, as `if` in
+            // `on:click=move |_| if`, or the `else` of an `if` value.
             let markup_word = top == 0
                 && match tag {
                     Some(false) => true,
-                    Some(true) => previous.is_some_and(|(c, _)| is_ident_continue(c) || c == '"'),
+                    Some(true) => previous.is_some_and(|(c, _)| {
+                        is_ident_continue(c)
+                            || matches!(c, '"' | ')' | ']')
+                            || c == '}' && word != "else"
+                    }),
                     None => false,
                 };
             heads[top] = match (heads[top], word.as_str()) {
@@ -5427,9 +5436,12 @@ fn map_view_body(
                     heads.pop();
                     angles.pop();
                 }
+                // Not `n<5`, `n< m`, `n<=5`, or `1<<n`.
                 '<' if at > 0
                     && (is_ident_continue(chars[at - 1]) || chars[at - 1] == ':')
-                    && !matches!(next, Some('/' | '=')) =>
+                    && next.is_some_and(|c| {
+                        !c.is_ascii_digit() && !c.is_whitespace() && !matches!(c, '/' | '=' | '<')
+                    }) =>
                 {
                     angles[top] += 1
                 }
