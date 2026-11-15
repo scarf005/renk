@@ -1,5 +1,9 @@
 use std.cell.Cell
 
+pub struct Pair[T]:
+    pub x: T
+    pub y: T
+
 pub struct Point:
     pub x: u8
     pub y: u8
@@ -33,6 +37,27 @@ macro_rules! view:
             let handler = move |$event: u8| if $left > 0 $then;
             handler(1);
             "i"
+        }
+    (<g value=$head:ident::<$ty:ty> { $($field:tt)* } />) =>:
+        {
+            let _ = $head::<$ty> { $($field)* };
+            "g"
+        }
+    (<t> $text:literal $child:block </t>) =>:
+        {
+            let _ = ($text, $child);
+            "t"
+        }
+    (<k> $child:block </k>) =>:
+        {
+            let _ = $child;
+            "k"
+        }
+    (<w on:click=move |$event:tt| if $left:ident > 0 && $right:ident $then:block></w>) =>:
+        {
+            let handler = move |$event: u8| if $left > 0 && $right $then;
+            handler(1);
+            "w"
         }
     (div(class=$class:literal) { $($child:ident { $text:literal })* }) =>:
         {
@@ -91,4 +116,43 @@ pub fn sycamore() -> &'static str:
             p { "a" }
             p { "b" }
         }
+    }
+
+pub fn turbofish() -> &'static str:
+    view! {
+        <g value=Pair::<u8> {
+            x: 1,
+            y: 2,
+        } />
+    }
+
+pub fn after_text() -> &'static str:
+    view! {
+        <t>
+            "Value: "
+            {
+                let x = 1
+                x
+            }
+        </t>
+    }
+
+pub fn after_comment() -> &'static str:
+    view! {
+        <k>
+            // total
+            {
+                let x = 1
+                x
+            }
+        </k>
+    }
+
+pub fn wrapped_condition(count: &Cell[u8], ok: bool) -> &'static str:
+    view! {
+        <w on:click=move |ev| if ev > 0
+            && ok {
+            count.set(1)
+            count.set(2)
+        }></w>
     }
