@@ -120,6 +120,27 @@ macro_rules! view:
             let _ = match $scrutinee as $ty { $($arm)* };
             "z"
         }
+    (<v class=match $left:ident > $right:literal { $($arm:tt)* }></v>) =>:
+        {
+            let _ = match $left > $right { $($arm)* };
+            "v"
+        }
+    (<b class=move || if let <$ty:ty>::$constant:ident = $value:ident $then:block else $otherwise:block></b>) =>:
+        {
+            let class = move || if let <$ty>::$constant = $value $then else $otherwise;
+            let _ = class();
+            "b"
+        }
+    (<e>match $x:ident < $y:ident, then</e> $child:block) =>:
+        {
+            let _ = $child;
+            "e"
+        }
+    (<j>Find a match<br/> $child:block </j>) =>:
+        {
+            let _ = $child;
+            "j"
+        }
     (div(class=$class:literal) { $($child:ident { $text:literal })* }) =>:
         {
             $(let _ = (stringify!($child), $text);)*
@@ -398,4 +419,44 @@ pub fn cast_scrutinee(n: u8) -> &'static str:
             },
             _ => Point { x: 0, y: 0 },
         }></z>
+    }
+
+pub fn glued_comparison(a: &str) -> &'static str:
+    view! {
+        <v class=match a>"x" {
+            true => {
+                let x = 1
+                x
+            }
+            false => 2,
+        }></v>
+    }
+
+pub fn qualified_path(n: u8) -> &'static str:
+    view! {
+        <b class=move || if let <u8>::MAX = n {
+            let z = 1
+            z
+        } else {
+            0
+        }></b>
+    }
+
+pub fn comparison_text() -> &'static str:
+    view! {
+        <e>match x<y, then</e>
+        {
+            let z = 1
+            z
+        }
+    }
+
+pub fn self_closing_text() -> &'static str:
+    view! {
+        <j>Find a match<br/>
+            {
+                let x = 1
+                x
+            }
+        </j>
     }
