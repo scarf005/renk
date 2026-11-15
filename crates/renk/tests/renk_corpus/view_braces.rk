@@ -141,6 +141,33 @@ macro_rules! view:
             let _ = $child;
             "j"
         }
+    (<y class={$a:ident} for> $child:block </y>) =>:
+        {
+            let _ = ($a, $child);
+            "y"
+        }
+    (<d class=move || $a:ident.len() for> $child:block </d>) =>:
+        {
+            let class = move || $a.len();
+            let _ = (class(), $child);
+            "d"
+        }
+    (<cmp class:x=move || $n:ident < 5 >match</cmp> $child:block) =>:
+        {
+            let class = move || $n < 5;
+            let _ = (class(), $child);
+            "cmp"
+        }
+    (<tx>Find a match $child:block </tx>) =>:
+        {
+            let _ = $child;
+            "tx"
+        }
+    (<tw>$text:literal</tw> while $child:block) =>:
+        {
+            let _ = ($text, $child);
+            "tw"
+        }
     (div(class=$class:literal) { $($child:ident { $text:literal })* }) =>:
         {
             $(let _ = (stringify!($child), $text);)*
@@ -459,4 +486,53 @@ pub fn self_closing_text() -> &'static str:
                 x
             }
         </j>
+    }
+
+pub fn keyword_attribute_after_brace(a: u8) -> &'static str:
+    view! {
+        <y class={a} for>
+            {
+                let z = 1
+                z
+            }
+        </y>
+    }
+
+pub fn keyword_attribute_after_call(a: &'static str) -> &'static str:
+    view! {
+        <d class=move || a.len() for>
+            {
+                let z = 1
+                z
+            }
+        </d>
+    }
+
+pub fn glued_comparison_attribute(n: u8) -> &'static str:
+    view! {
+        <cmp class:x=move || n<5>match</cmp>
+        {
+            let z = 1
+            z
+        }
+    }
+
+pub fn unquoted_text() -> &'static str:
+    view! {
+        <tx>Find a match
+            {
+                let z = 1
+                z
+            }
+        </tx>
+    }
+
+pub fn keyword_after_element() -> &'static str:
+    view! {
+        <tw>"x"</tw>
+        while
+        {
+            let z = 1
+            z
+        }
     }
