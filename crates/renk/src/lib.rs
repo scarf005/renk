@@ -5289,8 +5289,14 @@ fn map_view_body(body: &str, block: &dyn Fn(&str, Vec<String>) -> String) -> Str
     let mut index = 0usize;
     // The last char before `index` outside whitespace and comments, and its index, with `"` for
     // a string.
-    let mut previous = None;
+    let mut previous = None::<(char, usize)>;
+    // The keyword that heads the statement in each open `(` or `[`, the innermost last. A `,`, a
+    // `;`, a `{` block, a match arm's `=>`, and the `=` of an attribute such as `for=x` end it,
+    // and so does a line end, unless the line ends with an operator or the next one starts with
+    // one, a `.`, or a `?`, as `&& ok {` after `if n > 0`. The `=` of `if let` does not end it.
+    let mut heads = vec![None::<&str>];
     while index < chars.len() {
+        let top = heads.len() - 1;
         if let Some(end) = opaque_span_end(&chars, index) {
             output.extend(&chars[index..=end]);
             if !(chars[index] == '/' && matches!(chars.get(index + 1), Some('/' | '*'))) {
@@ -5317,21 +5323,69 @@ fn map_view_body(body: &str, block: &dyn Fn(&str, Vec<String>) -> String) -> Str
                 })
                 .flat_map(|closure| closure.parameters.clone())
                 .collect();
+            let opens = || view_block_opens(&chars, index, previous, heads[top], &closures);
             output.push('{');
-            output.push_str(
-                &if inner.contains('\n') && view_block_opens(&chars, index, previous, &closures) {
-                    block(&inner, names)
-                } else {
-                    map_view_body(&inner, block)
-                },
-            );
+            output.push_str(&if inner.contains('\n') && opens() {
+                block(&inner, names)
+            } else {
+                map_view_body(&inner, block)
+            });
             output.push('}');
+            heads[top] = None;
             previous = Some(('}', close));
             index = close + 1;
+        } else if is_ident_start(chars[index])
+            && (index == 0 || !is_ident_continue(chars[index - 1]))
+        {
+            let end = read_ident(&chars, index);
+            let word = chars[index..end].iter().collect::<String>();
+            let keywords = ["if", "while", "for", "else", "async", "unsafe", "loop", "match"];
+            heads[top] = match (heads[top], word.as_str()) {
+                (Some("if"), "let") => Some("if let"),
+                (Some("while"), "let") => Some("while let"),
+                (head, word) => keywords.into_iter().find(|keyword| *keyword == word).or(head),
+            };
+            output.extend(&chars[index..end]);
+            previous = Some((chars[end - 1], end - 1));
+            index = end;
         } else {
-            output.push(chars[index]);
-            if !chars[index].is_whitespace() {
-                previous = Some((chars[index], index));
+            let at = index;
+            let next = chars.get(at + 1).copied();
+            let assigns = chars[at] == '='
+                && !matches!(next, Some('=' | '>'))
+                && (at == 0 || !matches!(chars[at - 1], '=' | '!' | '<' | '>'));
+            // Whether the line ending at `at` ends with an operator, or the next starts with one.
+            let continues = || {
+                let ends = previous.is_some_and(|(c, last)| {
+                    let pair = chars[last.saturating_sub(1)..=last].iter().collect::<String>();
+                    matches!(c, '+' | '-' | '*' | '/' | '%')
+                        || ["&&", "||", "==", "!=", "<=", ">="].contains(&pair.as_str())
+                });
+                let line = chars[at + 1..]
+                    .iter()
+                    .skip_while(|c| matches!(c, ' ' | '\t'))
+                    .take(3)
+                    .collect::<String>();
+                ends || starts_with_binary_operator(&line) || line.starts_with(['.', '?'])
+            };
+            match chars[at] {
+                '(' | '[' => heads.push(None),
+                ')' | ']' if heads.len() > 1 => drop(heads.pop()),
+                ',' | ';' | ')' | ']' | '}' => heads[top] = None,
+                '=' if next == Some('>') => heads[top] = None,
+                '=' if assigns => {
+                    heads[top] = match heads[top] {
+                        Some("if" | "if let") => Some("if"),
+                        Some("while" | "while let") => Some("while"),
+                        _ => None,
+                    }
+                }
+                '\n' if !continues() => heads[top] = None,
+                _ => {}
+            }
+            output.push(chars[at]);
+            if !chars[at].is_whitespace() {
+                previous = Some((chars[at], at));
             }
             index += 1;
         }
@@ -5339,101 +5393,21 @@ fn map_view_body(body: &str, block: &dyn Fn(&str, Vec<String>) -> String) -> Str
     output
 }
 
-/// Whether the `{` at `open` in a `view!` body opens a block: a child or attribute value, as
-/// `<p>{`, `"Value: " {`, or `class={`, the body of a closure or `match` arm, or the body of a
-/// keyword in its statement, as `if` in `if n > 1 {` or `else`. Struct literals, `match` arms, and
-/// element bodies, as `Point {`, `Pair::<u8> {`, `match n {`, and Sycamore's `div(class="x") {`,
-/// are not. `previous` is the last char before `open` outside whitespace and comments, and its
-/// index, with `"` for a string.
+/// Whether the `{` at `open` in a `view!` body opens a block: the body of the keyword `head` of
+/// its statement, as `if` in `if n > 1 {` or `else`, a child or attribute value, as `<p>{`,
+/// `"Value: " {`, or `class={`, or the body of a closure or `match` arm. Struct literals and
+/// patterns, `match` arms, and element bodies, as `Point {`, `Pair::<u8> {`, `if let Point {`,
+/// `match n {`, and Sycamore's `div(class="x") {`, are not. `previous` is the last char before
+/// `open` outside whitespace and comments, and its index, with `"` for a string.
 fn view_block_opens(
     chars: &[char],
     open: usize,
     previous: Option<(char, usize)>,
+    head: Option<&str>,
     closures: &[Closure],
 ) -> bool {
-    // The statement starts on the line of `open`, or on an earlier line when the line after it
-    // continues it: it starts with an operator, a `.`, or a `?`, or closes a group, or the line
-    // before it ends with an operator, `(`, `[`, or `,`, as `&& ok {` after `if n > 0`.
-    let line_start =
-        |end: usize| chars[..end].iter().rposition(|&c| c == '\n').map_or(0, |at| at + 1);
-    let closes_group = |mut at: usize, end: usize| {
-        let mut depth = 0usize;
-        while at < end {
-            if let Some(span) = opaque_span_end(chars, at) {
-                at = span + 1;
-                continue;
-            }
-            match chars[at] {
-                '(' | '[' | '{' => depth += 1,
-                ')' | ']' | '}' if depth == 0 => return true,
-                ')' | ']' | '}' => depth -= 1,
-                _ => {}
-            }
-            at += 1;
-        }
-        false
-    };
-    let mut at = line_start(open);
-    let mut end = open;
-    while at > 0 {
-        let line = chars[at..end].iter().collect::<String>();
-        let line = line.trim_start();
-        let before = chars[line_start(at - 1)..at - 1].iter().collect::<String>();
-        let before = split_trailing_comment(&before).0.trim_end().to_string();
-        let ends = ["&&", "||", "+", "-", "*", "/", "%", "==", "!=", "<=", ">=", "(", "[", ","];
-        if !(starts_with_binary_operator(line)
-            || line.starts_with(['.', '?'])
-            || closes_group(at, end)
-            || ends.iter().any(|end| before.ends_with(end)))
-        {
-            break;
-        }
-        end = at - 1;
-        at = line_start(end);
-    }
-    // The last keyword of each group open in the statement; a `}`, `,`, or `;` ends it, and so
-    // does the `=` of an attribute such as `for=x`, but not the `=` of `if let`.
-    let mut heads = vec![None];
-    while at < open {
-        if let Some(end) = opaque_span_end(chars, at) {
-            at = end + 1;
-            continue;
-        }
-        let assigns = chars[at] == '='
-            && !matches!(chars.get(at + 1), Some('=' | '>'))
-            && (at == 0 || !matches!(chars[at - 1], '=' | '!' | '<' | '>'));
-        let mut head = heads.pop().flatten();
-        match chars[at] {
-            '(' | '[' | '{' => {
-                heads.push(head);
-                head = None;
-            }
-            close @ (')' | ']' | '}') => {
-                if close == '}' || heads.is_empty() {
-                    heads.pop();
-                    head = None;
-                } else {
-                    head = heads.pop().flatten();
-                }
-            }
-            ',' | ';' => head = None,
-            _ if assigns => head = head.filter(|head| matches!(*head, "if" | "while")),
-            c if is_ident_start(c) && (at == 0 || !is_ident_continue(chars[at - 1])) => {
-                let end = read_ident(chars, at);
-                let word = chars[at..end].iter().collect::<String>();
-                let keywords = ["if", "while", "for", "else", "async", "unsafe", "loop", "match"];
-                head = keywords.into_iter().find(|keyword| *keyword == word).or(head);
-                heads.push(head);
-                at = end;
-                continue;
-            }
-            _ => {}
-        }
-        heads.push(head);
-        at += 1;
-    }
-    if let Some(head) = heads.pop().flatten() {
-        return head != "match";
+    if let Some(head) = head {
+        return !matches!(head, "match" | "if let" | "while let");
     }
     // Whether the `>` at `close` ends a turbofish, as in `Pair::<u8> {`, and not `=>` or `->`.
     let turbofish = |close: usize| {
