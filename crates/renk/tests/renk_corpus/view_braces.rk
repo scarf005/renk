@@ -1,0 +1,94 @@
+use std.cell.Cell
+
+pub struct Point:
+    pub x: u8
+    pub y: u8
+
+// A stand-in for `view!` macros that type-checks the braces in a view body that hold no statements.
+macro_rules! view:
+    (<s value=$head:ident { $($field:tt)* } />) =>:
+        {
+            let _ = $head { $($field)* };
+            "s"
+        }
+    (<m class=match $scrutinee:ident { $($arm:tt)* }></m>) =>:
+        {
+            let _ = match $scrutinee { $($arm)* };
+            "m"
+        }
+    (<c on:click=move |$event:tt| match $scrutinee:ident { $($arm:tt)* }></c>) =>:
+        {
+            let handler = move |$event: u8| match $scrutinee { $($arm)* };
+            handler(1);
+            "c"
+        }
+    (<a on:click=move |$event:tt| $cell:ident.$method:ident($head:ident { $($field:tt)* })></a>) =>:
+        {
+            let handler = move |$event: u8| $cell.$method($head { $($field)* });
+            handler(1);
+            "a"
+        }
+    (<i on:click=move |$event:tt| if $left:ident > 0 $then:block></i>) =>:
+        {
+            let handler = move |$event: u8| if $left > 0 $then;
+            handler(1);
+            "i"
+        }
+    (div(class=$class:literal) { $($child:ident { $text:literal })* }) =>:
+        {
+            $(let _ = (stringify!($child), $text);)*
+            $class
+        }
+#[allow(unused_imports)]
+pub(crate) use view
+
+pub fn literal() -> &'static str:
+    view! {
+        <s value=Point {
+            x: 1,
+            y: 2,
+        } />
+    }
+
+pub fn arms(count: &Cell[u8], n: u8) -> &'static str:
+    view! {
+        <m class=match n {
+            0 => {
+                count.set(1)
+                "a"
+            }
+            _ => "b",
+        }></m>
+    }
+
+pub fn handler(count: &Cell[u8]) -> &'static str:
+    view! {
+        <c on:click=move |ev| match ev {
+            0 => count.set(1),
+            _ => count.set(2),
+        }></c>
+    }
+
+pub fn setter(point: &Cell[Point]) -> &'static str:
+    view! {
+        <a on:click=move |_| point.set(Point {
+            x: 1,
+            y: 2,
+        })></a>
+    }
+
+pub fn toggle(count: &Cell[u8]) -> &'static str:
+    view! {
+        <i on:click=move |ev| if ev > 0 {
+            count.set(1)
+            count.set(2)
+        }></i>
+    }
+
+pub fn sycamore() -> &'static str:
+    view! {
+        div(class="x") {
+            p { "a" }
+            p { "b" }
+        }
+    }

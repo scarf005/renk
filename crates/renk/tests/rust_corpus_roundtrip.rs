@@ -70,6 +70,7 @@ const RENK_CORPUS: &[(&str, &str)] = &[
     ("format_quotes", include_str!("renk_corpus/format_quotes.rk")),
     ("struct_literal_heads", include_str!("renk_corpus/struct_literal_heads.rk")),
     ("view_blocks", include_str!("renk_corpus/view_blocks.rk")),
+    ("view_braces", include_str!("renk_corpus/view_braces.rk")),
 ];
 
 #[test]
