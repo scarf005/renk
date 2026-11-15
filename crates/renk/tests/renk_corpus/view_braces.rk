@@ -152,12 +152,6 @@ macro_rules! view:
             let _ = (class(), $child);
             "d"
         }
-    (<cmp class:x=move || $n:ident < 5 >match</cmp> $child:block) =>:
-        {
-            let class = move || $n < 5;
-            let _ = (class(), $child);
-            "cmp"
-        }
     (<tx>Find a match $child:block </tx>) =>:
         {
             let _ = $child;
@@ -168,12 +162,36 @@ macro_rules! view:
             let _ = ($text, $child);
             "tw"
         }
+    (<cg cells=pick::<3, u8>($v:literal) on:click=move |$e:tt| match $s:ident { $($arm:tt)* }/>) =>:
+        {
+            let _ = pick::<3, u8>($v);
+            let handler = move |$e: u8| match $s { $($arm)* };
+            let _ = handler(1);
+            "cg"
+        }
+    (<ar on:click=move |$e:ident: $ty:ty| match $s:ident { $($arm:tt)* }></ar>) =>:
+        {
+            let handler = move |$e: $ty| match $s { $($arm)* };
+            let _ = handler(Arr { x: [0; 3] });
+            "ar"
+        }
+    (div(on:click=move |$e:tt| if pick::<3, u8>($n:ident) $then:block else $otherwise:block) { $text:literal }) =>:
+        {
+            let handler = move |$e: u8| if pick::<3, u8>($n) $then else $otherwise;
+            handler(1);
+            $text
+        }
     (div(class=$class:literal) { $($child:ident { $text:literal })* }) =>:
         {
             $(let _ = (stringify!($child), $text);)*
             $class
         }
 pub type Same[T] = T
+
+pub struct Arr[const N: usize]:
+    pub x: [u8; N]
+
+pub fn pick[const N: usize, T](_t: T) -> bool = N > 0
 
 pub fn check(n: u8) -> bool = n > 0
 
@@ -508,15 +526,6 @@ pub fn keyword_attribute_after_call(a: &'static str) -> &'static str:
         </d>
     }
 
-pub fn glued_comparison_attribute(n: u8) -> &'static str:
-    view! {
-        <cmp class:x=move || n<5>match</cmp>
-        {
-            let z = 1
-            z
-        }
-    }
-
 pub fn unquoted_text() -> &'static str:
     view! {
         <tx>Find a match
@@ -534,5 +543,33 @@ pub fn keyword_after_element() -> &'static str:
         {
             let z = 1
             z
+        }
+    }
+
+pub fn const_turbofish_attribute(n: u8) -> &'static str:
+    view! {
+        <cg cells=pick::<3, u8>(1) on:click=move |_| match n {
+            1 => 2,
+            _ => 3,
+        }/>
+    }
+
+pub fn const_generic_parameter(n: u8) -> &'static str:
+    view! {
+        <ar on:click=move |ev: Arr<3>| match n {
+            1 => 2,
+            _ => 3,
+        }></ar>
+    }
+
+pub fn const_turbofish_condition(n: u8) -> &'static str:
+    view! {
+        div(on:click=move |_| if pick::<3, u8>(n) {
+            let z = 1
+            drop(z)
+        } else {
+            drop(0)
+        }) {
+            "x"
         }
     }
