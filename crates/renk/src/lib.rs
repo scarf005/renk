@@ -5422,6 +5422,16 @@ fn map_view_body(
                         || previous.is_none_or(|(c, _)| !is_ident_continue(c) && c != ':'))
             };
             let after_path = |i: usize| is_ident_continue(chars[i]) || chars[i] == ':';
+            // Whether the `>` at `at` is a spaced comparison after a closure value, as `n > 5`,
+            // `n >= 5`, or `n >> 2` in `move || n > 5`, and not a tag end on its own line.
+            let compares = || {
+                let own_line = chars[..at].iter().rev().find(|c| !matches!(c, ' ' | '\t'));
+                closure
+                    && (chars[at - 1] == ' '
+                        && matches!(next, Some(' ' | '=' | '>'))
+                        && own_line != Some(&'\n')
+                        || chars[at - 2..at] == [' ', '>'] && next == Some(' '))
+            };
             match chars[at] {
                 '<' if markup
                     && top == 0
@@ -5450,13 +5460,13 @@ fn map_view_body(
                 }
                 '>' if angles[top] > 0 && !matches!(chars[at - 1], '-' | '=') => angles[top] -= 1,
                 '|' if tag == Some(true) && top == 0 => closure = true,
-                // A tag end, and not `a > b` in `if a > b`, a spaced comparison after a closure
-                // in the tag, as `n > 5`, `n >= 5`, or `n >> 2` in `move || n > 5`, or `->`.
+                // A tag end, and not `a > b` in `if a > b`, a comparison in a closure value, or
+                // `->`.
                 '>' if tag == Some(true)
                     && top == 0
                     && heads[top].is_none()
                     && !matches!(chars[at - 1], '-' | '=')
-                    && !(closure && (chars[at - 1] == ' ' || chars[at - 2..at] == [' ', '>'])) =>
+                    && !compares() =>
                 {
                     tag = Some(false)
                 }
