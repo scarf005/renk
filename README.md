@@ -7,7 +7,8 @@ It is inspired by the post [Rust's Ugly Syntax](https://matklad.github.io/2023/0
 
 Documentation: <https://scarf005.github.io/renk/> ([한국어](https://scarf005.github.io/renk/ko/))
 
-> [!NOTE] why this syntax?
+> [!NOTE]
+> why this syntax?
 > because i have this irrational hatred towards semicolons. i also like scala, how did you find out?
 
 ## Example
