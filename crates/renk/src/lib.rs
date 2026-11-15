@@ -5287,15 +5287,19 @@ fn map_view_body(body: &str, block: &dyn Fn(&str, Vec<String>) -> String) -> Str
     let closures = closures(&chars);
     let mut output = String::new();
     let mut index = 0usize;
+    // The last char before `index` outside whitespace, with `"` for a string or comment.
+    let mut previous = None;
     while index < chars.len() {
         if let Some(end) = opaque_span_end(&chars, index) {
             output.extend(&chars[index..=end]);
+            previous = Some('"');
             index = end + 1;
         } else if let Some(end) = macro_invocation_end(&chars, index)
             .filter(|_| index == 0 || !is_ident_continue(chars[index - 1]))
         {
             let invocation = chars[index..=end].iter().collect::<String>();
             output.push_str(&map_view_blocks(&invocation, block));
+            previous = Some(chars[end]);
             index = end + 1;
         } else if chars[index] == '{'
             && let Some(close) = matching_bracket(&chars, index, '{', '}')
@@ -5311,15 +5315,18 @@ fn map_view_body(body: &str, block: &dyn Fn(&str, Vec<String>) -> String) -> Str
                 .flat_map(|closure| closure.parameters.clone())
                 .collect();
             output.push('{');
-            output.push_str(&if inner.contains('\n') && view_block_opens(&chars, index, &closures) {
+            let opens = view_block_opens(&chars, index, previous, &closures);
+            output.push_str(&if inner.contains('\n') && opens {
                 block(&inner, names)
             } else {
                 map_view_body(&inner, block)
             });
             output.push('}');
+            previous = Some('}');
             index = close + 1;
         } else {
             output.push(chars[index]);
+            previous = Some(chars[index]).filter(|c| !c.is_whitespace()).or(previous);
             index += 1;
         }
     }
@@ -5327,26 +5334,56 @@ fn map_view_body(body: &str, block: &dyn Fn(&str, Vec<String>) -> String) -> Str
 }
 
 /// Whether the `{` at `open` in a `view!` body opens a block: a child or attribute value, as
-/// `<p>{` or `class={`, the body of a closure or `match` arm, or the body of a keyword on its line,
-/// as `if` in `if n > 1 {` or `else`. Struct literals, `match` arms, and element bodies, as
-/// `Point {`, `match n {`, and Sycamore's `div(class="x") {`, are not.
-fn view_block_opens(chars: &[char], open: usize, closures: &[Closure]) -> bool {
+/// `<p>{`, `"Value: " {`, or `class={`, the body of a closure or `match` arm, or the body of a
+/// keyword in its statement, as `if` in `if n > 1 {` or `else`. Struct literals, `match` arms, and
+/// element bodies, as `Point {`, `Pair::<u8> {`, `match n {`, and Sycamore's `div(class="x") {`,
+/// are not. `previous` is the last char before `open` outside whitespace, with `"` for a string
+/// or comment.
+fn view_block_opens(
+    chars: &[char],
+    open: usize,
+    previous: Option<char>,
+    closures: &[Closure],
+) -> bool {
     let follows_closure = |closure: &Closure| {
         let head = chars[closure.body.start.min(open)..open].iter().collect::<String>();
         closure.body.start <= open && (head.trim().is_empty() || head.trim().starts_with("->"))
     };
-    if chars[..open]
-        .iter()
-        .rfind(|c| !c.is_whitespace())
-        .is_none_or(|c| matches!(c, '>' | '=' | '(' | '[' | '{' | '}' | ',' | ';'))
+    // Whether the `>` before `open` closes a turbofish, as in `Pair::<u8> {`.
+    let turbofish = || {
+        let mut depth = 0usize;
+        for at in (0..open).rev().take_while(|&at| chars[at] != '\n') {
+            match chars[at] {
+                '>' if at == 0 || !matches!(chars[at - 1], '=' | '-') => depth += 1,
+                '<' if depth == 1 => return chars[..at].ends_with(&[':', ':']),
+                '<' => depth = depth.saturating_sub(1),
+                _ => {}
+            }
+        }
+        false
+    };
+    if previous.is_none_or(|c| matches!(c, '"' | '=' | '(' | '[' | '{' | '}' | ',' | ';'))
+        || previous == Some('>') && !turbofish()
         || closures.iter().any(follows_closure)
     {
         return true;
     }
-    // The last keyword of each group open on the line; a `}`, `,`, or `;` ends it, and so does
-    // the `=` of an attribute such as `for=x`, but not the `=` of `if let`.
+    // The last keyword of each group open in the statement; a `}`, `,`, or `;` ends it, and so
+    // does the `=` of an attribute such as `for=x`, but not the `=` of `if let`. The statement
+    // starts on the line of `open`, or on an earlier line when the lines after it start with an
+    // operator, a `.`, or a `?`, as `&& ok {` after `if n > 0`.
+    let line_start =
+        |end: usize| chars[..end].iter().rposition(|&c| c == '\n').map_or(0, |at| at + 1);
+    let mut at = line_start(open);
+    while at > 0 {
+        let line = chars[at..open].iter().collect::<String>();
+        let line = line.trim_start();
+        if !(starts_with_binary_operator(line) || line.starts_with(['.', '?'])) {
+            break;
+        }
+        at = line_start(at - 1);
+    }
     let mut heads = vec![None];
-    let mut at = chars[..open].iter().rposition(|&c| c == '\n').map_or(0, |line| line + 1);
     while at < open {
         if let Some(end) = opaque_span_end(chars, at) {
             at = end + 1;
