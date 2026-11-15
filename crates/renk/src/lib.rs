@@ -5419,6 +5419,7 @@ fn map_view_body(
                     && (tag == Some(false)
                         || previous.is_none_or(|(c, _)| !is_ident_continue(c) && c != ':'))
             };
+            let after_path = |i: usize| is_ident_continue(chars[i]) || chars[i] == ':';
             match chars[at] {
                 '<' if markup
                     && top == 0
@@ -5436,18 +5437,21 @@ fn map_view_body(
                     heads.pop();
                     angles.pop();
                 }
+                // A generic, as `Vec<u8>`, or a qualified path in one, as the second `<` of
+                // `Vec::<<T as Tr>::X>`.
                 '<' if at > 0
-                    && (is_ident_continue(chars[at - 1]) || chars[at - 1] == ':')
+                    && (after_path(at - 1) || at > 1 && chars[at - 1] == '<' && after_path(at - 2))
                     && !matches!(next, Some('/' | '=')) =>
                 {
                     angles[top] += 1
                 }
                 '>' if angles[top] > 0 && !matches!(chars[at - 1], '-' | '=') => angles[top] -= 1,
-                // A tag end, and not `a > b` in `if a > b`, or `->`.
+                // A tag end, and not `a > b` in `if a > b` or `move || n > 5`, or `->`.
                 '>' if tag == Some(true)
                     && top == 0
                     && heads[top].is_none()
-                    && !matches!(chars[at - 1], '-' | '=') =>
+                    && !matches!(chars[at - 1], '-' | '=')
+                    && !(chars[at - 1] == ' ' && next == Some(' ')) =>
                 {
                     tag = Some(false)
                 }
