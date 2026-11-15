@@ -5293,7 +5293,8 @@ fn map_view_body(body: &str, block: &dyn Fn(&str, Vec<String>) -> String) -> Str
     // The keyword that heads the statement in each open `(` or `[`, the innermost last. A `,`, a
     // `;`, a `{` block, a match arm's `=>`, and the `=` of an attribute such as `for=x` end it,
     // and so does a line end, unless the line ends with an operator or the next one starts with
-    // one, a `.`, or a `?`, as `&& ok {` after `if n > 0`. The `=` of `if let` does not end it.
+    // one, a `.`, or a `?`, as `&& ok {` after `if n > 0`. The `=` of `if let` and the pattern
+    // of `if let`, `while let`, or `for` do not end it.
     let mut heads = vec![None::<&str>];
     while index < chars.len() {
         let top = heads.len() - 1;
@@ -5331,7 +5332,8 @@ fn map_view_body(body: &str, block: &dyn Fn(&str, Vec<String>) -> String) -> Str
                 map_view_body(&inner, block)
             });
             output.push('}');
-            heads[top] = None;
+            // A pattern, as `Point { x, y }` in `if let Point { x, y } = p {`, keeps the head.
+            heads[top] = heads[top].filter(|&head| matches!(head, "if let" | "while let" | "for"));
             previous = Some(('}', close));
             index = close + 1;
         } else if is_ident_start(chars[index])
@@ -5343,6 +5345,7 @@ fn map_view_body(body: &str, block: &dyn Fn(&str, Vec<String>) -> String) -> Str
             heads[top] = match (heads[top], word.as_str()) {
                 (Some("if"), "let") => Some("if let"),
                 (Some("while"), "let") => Some("while let"),
+                (Some("for"), "in") => Some("for in"),
                 (head, word) => keywords.into_iter().find(|keyword| *keyword == word).or(head),
             };
             output.extend(&chars[index..end]);
@@ -5354,19 +5357,28 @@ fn map_view_body(body: &str, block: &dyn Fn(&str, Vec<String>) -> String) -> Str
             let assigns = chars[at] == '='
                 && !matches!(next, Some('=' | '>'))
                 && (at == 0 || !matches!(chars[at - 1], '=' | '!' | '<' | '>'));
-            // Whether the line ending at `at` ends with an operator, or the next starts with one.
+            // Whether the line ending at `at` ends with an operator, or the next starts with one,
+            // or with the `{` of a keyword body, as rustfmt puts it after a wrapped condition. A
+            // `<` or `>` after a space counts only in a condition, so `<video loop >` ends a tag.
             let continues = || {
+                let condition = matches!(
+                    heads[top],
+                    Some("if" | "if let" | "while" | "while let" | "for in" | "match")
+                );
                 let ends = previous.is_some_and(|(c, last)| {
                     let pair = chars[last.saturating_sub(1)..=last].iter().collect::<String>();
-                    matches!(c, '+' | '-' | '*' | '/' | '%')
-                        || ["&&", "||", "==", "!=", "<=", ">="].contains(&pair.as_str())
+                    matches!(c, '+' | '-' | '*' | '/' | '%' | '=')
+                        || ["&&", "||", "!=", "<=", ">="].contains(&pair.as_str())
+                        || condition && [" <", " >"].contains(&pair.as_str())
                 });
                 let line = chars[at + 1..]
                     .iter()
                     .skip_while(|c| matches!(c, ' ' | '\t'))
                     .take(3)
                     .collect::<String>();
-                ends || starts_with_binary_operator(&line) || line.starts_with(['.', '?'])
+                ends || starts_with_binary_operator(&line)
+                    || line.starts_with(['.', '?'])
+                    || heads[top].is_some() && line.starts_with('{')
             };
             match chars[at] {
                 '(' | '[' => heads.push(None),
@@ -5407,7 +5419,7 @@ fn view_block_opens(
     closures: &[Closure],
 ) -> bool {
     if let Some(head) = head {
-        return !matches!(head, "match" | "if let" | "while let");
+        return !matches!(head, "match" | "if let" | "while let" | "for");
     }
     // Whether the `>` at `close` ends a turbofish, as in `Pair::<u8> {`, and not `=>` or `->`.
     let turbofish = |close: usize| {
