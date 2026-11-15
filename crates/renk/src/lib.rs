@@ -5423,13 +5423,11 @@ fn map_view_body(
             };
             let after_path = |i: usize| is_ident_continue(chars[i]) || chars[i] == ':';
             // Whether the `>` at `at` is a spaced comparison after a closure value, as `n > 5`,
-            // `n >= 5`, or `n >> 2` in `move || n > 5`, and not a tag end on its own line.
+            // `n >= 5`, or `n >> 2` in `move || n > 5`, also wrapped onto its own line, and not
+            // a tag end before a line end or text, as `>` alone on a line or `go() >Click`.
             let compares = || {
-                let own_line = chars[..at].iter().rev().find(|c| !matches!(c, ' ' | '\t'));
                 closure
-                    && (chars[at - 1] == ' '
-                        && matches!(next, Some(' ' | '=' | '>'))
-                        && own_line != Some(&'\n')
+                    && (chars[at - 1] == ' ' && matches!(next, Some(' ' | '=' | '>'))
                         || chars[at - 2..at] == [' ', '>'] && next == Some(' '))
             };
             match chars[at] {
