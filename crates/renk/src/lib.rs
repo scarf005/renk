@@ -5307,6 +5307,8 @@ fn map_view_body(
     // Whether `index` is in a tag, as `<p class=x>`, or in the text after one, as `Find a match`
     // in `<p>Find a match</p>`; `None` before the first tag and in code without tags.
     let mut tag = None::<bool>;
+    // Whether the current tag has a closure value, as `move || n > 5` in `<p class:big=`.
+    let mut closure = false;
     while index < chars.len() {
         let top = heads.len() - 1;
         if heads[top].is_none() && tag != Some(true) {
@@ -5427,7 +5429,8 @@ fn map_view_body(
                     && heads[top].is_none()
                     && starts_tag() =>
                 {
-                    tag = Some(true)
+                    tag = Some(true);
+                    closure = false
                 }
                 '(' | '[' => {
                     heads.push(None);
@@ -5446,12 +5449,14 @@ fn map_view_body(
                     angles[top] += 1
                 }
                 '>' if angles[top] > 0 && !matches!(chars[at - 1], '-' | '=') => angles[top] -= 1,
-                // A tag end, and not `a > b` in `if a > b` or `move || n > 5`, or `->`.
+                '|' if tag == Some(true) && top == 0 => closure = true,
+                // A tag end, and not `a > b` in `if a > b`, a spaced comparison after a closure
+                // in the tag, as `n > 5`, `n >= 5`, or `n >> 2` in `move || n > 5`, or `->`.
                 '>' if tag == Some(true)
                     && top == 0
                     && heads[top].is_none()
                     && !matches!(chars[at - 1], '-' | '=')
-                    && !(chars[at - 1] == ' ' && next == Some(' ')) =>
+                    && !(closure && (chars[at - 1] == ' ' || chars[at - 2..at] == [' ', '>'])) =>
                 {
                     tag = Some(false)
                 }
