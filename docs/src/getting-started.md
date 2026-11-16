@@ -2,10 +2,10 @@
 
 ## Install
 
-Install the CLI and the language server from a checkout:
+Install the CLI and the language server:
 
 ```sh
-cargo install --path crates/renk --bin renk --bin renk-lsp
+cargo install renk --bin renk --bin renk-lsp
 ```
 
 [Scripts](scripts.md) also need a nightly toolchain (`rustup toolchain install nightly`). The

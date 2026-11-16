@@ -2,10 +2,10 @@
 
 ## 설치
 
-체크아웃한 저장소에서 CLI와 언어 서버를 설치한다:
+CLI와 언어 서버를 설치한다:
 
 ```sh
-cargo install --path crates/renk --bin renk --bin renk-lsp
+cargo install renk --bin renk --bin renk-lsp
 ```
 
 [스크립트](scripts.md)를 쓰려면 nightly 툴체인도 필요하다(`rustup toolchain install nightly`).

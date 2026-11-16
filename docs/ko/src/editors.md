@@ -1,7 +1,7 @@
 # 에디터 설정
 
 `renk-lsp`는 `.rk` 파일용 stdio Language Server Protocol 서버다.
-`cargo install --path crates/renk --bin renk-lsp`로 설치한다. 제공하는 기능은 다음과 같다:
+`cargo install renk --bin renk-lsp`로 설치한다. 제공하는 기능은 다음과 같다:
 
 - Renk 문법 오류 진단.
 - 문서 심볼.
