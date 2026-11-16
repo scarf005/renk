@@ -1,6 +1,6 @@
 # Renk
 
-![](./thumbnail.webp)
+![Renk input and its generated Rust in the web editor](https://raw.githubusercontent.com/scarf005/renk/main/thumbnail.webp)
 
 Renk is an indentation-based syntax for [Rust](https://rust-lang.org).
 It is inspired by the post [Rust's Ugly Syntax](https://matklad.github.io/2023/01/26/rusts-ugly-syntax.html).
@@ -53,7 +53,7 @@ pub fn main() {
 ## Usage
 
 ```sh
-cargo install --path crates/renk --bin renk --bin renk-lsp
+cargo install renk --bin renk --bin renk-lsp
 renk transpile input.rk -o output.rs
 renk from-rust input.rs -o output.rk
 cat input.rk | renk
