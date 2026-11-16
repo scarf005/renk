@@ -183,8 +183,10 @@ impl LanguageServer for Backend {
         let Some((rust_analyzer, uri)) = saved else {
             return;
         };
+        let in_workspace =
+            workspace.is_some_and(|workspace| Arc::ptr_eq(&workspace, &rust_analyzer));
         // Its check reads the mirror, which files changed or added outside the editor miss.
-        if workspace.is_some_and(|workspace| Arc::ptr_eq(&workspace, &rust_analyzer)) {
+        if in_workspace {
             self.refresh_mirror().await;
         }
         rust_analyzer
@@ -196,6 +198,25 @@ impl LanguageServer for Backend {
                 },
             )
             .await;
+        // rust-analyzer drops the check of a save when the mirror write it sees next cancels the
+        // lookup of the saved file's crate, so start the workspace check directly too.
+        let check_on_save = self
+            .initialize_params
+            .read()
+            .await
+            .as_ref()
+            .is_none_or(|params| {
+                let options = params.initialization_options.as_ref();
+                options.and_then(|options| options["checkOnSave"].as_bool()) != Some(false)
+            });
+        if in_workspace && check_on_save {
+            rust_analyzer
+                .notify(
+                    "rust-analyzer/runFlycheck",
+                    serde_json::json!({"textDocument": null}),
+                )
+                .await;
+        }
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
