@@ -658,6 +658,7 @@ impl Backend {
     /// Asks the rust-analyzer of an open document for its generated Rust's diagnostics, and
     /// publishes the answer unless a later pull was sent. rust-analyzer cancels a pull when its
     /// analysis changes, as when it finishes priming its caches, and asks for the pull again.
+    /// Another error, or an answer without items, keeps the diagnostics of the previous pull.
     async fn pull_diagnostics(&self, uri: Url) {
         let Some((rust_analyzer, rust_uri)) = self.rust_analyzer(&uri).await else {
             return;
@@ -1066,9 +1067,10 @@ impl RustAnalyzerClient {
     }
 }
 
-/// Whether a response to a diagnostic pull asks for the pull again.
+/// Whether a response to a diagnostic pull asks for the pull again: LSP 3.17 retriggers a
+/// ServerCancelled error unless its data says not to.
 fn retriggers(response: &serde_json::Value) -> bool {
-    response["error"]["data"]["retriggerRequest"] == true
+    response["error"]["code"] == -32802 && response["error"]["data"]["retriggerRequest"] != false
 }
 
 async fn close_in(rust_analyzer: &RustAnalyzerClient, rust_uri: Url) {
