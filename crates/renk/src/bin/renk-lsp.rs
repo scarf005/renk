@@ -4,7 +4,7 @@ use std::{
     path::{Path, PathBuf},
     process::Stdio,
     sync::{
-        Arc,
+        Arc, Weak,
         atomic::{AtomicU64, Ordering},
     },
 };
@@ -618,11 +618,18 @@ impl Backend {
     }
 
     /// Takes rust-analyzer's diagnostics of a Renk document's generated Rust as the document's,
-    /// and pulls them again for every open document when rust-analyzer asks for a refresh.
-    async fn rust_analyzer_notification(&self, notification: serde_json::Value) {
+    /// and pulls them again for every document open in `rust_analyzer` when it asks for a refresh.
+    async fn rust_analyzer_notification(
+        &self,
+        rust_analyzer: &Weak<RustAnalyzerClient>,
+        notification: serde_json::Value,
+    ) {
         if notification["method"] == "workspace/diagnostic/refresh" {
             let _sync = self.sync.lock().await;
-            let documents = self.opened.read().await.keys().cloned().collect::<Vec<_>>();
+            let documents = (self.opened.read().await.iter())
+                .filter(|(_, (open_in, _))| Arc::as_ptr(open_in) == rust_analyzer.as_ptr())
+                .map(|(uri, _)| uri.clone())
+                .collect::<Vec<_>>();
             for uri in documents {
                 self.pull_diagnostics(uri).await;
             }
@@ -752,13 +759,16 @@ impl Backend {
         let (notifications, mut received) = mpsc::unbounded_channel();
         match RustAnalyzerClient::spawn(params, notifications).await {
             Ok(rust_analyzer) => {
+                let rust_analyzer = Arc::new(rust_analyzer);
                 let backend = self.clone();
+                let notified = Arc::downgrade(&rust_analyzer);
                 tokio::spawn(async move {
                     while let Some(notification) = received.recv().await {
-                        backend.rust_analyzer_notification(notification).await;
+                        backend
+                            .rust_analyzer_notification(&notified, notification)
+                            .await;
                     }
                 });
-                let rust_analyzer = Arc::new(rust_analyzer);
                 rust_analyzer
                     .notify("initialized", InitializedParams {})
                     .await;
@@ -2899,7 +2909,10 @@ mod tests {
         let (other, mut other_sent) = rust_analyzer_client();
         let rust_uri = module_uri("target/ours.rs");
         backend.opened.write().await.extend([
-            (module_uri("src/ours.rk"), (refreshed, rust_uri.clone())),
+            (
+                module_uri("src/ours.rk"),
+                (refreshed.clone(), rust_uri.clone()),
+            ),
             (
                 module_uri("src/theirs.rk"),
                 (other, module_uri("target/theirs.rs")),
@@ -2907,7 +2920,9 @@ mod tests {
         ]);
 
         let refresh = serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "workspace/diagnostic/refresh"});
-        backend.rust_analyzer_notification(refresh).await;
+        backend
+            .rust_analyzer_notification(&Arc::downgrade(&refreshed), refresh)
+            .await;
         let pull = refreshed_sent.try_recv().unwrap();
         assert_eq!(pull["method"], "textDocument/diagnostic");
         assert_eq!(pull["params"]["textDocument"]["uri"], rust_uri.as_str());
