@@ -673,6 +673,8 @@ impl Backend {
             return;
         };
         let backend = self.clone();
+        // A closed document's rust-analyzer may exit while its answer is pending.
+        let rust_analyzer = Arc::downgrade(&rust_analyzer);
         tokio::spawn(async move {
             let items = loop {
                 let Ok(response) = pending.await else {
@@ -681,11 +683,14 @@ impl Backend {
                 if !retriggers(&response) {
                     break response["result"]["items"].clone();
                 }
-                let latest = (backend.pulled_diagnostics.read().await.get(&uri))
-                    .map(|latest| latest.0);
+                let latest =
+                    (backend.pulled_diagnostics.read().await.get(&uri)).map(|latest| latest.0);
                 if latest != Some(pull) {
                     return;
                 }
+                let Some(rust_analyzer) = rust_analyzer.upgrade() else {
+                    return;
+                };
                 let Some(next) = rust_analyzer
                     .send_request("textDocument/diagnostic", &request)
                     .await
@@ -926,7 +931,8 @@ impl Backend {
 #[derive(Debug)]
 struct RustAnalyzerClient {
     sender: mpsc::UnboundedSender<serde_json::Value>,
-    pending: Arc<Mutex<HashMap<u64, oneshot::Sender<serde_json::Value>>>>,
+    /// Where the responses to our requests go, until rust-analyzer's output ends.
+    pending: Arc<Mutex<Option<HashMap<u64, oneshot::Sender<serde_json::Value>>>>>,
     next_id: AtomicU64,
     _child: Arc<Mutex<tokio::process::Child>>,
 }
@@ -956,7 +962,7 @@ impl RustAnalyzerClient {
             )
         })?;
         let (sender, mut receiver) = mpsc::unbounded_channel::<serde_json::Value>();
-        let pending = Arc::new(Mutex::new(HashMap::new()));
+        let pending = Arc::new(Mutex::new(Some(HashMap::new())));
         let reader_pending = pending.clone();
         let replies = sender.clone();
         let config = params
@@ -984,12 +990,15 @@ impl RustAnalyzerClient {
             _child: Arc::new(Mutex::new(child)),
         };
         let initialize = rust_initialize_request(&params);
-        client.request("initialize", initialize).await.ok_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::TimedOut,
-                "rust-analyzer did not initialize",
-            )
-        })?;
+        client
+            .request("initialize", initialize)
+            .await
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "rust-analyzer did not initialize",
+                )
+            })?;
         Ok(client)
     }
 
@@ -1017,7 +1026,8 @@ impl RustAnalyzerClient {
             .map(|mut response| response["result"].take())
     }
 
-    /// Sends a request, whose response comes on the returned receiver.
+    /// Sends a request, whose response comes on the returned receiver, unless rust-analyzer's
+    /// output ended.
     async fn send_request<T: serde::Serialize>(
         &self,
         method: &str,
@@ -1026,7 +1036,7 @@ impl RustAnalyzerClient {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let params = serde_json::to_value(params).ok()?;
         let (sender, receiver) = oneshot::channel();
-        self.pending.lock().await.insert(id, sender);
+        self.pending.lock().await.as_mut()?.insert(id, sender);
         if self
             .sender
             .send(serde_json::json!({
@@ -1037,7 +1047,9 @@ impl RustAnalyzerClient {
             }))
             .is_err()
         {
-            self.pending.lock().await.remove(&id);
+            if let Some(pending) = self.pending.lock().await.as_mut() {
+                pending.remove(&id);
+            }
             return None;
         }
         Some(receiver)
@@ -1077,10 +1089,11 @@ fn script_initialization_options(
 /// ids are rust-analyzer's, which would otherwise take the place of a response to a request of
 /// ours with the same id. `workspace/configuration` gets `config`, the settings it started with,
 /// once per item; the rest get an empty answer. Its notifications go to `notifications`, and so
-/// does `workspace/diagnostic/refresh`.
+/// does `workspace/diagnostic/refresh`. When the output ends, the requests that wait for a
+/// response fail, and later requests are not sent.
 async fn read_rust_analyzer_messages(
     stdout: impl tokio::io::AsyncRead + Unpin,
-    pending: Arc<Mutex<HashMap<u64, oneshot::Sender<serde_json::Value>>>>,
+    pending: Arc<Mutex<Option<HashMap<u64, oneshot::Sender<serde_json::Value>>>>>,
     replies: mpsc::UnboundedSender<serde_json::Value>,
     notifications: mpsc::UnboundedSender<serde_json::Value>,
     config: serde_json::Value,
@@ -1114,10 +1127,16 @@ async fn read_rust_analyzer_messages(
         let Some(id) = message.get("id").and_then(serde_json::Value::as_u64) else {
             continue;
         };
-        if let Some(sender) = pending.lock().await.remove(&id) {
+        let sender = pending
+            .lock()
+            .await
+            .as_mut()
+            .and_then(|pending| pending.remove(&id));
+        if let Some(sender) = sender {
             let _ = sender.send(message);
         }
     }
+    pending.lock().await.take();
 }
 
 async fn read_lsp_message<R: tokio::io::AsyncBufRead + Unpin>(
@@ -2784,9 +2803,8 @@ mod tests {
     #[tokio::test]
     async fn rust_analyzer_requests_get_answers_and_notifications_pass_on() {
         let (mut server, client) = tokio::io::duplex(4096);
-        let pending = Arc::new(Mutex::new(HashMap::new()));
         let (ours, response) = oneshot::channel();
-        pending.lock().await.insert(1, ours);
+        let pending = Arc::new(Mutex::new(Some(HashMap::from([(1, ours)]))));
         let (replies, mut answered) = mpsc::unbounded_channel();
         let (notifications, mut notified) = mpsc::unbounded_channel();
         let config = serde_json::json!({"cargo": {"features": "all"}});
@@ -2843,7 +2861,7 @@ mod tests {
         let child = Command::new("true").kill_on_drop(true).spawn().unwrap();
         let client = RustAnalyzerClient {
             sender,
-            pending: Arc::new(Mutex::new(HashMap::new())),
+            pending: Arc::new(Mutex::new(Some(HashMap::new()))),
             next_id: AtomicU64::new(1),
             _child: Arc::new(Mutex::new(child)),
         };
