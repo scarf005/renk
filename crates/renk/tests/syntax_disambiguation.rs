@@ -1676,3 +1676,16 @@ fn view_blocks_drop_semicolons_when_a_path_keeps_its_colons() {
     );
     assert_eq!(self::rust(&renk), rust);
 }
+
+#[test]
+fn view_blocks_dot_other_paths_when_a_path_keeps_its_colons() {
+    // `fs::read` keeps `::`, as Renk reads `fs.read` as a method of the `fs` parameter, and
+    // `std::mem::drop` on the next line still becomes `std.mem.drop`.
+    let rust = "fn f(fs: u8, n: Cell<u8>) {\n    view! {\n        <b on:click=move |_| {\n            fs::read(fs);\n            std::mem::drop(1);\n            n.set(1);\n        }></b>\n    }\n}\n";
+    let renk = rust_to_renk(rust).unwrap();
+    assert_eq!(
+        renk,
+        "fn f(fs: u8, n: Cell[u8]):\n    view! {\n        <b on:click=move |_| {\n            fs::read(fs)\n            std.mem.drop(1)\n            n.set(1);\n        }></b>\n    }\n"
+    );
+    assert_eq!(self::rust(&renk), rust);
+}
