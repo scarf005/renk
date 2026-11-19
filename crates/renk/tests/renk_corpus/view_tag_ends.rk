@@ -1,0 +1,191 @@
+// A stand-in for `view!` macros that type-checks the closure values and child blocks of tags with
+// a spaced `>` after a closure value.
+macro_rules! view:
+    (<$tag:ident on:click=move |$e:tt| $f:ident() > Count $child:block </$close:ident>) =>:
+        {
+            let handler = move |$e: u8| $f();
+            let _ = (handler(1), $child);
+            stringify!($tag)
+        }
+    (<$tag:ident on:click=move |$e:tt| $f:ident() > Count</$close:ident> $child:block) =>:
+        {
+            let handler = move |$e: u8| $f();
+            let _ = (handler(1), $child);
+            stringify!($tag)
+        }
+    (<$tag:ident on:click=move |$e:tt| $f:ident() > Find a match $child:block </$close:ident>) =>:
+        {
+            let handler = move |$e: u8| $f();
+            let _ = (handler(1), $child);
+            stringify!($tag)
+        }
+    (<$tag:ident on:click=move |$e:tt| $f:ident() > Next -> $child:block </$close:ident>) =>:
+        {
+            let handler = move |$e: u8| $f();
+            let _ = (handler(1), $child);
+            stringify!($tag)
+        }
+    (<$tag:ident class:big=move || $n:ident > $limit:ident on:click=move |$e:tt| match $s:ident { $($arm:tt)* }></$close:ident>) =>:
+        {
+            let class = move || $n > $limit;
+            let handler = move |$e: u8| match $s { $($arm)* };
+            let _ = (class(), handler(1));
+            stringify!($tag)
+        }
+    (<$tag:ident class:big=move || $n:ident > 5 title=$title:literal on:click=move |$e:tt| match $s:ident { $($arm:tt)* }></$close:ident>) =>:
+        {
+            let class = move || $n > 5;
+            let handler = move |$e: u8| match $s { $($arm)* };
+            let _ = (class(), handler(1), $title);
+            stringify!($tag)
+        }
+    (<$tag:ident class:big=move || $n:ident > 5 on:click=move |$e:tt| match $s:ident { $($arm:tt)* }></$close:ident>) =>:
+        {
+            let class = move || $n > 5;
+            let handler = move |$e: u8| match $s { $($arm)* };
+            let _ = (class(), handler(1));
+            stringify!($tag)
+        }
+    (<$tag:ident class:big=move || $n:ident > 5 on:x=move |$x:tt| -> u8 { $($body:tt)* } on:click=move |$e:tt| match $s:ident { $($arm:tt)* }></$close:ident>) =>:
+        {
+            let class = move || $n > 5;
+            let other = move |$x: u8| -> u8 { $($body)* };
+            let handler = move |$e: u8| match $s { $($arm)* };
+            let _ = (class(), other(1), handler(1));
+            stringify!($tag)
+        }
+    (<$tag:ident class:big=move || $n:ident > $path:ident::<$ty:ty>($v:literal) on:click=move |$e:tt| match $s:ident { $($arm:tt)* }></$close:ident>) =>:
+        {
+            let class = move || $n > $path::<$ty>($v);
+            let handler = move |$e: u8| match $s { $($arm)* };
+            let _ = (class(), handler(1));
+            stringify!($tag)
+        }
+    (<$tag:ident class:big=move || $n:ident > 5 class:odd=move || $m:ident > 1 on:click=move |$e:tt| match $s:ident { $($arm:tt)* }></$close:ident>) =>:
+        {
+            let class = move || $n > 5;
+            let odd = move || $m > 1;
+            let handler = move |$e: u8| match $s { $($arm)* };
+            let _ = (class(), odd(), handler(1));
+            stringify!($tag)
+        }
+    (<$tag:ident class:big=move || $n:ident > 5 on:click=move |$e:tt| match $s:ident { $($arm:tt)* }/>) =>:
+        {
+            let class = move || $n > 5;
+            let handler = move |$e: u8| match $s { $($arm)* };
+            let _ = (class(), handler(1));
+            stringify!($tag)
+        }
+#[allow(unused_imports)]
+pub(crate) use view
+
+pub const COUNT: u8 = 5
+
+pub fn go() -> u8 = 0
+
+pub fn same[T](t: T) -> T = t
+
+pub fn same_line_text() -> &'static str:
+    view! {
+        <a on:click=move |_| go() > Count
+            {
+                let z = 1
+                z
+            }
+        </a>
+    }
+
+pub fn own_line_text() -> &'static str:
+    view! {
+        <b on:click=move |_| go()
+            > Count
+            {
+                let z = 1
+                z
+            }
+        </b>
+    }
+
+pub fn keyword_text() -> &'static str:
+    view! {
+        <c on:click=move |_| go() > Find a match {
+            let z = 1
+            z
+        }
+        </c>
+    }
+
+pub fn arrow_text() -> &'static str:
+    view! {
+        <d on:click=move |_| go() > Next -> {
+            let z = 1
+            z
+        }
+        </d>
+    }
+
+pub fn glued_close_text() -> &'static str:
+    view! {
+        <e on:click=move |_| go() > Count</e>
+        {
+            let z = 1
+            z
+        }
+    }
+
+pub fn uppercase_comparison(n: u8) -> &'static str:
+    view! {
+        <f class:big=move || n > COUNT on:click=move |_| match n {
+            1 => 2,
+            _ => 3,
+        }></f>
+    }
+
+pub fn string_after_comparison(n: u8) -> &'static str:
+    view! {
+        <g class:big=move || n > 5 title="<a>" on:click=move |_| match n {
+            1 => 2,
+            _ => 3,
+        }></g>
+    }
+
+pub fn comment_after_comparison(n: u8) -> &'static str:
+    view! {
+        <h class:big=move || n > 5 // <a>
+            on:click=move |_| match n {
+                1 => 2,
+                _ => 3,
+            }></h>
+    }
+
+pub fn arrow_after_comparison(n: u8) -> &'static str:
+    view! {
+        <i class:big=move || n > 5 on:x=move |_| -> u8 { 1 } on:click=move |_| match n {
+            1 => 2,
+            _ => 3,
+        }></i>
+    }
+
+pub fn turbofish_after_comparison(n: u8) -> &'static str:
+    view! {
+        <j class:big=move || n > same::<u8>(5) on:click=move |_| match n {
+            1 => 2,
+            _ => 3,
+        }></j>
+    }
+
+pub fn two_comparisons(n: u8) -> &'static str:
+    view! {
+        <k class:big=move || n > 5 class:odd=move || n > 1 on:click=move |_| match n {
+            1 => 2,
+            _ => 3,
+        }></k>
+    }
+
+pub fn self_closing_comparison(n: u8) -> &'static str:
+    view! {
+        <l class:big=move || n > 5 on:click=move |_| match n {
+            1 => 2,
+            _ => 3,
+        }/>
+    }

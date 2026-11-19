@@ -71,6 +71,7 @@ const RENK_CORPUS: &[(&str, &str)] = &[
     ("struct_literal_heads", include_str!("renk_corpus/struct_literal_heads.rk")),
     ("view_blocks", include_str!("renk_corpus/view_blocks.rk")),
     ("view_braces", include_str!("renk_corpus/view_braces.rk")),
+    ("view_tag_ends", include_str!("renk_corpus/view_tag_ends.rk")),
 ];
 
 #[test]
