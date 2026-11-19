@@ -73,7 +73,7 @@ fn transpiles_when_the_process_limit_refuses_threads() {
     // With no thread to spare, the conversion runs on the caller's stack.
     let dir = temp_dir("process-limit");
     fs::write(dir.join("main.rk"), "fn main():\n    println!(\"hi\")\n").unwrap();
-    let output = Command::new("sh")
+    let output = Command::new("bash")
         .arg("-c")
         .arg(format!(
             "ulimit -u 1 && exec '{}' transpile main.rk",
@@ -774,6 +774,8 @@ fn on_terminal(dir: &Path, args: &[&str]) -> String {
         .args(args)
         .current_dir(dir)
         .env("CARGO_TARGET_DIR", dir.join("target"))
+        // Cargo hides its progress bar when `CI` is set.
+        .env_remove("CI")
         // libtest colors only a terminal that `TERM` names.
         .env("TERM", "xterm-256color")
         .stdin(Stdio::null())
