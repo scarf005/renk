@@ -5671,20 +5671,32 @@ fn view_blocks_as_renk(line: &str, dot: bool) -> Option<String> {
                     && rewrite(&lines[index]) != lines[index]
             })
             .collect::<Vec<_>>();
-        // Lines are rewritten a group at a time, and a group that changes the Rust is halved, so a
-        // block with a few lines that must stay, as the last line before a `}`, lowers a few times
-        // per such line instead of once per line.
-        let mut groups = vec![pending.as_slice()];
+        // Lines are rewritten a group at a time. A group that changes the Rust drops the lines
+        // whose own lowered line changed, as the last line before a `}`, and tries again; a group
+        // with no such line is halved. So a block lowers about once more per line that must stay.
+        let expected_lines = expected.split('\n').collect::<Vec<_>>();
+        let mut groups = vec![pending];
         while let Some(group) = groups.pop() {
             let mut trial = lines.clone();
-            for &index in group {
+            for &index in &group {
                 trial[index] = rewrite(&lines[index]);
             }
-            if lower(&trial) == expected {
+            let lowered = lower(&trial);
+            if lowered == expected {
                 lines = trial;
-            } else if let [_, _, ..] = group {
+                continue;
+            }
+            let lowered = lowered.split('\n').collect::<Vec<_>>();
+            // Lowered lines match the block's lines by index only when all three counts agree.
+            let aligned = lowered.len() == lines.len() && expected_lines.len() == lines.len();
+            let (changed, kept): (Vec<_>, Vec<_>) = group
+                .iter()
+                .partition(|&&index| aligned && lowered[index] != expected_lines[index]);
+            if !changed.is_empty() {
+                groups.extend((!kept.is_empty()).then_some(kept));
+            } else if let [_, _, ..] = group[..] {
                 let (first, second) = group.split_at(group.len() / 2);
-                groups.extend([second, first]);
+                groups.extend([second.to_vec(), first.to_vec()]);
             }
         }
         lines.join("\n")
