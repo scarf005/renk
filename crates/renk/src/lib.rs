@@ -7522,15 +7522,21 @@ fn closures(chars: &[char]) -> Vec<Closure> {
     }
     // Markup has no `,`, `;`, or closing bracket, so the body of `move |_| a` in each
     // `<b on:click=move |_| a></b>` of a line reaches the next body. That body starts at the same
-    // depth and ends in the same place, so the scan stops there and takes its end.
+    // depth and ends in the same place, so the scan stops there and takes its end. The memo keys
+    // each end by the first index its scan tests, past a leading literal or macro such as the
+    // `"a"` of `move ||"a"`, because the scan skips that span and tests no index inside it.
     let mut ends = std::collections::HashMap::new();
     let mut closures = Vec::new();
     for (parameters, close) in heads.into_iter().rev() {
+        let first = std::cell::Cell::new(None);
         let end = top_level_position(chars, close + 1, |at| {
+            first.set(first.get().or(Some(at)));
             matches!(chars[at], ',' | ';' | ')' | ']' | '}') || ends.contains_key(&at)
         })
         .map_or(chars.len(), |at| ends.get(&at).copied().unwrap_or(at));
-        ends.insert(close + 1, end);
+        if let Some(first) = first.get() {
+            ends.insert(first, end);
+        }
         closures.push(Closure {
             parameters: split_macro_arguments(&parameters, false)
                 .into_iter()
