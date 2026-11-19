@@ -7,7 +7,7 @@ macro_rules! view:
             let _ = (handler(1), $child);
             stringify!($tag)
         }
-    (<$tag:ident on:click=move |$e:tt| $f:ident() > Count</$close:ident> $child:block) =>:
+    (<$tag:ident on:click=move |$e:tt| $f:ident() > Count $child:block more</$close:ident>) =>:
         {
             let handler = move |$e: u8| $f();
             let _ = (handler(1), $child);
@@ -126,11 +126,12 @@ pub fn arrow_text() -> &'static str:
 
 pub fn glued_close_text() -> &'static str:
     view! {
-        <e on:click=move |_| go() > Count</e>
-        {
-            let z = 1
-            z
-        }
+        <e on:click=move |_| go() > Count
+            {
+                let z = 1
+                z
+            }
+            more</e>
     }
 
 pub fn uppercase_comparison(n: u8) -> &'static str:
