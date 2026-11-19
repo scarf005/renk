@@ -1041,9 +1041,9 @@ fn apply_rewrites(
 
 /// Splits rewrites into those whose Renk transpiles to exactly `expected`, up to inlined format
 /// arguments, and the rest. A rewrite that keeps the count of the physical lines it replaces, as a
-/// whole `view!` statement, reverts only the changed lines that the source map places on a
-/// differing Rust line, and is rejected whole when the map places none of them. Each round reverts
-/// a line or rejects a rewrite, so the loop ends.
+/// wrapped call or a whole `view!` statement in any pass, reverts only the changed lines that the
+/// source map places on a differing Rust line, and is rejected whole when the map places none of
+/// them. Each round reverts a line or rejects a rewrite, so the loop ends.
 fn equivalent_rewrites(
     lines: &[String],
     rewrites: Vec<Rewrite>,

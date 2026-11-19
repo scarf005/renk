@@ -1691,6 +1691,27 @@ fn view_blocks_dot_other_paths_when_a_path_keeps_its_colons() {
 }
 
 #[test]
+fn wrapped_expressions_dot_other_paths_when_a_path_keeps_its_colons() {
+    // Outside `view!` too, a multi-line rewrite reverts only its failing line: `fs::read(fs)` keeps
+    // `::`, as `fs` is a parameter, and `std::mem::drop` on the other lines becomes `std.mem.drop`.
+    let cases = [
+        (
+            "fn f(fs: u8) {\n    foo(\n        std::mem::drop(1),\n        fs::read(fs),\n        std::mem::drop(2),\n    );\n}\n",
+            "fn f(fs: u8):\n    foo(\n        std.mem.drop(1),\n        fs::read(fs),\n        std.mem.drop(2),\n    )\n",
+        ),
+        (
+            "fn f(fs: u8) {\n    let x = (\n        std::mem::drop(1),\n        fs::read(fs),\n    );\n}\n",
+            "fn f(fs: u8):\n    let x = (\n        std.mem.drop(1),\n        fs::read(fs),\n    )\n",
+        ),
+    ];
+    for (rust, expected) in cases {
+        let renk = rust_to_renk(rust).unwrap();
+        assert_eq!(renk, expected);
+        assert_eq!(self::rust(&renk), rust);
+    }
+}
+
+#[test]
 fn view_blocks_keep_colons_only_on_paths_with_value_heads() {
     // Each case is a `view!` statement with one `fs::read` path whose head `fs` is a value outside
     // the block, so it keeps `::`, and the other paths become `std.mem.drop`.
