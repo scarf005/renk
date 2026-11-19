@@ -1,0 +1,23 @@
+name: test
+
+on:
+  push:
+    paths-ignore: [docs/**]
+  pull_request:
+    paths-ignore: [docs/**]
+  workflow_dispatch:
+
+permissions: { contents: read }
+
+concurrency: { group: "test-${{ github.head_ref || github.ref_name }}", cancel-in-progress: true }
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env: { CARGO_TERM_COLOR: always }
+    steps:
+      - uses: actions/checkout@v7
+      # Script tests run `cargo +nightly -Zscript`, and rust-analyzer needs the std sources.
+      - run: rustup toolchain install stable nightly --profile minimal --component rust-analyzer,rust-src
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test -p renk --no-fail-fast
