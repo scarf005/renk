@@ -131,6 +131,26 @@ fn long_view_blocks_convert_in_linear_time() {
 }
 
 #[test]
+fn view_blocks_with_a_kept_last_semicolon_convert_about_as_fast_as_others() {
+    let _serial = SERIAL.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let convert = |last: &str| {
+        let statements = (0..200)
+            .map(|n| format!("            n.set({n});\n"))
+            .collect::<String>();
+        let rust = format!(
+            "fn f(n: u8) {{\n    view! {{\n        <b on:click=move |_| {{\n{statements}            {last}\n        }}></b>\n    }}\n}}\n"
+        );
+        let start = std::time::Instant::now();
+        rust_to_renk(&rust).unwrap();
+        start.elapsed()
+    };
+    let (value, statement) = (fastest(|| convert("n.get()")), fastest(|| convert("n.set(0);")));
+    // The last `n.set(0);` keeps its `;`, as without it the block returns a value. Finding that
+    // line takes one more lowering of the block, not one per halving of its 201 lines.
+    assert!(statement < value * 2, "{value:?} {statement:?}");
+}
+
+#[test]
 fn many_view_blocks_with_colon_paths_convert_in_linear_time() {
     let _serial = SERIAL.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let convert = |views: usize| {
