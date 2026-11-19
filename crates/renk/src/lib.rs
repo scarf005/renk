@@ -5487,13 +5487,62 @@ fn map_view_body(
                         || previous.is_none_or(|(c, _)| !is_ident_continue(c) && c != ':'))
             };
             let after_path = |i: usize| is_ident_continue(chars[i]) || chars[i] == ':';
-            // Whether the `>` at `at` is a spaced comparison after a closure value, as `n > 5`,
-            // `n >= 5`, or `n >> 2` in `move || n > 5`, also wrapped onto its own line, and not
-            // a tag end before a line end or text, as `>` alone on a line or `go() >Click`.
+            // Whether a tag end, as `>` or `/>`, comes after `from` before the next tag start, as
+            // `<a` or `</a`, at the same bracket depth. The scan skips strings, comments, groups,
+            // and generics, as `same::<u8>(5)`, and stops at the first `>` or tag start.
+            let tag_end_follows = |from: usize| {
+                let mut groups = Vec::new();
+                let mut index = from;
+                while index < chars.len() {
+                    if let Some(end) = opaque_span_end(&chars, index) {
+                        index = end + 1;
+                        continue;
+                    }
+                    let next = chars.get(index + 1).copied();
+                    match chars[index] {
+                        '(' | '[' | '{' => groups.push(chars[index]),
+                        ')' | ']' | '}' => {
+                            while groups.last() == Some(&'<') {
+                                groups.pop();
+                            }
+                            if groups.pop().is_none() {
+                                return false;
+                            }
+                        }
+                        '<' if after_path(index - 1) && !matches!(next, Some('/' | '=')) => {
+                            groups.push('<')
+                        }
+                        '<' if groups.is_empty()
+                            && (next == Some('/')
+                                || next.is_some_and(|c| is_ident_start(c) || c == '>')) =>
+                        {
+                            return false;
+                        }
+                        '>' if !matches!(chars[index - 1], '-' | '=') => {
+                            if groups.last() == Some(&'<') {
+                                groups.pop();
+                            } else if groups.is_empty() {
+                                return true;
+                            }
+                        }
+                        _ => {}
+                    }
+                    index += 1;
+                }
+                false
+            };
+            // Whether the `>` at `at` is a comparison after a closure value. It needs a space
+            // before it and a space, `=`, or `>` after it, as `n > 5`, `n >= 5`, or `n >> 2`, also
+            // wrapped onto its own line, so `go() >Click` ends the tag. A tag end must also follow
+            // before the next tag start: `move || n > 5>x` and `move || n > 5 />` compare, but
+            // `move |_| go() > Count </b>` ends the tag at its `>`, and so does `go() > Count {`
+            // with `</b>` after the block.
             let compares = || {
+                let from = at + 1 + usize::from(matches!(next, Some('=' | '>')));
                 closure
                     && (chars[at - 1] == ' ' && matches!(next, Some(' ' | '=' | '>'))
                         || chars[at - 2..at] == [' ', '>'] && next == Some(' '))
+                    && tag_end_follows(from)
             };
             match chars[at] {
                 '<' if markup
