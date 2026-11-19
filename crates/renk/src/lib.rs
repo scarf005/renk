@@ -2744,6 +2744,15 @@ fn has_control_operand(text: &str) -> bool {
                     .iter()
                     .take_while(|c| is_ident_continue(**c))
                     .collect::<String>();
+                // Skip other words before the scans below, which read to the end of `text`.
+                if !matches!(
+                    &*word,
+                    "else" | "if" | "match" | "while" | "for" | "loop" | "unsafe" | "async"
+                        | "const"
+                ) {
+                    index += word.chars().count();
+                    continue;
+                }
                 let before = chars[..index].iter().collect::<String>();
                 let before = before.trim_end();
                 // A label, as in `'a: loop`, sits between the operator and the loop.
@@ -7446,7 +7455,7 @@ struct Closure {
 }
 
 fn closures(chars: &[char]) -> Vec<Closure> {
-    let mut closures = Vec::new();
+    let mut heads = Vec::new();
     let mut index = 0;
     while index < chars.len() {
         if let Some(end) = opaque_span_end(chars, index) {
@@ -7457,22 +7466,31 @@ fn closures(chars: &[char]) -> Vec<Closure> {
             let Some(close) = top_level_position(chars, index + 1, |at| chars[at] == '|') else {
                 break;
             };
-            let parameters = chars[index + 1..close].iter().collect::<String>();
-            let end = top_level_position(chars, close + 1, |at| {
-                matches!(chars[at], ',' | ';' | ')' | ']' | '}')
-            })
-            .unwrap_or(chars.len());
-            closures.push(Closure {
-                parameters: split_macro_arguments(&parameters, false)
-                    .into_iter()
-                    .flat_map(|parameter| pattern_bindings(without_type(parameter)))
-                    .collect(),
-                body: close + 1..end,
-            });
+            heads.push((chars[index + 1..close].iter().collect::<String>(), close));
             index = close;
         }
         index += 1;
     }
+    // Markup has no `,`, `;`, or closing bracket, so the body of `move |_| a` in each
+    // `<b on:click=move |_| a></b>` of a line reaches the next body. That body starts at the same
+    // depth and ends in the same place, so the scan stops there and takes its end.
+    let mut ends = std::collections::HashMap::new();
+    let mut closures = Vec::new();
+    for (parameters, close) in heads.into_iter().rev() {
+        let end = top_level_position(chars, close + 1, |at| {
+            matches!(chars[at], ',' | ';' | ')' | ']' | '}') || ends.contains_key(&at)
+        })
+        .map_or(chars.len(), |at| ends.get(&at).copied().unwrap_or(at));
+        ends.insert(close + 1, end);
+        closures.push(Closure {
+            parameters: split_macro_arguments(&parameters, false)
+                .into_iter()
+                .flat_map(|parameter| pattern_bindings(without_type(parameter)))
+                .collect(),
+            body: close + 1..end,
+        });
+    }
+    closures.reverse();
     closures
 }
 
