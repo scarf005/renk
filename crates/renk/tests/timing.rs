@@ -154,3 +154,55 @@ fn many_view_blocks_with_colon_paths_convert_in_linear_time() {
     // Four times the statements take about four times as long, not sixteen.
     assert!(long < short * 8, "{short:?} {long:?}");
 }
+
+/// The time to convert a `view!` body of `count` copies of `tag` from Rust to Renk and back, once
+/// with all tags on one line and once with one tag per line.
+fn convert_view_tags(tag: &str, count: usize) -> std::time::Duration {
+    [" ", "\n        "]
+        .iter()
+        .map(|separator| {
+            let body = vec![tag; count].join(separator);
+            let rust = format!("fn f() {{\n    view! {{\n        {body}\n    }}\n}}\n");
+            let start = std::time::Instant::now();
+            transpile(&rust_to_renk(&rust).unwrap()).unwrap();
+            start.elapsed()
+        })
+        .sum()
+}
+
+#[test]
+fn long_view_bodies_of_closure_attributes_convert_in_linear_time() {
+    let _serial = SERIAL.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    // Each `move |_| a` body ends at the next `,`, `;`, or closing bracket, and markup has none.
+    let tag = "<b on:click=move |_| a></b>";
+    let (short, long) = (
+        fastest(|| convert_view_tags(tag, 50)),
+        fastest(|| convert_view_tags(tag, 200)),
+    );
+    // Four times the tags take about four times as long, not sixteen.
+    assert!(long < short * 8, "{short:?} {long:?}");
+}
+
+#[test]
+fn long_view_bodies_of_nested_elements_convert_in_linear_time() {
+    let _serial = SERIAL.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let tag = "<p><i><b>x</b></i></p>";
+    let (short, long) = (
+        fastest(|| convert_view_tags(tag, 100)),
+        fastest(|| convert_view_tags(tag, 400)),
+    );
+    // Four times the tags take about four times as long, not sixteen.
+    assert!(long < short * 8, "{short:?} {long:?}");
+}
+
+#[test]
+fn long_view_bodies_of_closure_comparisons_convert_in_linear_time() {
+    let _serial = SERIAL.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let tag = "<p class:big=move || n > 5>x</p>";
+    let (short, long) = (
+        fastest(|| convert_view_tags(tag, 50)),
+        fastest(|| convert_view_tags(tag, 200)),
+    );
+    // Four times the tags take about four times as long, not sixteen.
+    assert!(long < short * 8, "{short:?} {long:?}");
+}
