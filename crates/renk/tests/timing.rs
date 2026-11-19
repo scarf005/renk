@@ -219,3 +219,17 @@ fn long_view_bodies_of_spaced_tag_ends_convert_in_linear_time() {
     // Four times the tags take about four times as long, not sixteen.
     assert!(long < short * 8, "{short:?} {long:?}");
 }
+
+#[test]
+fn long_view_bodies_of_closures_starting_with_literals_convert_in_linear_time() {
+    let _serial = SERIAL.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    // Each body of `move ||"a"` starts with a string. The body scan skips the string and tests
+    // no index inside it, so a scan from an earlier body must find a memo past the string.
+    let tag = "<b class=move ||\"a\"></b>";
+    let (short, long) = (
+        fastest(|| convert_view_tags(tag, 50)),
+        fastest(|| convert_view_tags(tag, 200)),
+    );
+    // Four times the tags take about four times as long, not sixteen.
+    assert!(long < short * 8, "{short:?} {long:?}");
+}
