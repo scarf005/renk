@@ -2667,10 +2667,13 @@ mod tests {
             }}),
             serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "client/registerCapability", "params": {}}),
             serde_json::json!({"jsonrpc": "2.0", "method": "textDocument/publishDiagnostics", "params": {}}),
+            serde_json::json!({"jsonrpc": "2.0", "id": 3, "method": "workspace/diagnostic/refresh"}),
             serde_json::json!({"jsonrpc": "2.0", "id": 1, "result": "hover"}),
         ] {
             write_lsp_message(&mut server, &message).await.unwrap();
         }
+        drop(server);
+        reader.await.unwrap();
 
         assert_eq!(response.await.unwrap(), "hover");
         let answer = answered.recv().await.unwrap();
@@ -2683,9 +2686,15 @@ mod tests {
             notified.recv().await.unwrap()["method"],
             "textDocument/publishDiagnostics"
         );
+        // The refresh gets an answer and also goes on, so renk-lsp pulls the diagnostics again.
+        let answer = answered.recv().await.unwrap();
+        assert_eq!(answer["id"], 3);
+        assert!(answer["result"].is_null());
+        assert_eq!(
+            notified.recv().await.unwrap()["method"],
+            "workspace/diagnostic/refresh"
+        );
         assert!(notified.try_recv().is_err());
-        drop(server);
-        reader.await.unwrap();
     }
 
     /// A module's generated Rust, as renk-lsp writes it for rust-analyzer.
