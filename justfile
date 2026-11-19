@@ -1,6 +1,10 @@
 default:
     @just --list
 
+# Run the whole renk test suite, the same command as CI.
+test:
+    cargo test -p renk --no-fail-fast
+
 # Start the Renk web demo from the repository root.
 web:
     cd web && deno task dev
