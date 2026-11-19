@@ -678,7 +678,7 @@ impl Backend {
                 let Ok(response) = pending.await else {
                     return;
                 };
-                if response["error"]["data"]["retriggerRequest"] != true {
+                if !retriggers(&response) {
                     break response["result"]["items"].clone();
                 }
                 let latest = (backend.pulled_diagnostics.read().await.get(&uri))
@@ -1042,6 +1042,11 @@ impl RustAnalyzerClient {
         }
         Some(receiver)
     }
+}
+
+/// Whether a response to a diagnostic pull asks for the pull again.
+fn retriggers(response: &serde_json::Value) -> bool {
+    response["error"]["data"]["retriggerRequest"] == true
 }
 
 async fn close_in(rust_analyzer: &RustAnalyzerClient, rust_uri: Url) {
@@ -2766,7 +2771,10 @@ mod tests {
             .unwrap(),
         );
         let capabilities = &rust_initialize_request(&params)["capabilities"];
-        assert_eq!(capabilities["textDocument"]["diagnostic"], serde_json::json!({}));
+        assert_eq!(
+            capabilities["textDocument"]["diagnostic"],
+            serde_json::json!({})
+        );
         assert_eq!(
             capabilities["workspace"]["diagnostics"],
             serde_json::json!({"refreshSupport": true})
@@ -2824,6 +2832,90 @@ mod tests {
             "workspace/diagnostic/refresh"
         );
         assert!(notified.try_recv().is_err());
+    }
+
+    /// A rust-analyzer client over a process that exits at once, and the messages sent to it.
+    fn rust_analyzer_client() -> (
+        Arc<RustAnalyzerClient>,
+        mpsc::UnboundedReceiver<serde_json::Value>,
+    ) {
+        let (sender, sent) = mpsc::unbounded_channel();
+        let child = Command::new("true").kill_on_drop(true).spawn().unwrap();
+        let client = RustAnalyzerClient {
+            sender,
+            pending: Arc::new(Mutex::new(HashMap::new())),
+            next_id: AtomicU64::new(1),
+            _child: Arc::new(Mutex::new(child)),
+        };
+        (Arc::new(client), sent)
+    }
+
+    #[tokio::test]
+    async fn rust_analyzer_requests_fail_when_its_output_ends() {
+        let (rust_analyzer, _sent) = rust_analyzer_client();
+        let response = rust_analyzer.send_request("hover", ()).await.unwrap();
+        let (server, client) = tokio::io::duplex(4096);
+        let (replies, _answered) = mpsc::unbounded_channel();
+        let (notifications, _notified) = mpsc::unbounded_channel();
+        let reader = tokio::spawn(read_rust_analyzer_messages(
+            client,
+            rust_analyzer.pending.clone(),
+            replies,
+            notifications,
+            serde_json::Value::Null,
+        ));
+        drop(server);
+        reader.await.unwrap();
+
+        // The request sent before the output ended gets no answer, and one sent after is not sent.
+        let response = tokio::time::timeout(std::time::Duration::from_secs(5), response).await;
+        assert!(matches!(response, Ok(Err(_))), "{response:?}");
+        assert!(rust_analyzer.send_request("hover", ()).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_refresh_pulls_only_the_documents_open_in_its_rust_analyzer() {
+        let (service, _socket) = LspService::new(Backend::new);
+        let backend = service.inner();
+        let (refreshed, mut refreshed_sent) = rust_analyzer_client();
+        let (other, mut other_sent) = rust_analyzer_client();
+        let rust_uri = module_uri("target/ours.rs");
+        backend.opened.write().await.extend([
+            (module_uri("src/ours.rk"), (refreshed, rust_uri.clone())),
+            (
+                module_uri("src/theirs.rk"),
+                (other, module_uri("target/theirs.rs")),
+            ),
+        ]);
+
+        let refresh = serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "workspace/diagnostic/refresh"});
+        backend.rust_analyzer_notification(refresh).await;
+        let pull = refreshed_sent.try_recv().unwrap();
+        assert_eq!(pull["method"], "textDocument/diagnostic");
+        assert_eq!(pull["params"]["textDocument"]["uri"], rust_uri.as_str());
+        assert!(refreshed_sent.try_recv().is_err());
+        assert!(other_sent.try_recv().is_err());
+    }
+
+    #[test]
+    fn cancelled_diagnostic_pulls_retrigger_unless_rust_analyzer_says_not_to() {
+        let error = |error| serde_json::json!({"jsonrpc": "2.0", "id": 1, "error": error});
+        assert!(retriggers(&error(serde_json::json!({
+            "code": -32802, "message": "canceled", "data": {"retriggerRequest": true},
+        }))));
+        // LSP 3.17: a ServerCancelled error without data asks for the pull again.
+        assert!(retriggers(&error(serde_json::json!({
+            "code": -32802, "message": "canceled",
+        }))));
+        assert!(!retriggers(&error(serde_json::json!({
+            "code": -32802, "message": "canceled", "data": {"retriggerRequest": false},
+        }))));
+        assert!(!retriggers(&error(serde_json::json!({
+            "code": -32603, "message": "failed",
+        }))));
+        assert!(!retriggers(&serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "result": {"kind": "full", "items": []},
+        })));
     }
 
     /// A module's generated Rust, as renk-lsp writes it for rust-analyzer.
