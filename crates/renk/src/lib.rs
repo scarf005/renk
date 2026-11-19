@@ -37,7 +37,9 @@ impl TranspileOutput {
             .iter()
             .find(|entry| entry.generated_line == generated_line)
             .map(|entry| entry.source_line)
-            .or_else(|| deepest_source_line(&self.source_tree, generated_line))
+            .or_else(|| {
+                deepest_source_node(&self.source_tree, generated_line).map(|node| node.source_line)
+            })
     }
 
     /// For each 1-based generated line, its source line and whether renk synthesized it, like a
@@ -830,8 +832,8 @@ fn idiomatic_renk(lines: Vec<String>, aggressive: bool) -> Vec<String> {
         if_chain_rewrites,
         expression_body_rewrites,
         |lines| line_rewrites(lines, let_else_rewrite),
-        // A view block keeps its dropped `;` when one of its paths, checked without the scope
-        // around the block, cannot take a `.`.
+        // View blocks drop `;` in a pass of their own, so a line that reverts its dotted path, as
+        // `fs::read(fs);` where `fs` is a value outside the block, still drops its `;`.
         |lines| line_rewrites(lines, |line| view_blocks_as_renk(line, false)),
         |lines| line_rewrites(lines, |line| view_blocks_as_renk(line, true)),
     ];
@@ -1015,9 +1017,12 @@ fn line_rewrites(lines: &[String], rewrite: fn(&str) -> Option<String>) -> Vec<R
         .collect()
 }
 
-/// Candidate lines with each sorted, disjoint rewrite applied, and the rewrite that produced each
-/// candidate source line.
-fn apply_rewrites(lines: &[String], rewrites: &[Rewrite]) -> (Vec<String>, Vec<Option<usize>>) {
+/// Candidate lines with each sorted, disjoint rewrite applied, and for each candidate source line
+/// the rewrite that produced it with the line's offset in that rewrite's text.
+fn apply_rewrites(
+    lines: &[String],
+    rewrites: &[Rewrite],
+) -> (Vec<String>, Vec<Option<(usize, usize)>>) {
     let mut candidate = Vec::new();
     let mut origins = Vec::new();
     let mut next = 0;
@@ -1026,7 +1031,7 @@ fn apply_rewrites(lines: &[String], rewrites: &[Rewrite]) -> (Vec<String>, Vec<O
             origins.extend(line.split('\n').map(|_| None));
             candidate.push(line.clone());
         }
-        origins.extend(rewrite.text.split('\n').map(|_| Some(index)));
+        origins.extend((0..rewrite.text.split('\n').count()).map(|offset| Some((index, offset))));
         candidate.push(rewrite.text.clone());
         next = rewrite.end;
     }
@@ -1035,16 +1040,29 @@ fn apply_rewrites(lines: &[String], rewrites: &[Rewrite]) -> (Vec<String>, Vec<O
 }
 
 /// Splits rewrites into those whose Renk transpiles to exactly `expected`, up to inlined format
-/// arguments, and the rest.
+/// arguments, and the rest. A rewrite that keeps the count of the physical lines it replaces, as a
+/// whole `view!` statement, reverts only the changed lines that the source map places on a
+/// differing Rust line, and is rejected whole when the map places none of them. Each round reverts
+/// a line or rejects a rewrite, so the loop ends.
 fn equivalent_rewrites(
     lines: &[String],
-    mut rewrites: Vec<Rewrite>,
+    rewrites: Vec<Rewrite>,
     expected: &str,
 ) -> (Vec<Rewrite>, Vec<Rewrite>) {
     let mut rejected = Vec::new();
-    while !rewrites.is_empty() {
+    // Each rewrite with the text it asks for, which a rejected rewrite keeps.
+    let mut trials = rewrites
+        .into_iter()
+        .map(|rewrite| {
+            let wanted = rewrite.text.clone();
+            (rewrite, wanted)
+        })
+        .collect::<Vec<_>>();
+    let reject = |(rewrite, text): (Rewrite, String)| Rewrite { text, ..rewrite };
+    while !trials.is_empty() {
+        let rewrites = trials.iter().map(|(rewrite, _)| rewrite.clone()).collect::<Vec<_>>();
         let (candidate, origins) = apply_rewrites(lines, &rewrites);
-        let rejected_lines = match transpile_source(&candidate.join("\n")) {
+        let differing = match transpile_source(&candidate.join("\n")) {
             Ok(output) => {
                 let actual = canonical_format_macros(&output.rust);
                 if actual == expected {
@@ -1052,30 +1070,60 @@ fn equivalent_rewrites(
                 }
                 differing_source_lines(&output, &actual, expected)
             }
-            Err(error) => vec![error.line],
+            Err(error) => vec![(error.line, true)],
         };
-        let failed = rejected_lines
-            .into_iter()
-            .filter_map(|line| origins.get(line.checked_sub(1)?).copied().flatten())
-            .collect::<Vec<_>>();
-        if failed.is_empty() {
-            rejected.append(&mut rewrites);
+        let mut failed = vec![Vec::new(); trials.len()];
+        for (line, exact) in differing {
+            if let Some(&Some((index, offset))) = line.checked_sub(1).and_then(|at| origins.get(at))
+            {
+                failed[index].push((offset, exact));
+            }
+        }
+        if failed.iter().all(Vec::is_empty) {
+            rejected.extend(trials.drain(..).map(reject));
             break;
         }
-        let (bad, good) = rewrites
-            .into_iter()
-            .enumerate()
-            .partition::<Vec<_>, _>(|(index, _)| failed.contains(index));
-        rejected.extend(bad.into_iter().map(|(_, rewrite)| rewrite));
-        rewrites = good.into_iter().map(|(_, rewrite)| rewrite).collect();
+        let mut kept = Vec::new();
+        for ((mut rewrite, wanted), failed) in trials.into_iter().zip(failed) {
+            if failed.is_empty() {
+                kept.push((rewrite, wanted));
+                continue;
+            }
+            let original = lines[rewrite.start..rewrite.end].join("\n");
+            let original = original.split('\n').collect::<Vec<_>>();
+            let mut text = rewrite.text.split('\n').map(str::to_string).collect::<Vec<_>>();
+            let placed = (0..text.len())
+                .filter(|&at| {
+                    text.len() == original.len()
+                        && text[at] != original[at]
+                        && failed.contains(&(at, true))
+                })
+                .collect::<Vec<_>>();
+            for &at in &placed {
+                text[at] = original[at].to_string();
+            }
+            if placed.is_empty() || text == original {
+                rejected.push(reject((rewrite, wanted)));
+                continue;
+            }
+            rewrite.text = text.join("\n");
+            kept.push((rewrite, wanted));
+        }
+        trials = kept;
     }
     rejected.sort_by_key(|rewrite| rewrite.start);
-    (rewrites, rejected)
+    let accepted = trials.into_iter().map(|(rewrite, _)| rewrite).collect();
+    (accepted, rejected)
 }
 
-/// Source lines whose generated Rust differs from `expected`; after a line count change only the
-/// first difference is aligned.
-fn differing_source_lines(output: &TranspileOutput, actual: &str, expected: &str) -> Vec<usize> {
+/// Source lines whose generated Rust differs from `expected`, each with whether it is exact: a
+/// node without children that keeps its line count maps line for line, and any other node gives
+/// its first line. After a line count change only the first difference is aligned.
+fn differing_source_lines(
+    output: &TranspileOutput,
+    actual: &str,
+    expected: &str,
+) -> Vec<(usize, bool)> {
     let actual = actual.lines().collect::<Vec<_>>();
     let expected = expected.lines().collect::<Vec<_>>();
     let differing = (0..actual.len().max(expected.len()))
@@ -1086,15 +1134,23 @@ fn differing_source_lines(output: &TranspileOutput, actual: &str, expected: &str
             1
         });
     differing
-        .filter_map(|index| deepest_source_line(&output.source_tree, index + 1))
+        .filter_map(|index| {
+            let node = deepest_source_node(&output.source_tree, index + 1)?;
+            let span = node.generated_end_line + 1 - node.generated_start_line;
+            let exact = node.children.is_empty() && span == node.source_text.split('\n').count();
+            Some(match exact {
+                true => (node.source_line + index + 1 - node.generated_start_line, true),
+                false => (node.source_line, false),
+            })
+        })
         .collect()
 }
 
-fn deepest_source_line(nodes: &[SourceMapNode], generated_line: usize) -> Option<usize> {
+fn deepest_source_node(nodes: &[SourceMapNode], generated_line: usize) -> Option<&SourceMapNode> {
     let node = nodes.iter().find(|node| {
         (node.generated_start_line..=node.generated_end_line).contains(&generated_line)
     })?;
-    deepest_source_line(&node.children, generated_line).or(Some(node.source_line))
+    deepest_source_node(&node.children, generated_line).or(Some(node))
 }
 
 fn drop_semicolon(line: &str) -> Option<String> {

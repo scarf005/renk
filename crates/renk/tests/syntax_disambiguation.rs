@@ -1689,3 +1689,50 @@ fn view_blocks_dot_other_paths_when_a_path_keeps_its_colons() {
     );
     assert_eq!(self::rust(&renk), rust);
 }
+
+#[test]
+fn view_blocks_keep_colons_only_on_paths_with_value_heads() {
+    // Each case is a `view!` statement with one `fs::read` path whose head `fs` is a value outside
+    // the block, so it keeps `::`, and the other paths become `std.mem.drop`.
+    let cases = [
+        // `fs::read` in the middle and on the last line.
+        (
+            "fn f(fs: u8) {\n    view! {\n        <b on:click=move |_| {\n            std::mem::drop(1);\n            fs::read(fs);\n            std::mem::drop(2);\n        }></b>\n    }\n}\n",
+            "fn f(fs: u8):\n    view! {\n        <b on:click=move |_| {\n            std.mem.drop(1)\n            fs::read(fs)\n            std.mem.drop(2);\n        }></b>\n    }\n",
+        ),
+        (
+            "fn f(fs: u8) {\n    view! {\n        <b on:click=move |_| {\n            std::mem::drop(1);\n            fs::read(fs);\n        }></b>\n    }\n}\n",
+            "fn f(fs: u8):\n    view! {\n        <b on:click=move |_| {\n            std.mem.drop(1)\n            fs::read(fs);\n        }></b>\n    }\n",
+        ),
+        // Two blocks, and only the first holds `fs::read`.
+        (
+            "fn f(fs: u8) {\n    view! {\n        <b on:click=move |_| {\n            fs::read(fs);\n            std::mem::drop(1);\n        }></b>\n        <i on:click=move |_| {\n            std::mem::drop(2);\n            std::mem::drop(3);\n        }></i>\n    }\n}\n",
+            "fn f(fs: u8):\n    view! {\n        <b on:click=move |_| {\n            fs::read(fs)\n            std.mem.drop(1);\n        }></b>\n        <i on:click=move |_| {\n            std.mem.drop(2)\n            std.mem.drop(3);\n        }></i>\n    }\n",
+        ),
+        // A `view!` in a block of a `view!`.
+        (
+            "fn f(fs: u8) {\n    view! {\n        <b on:click=move |_| {\n            std::mem::drop(1);\n            let v = view! { <i on:click=move |_| {\n                fs::read(fs);\n                std::mem::drop(2);\n            }></i> };\n            std::mem::drop(v);\n        }></b>\n    }\n}\n",
+            "fn f(fs: u8):\n    view! {\n        <b on:click=move |_| {\n            std.mem.drop(1)\n            let v = view! { <i on:click=move |_| {\n                fs::read(fs)\n                std.mem.drop(2);\n            }></i> }\n            std.mem.drop(v);\n        }></b>\n    }\n",
+        ),
+        // `fs` bound by a `let` before the `view!`, and an uppercase `Fs::read` next to it.
+        (
+            "fn f() {\n    let fs = 0;\n    view! {\n        <b on:click=move |_| {\n            Fs::read(fs);\n            fs::read(fs);\n            std::mem::drop(1);\n        }></b>\n    }\n}\n",
+            "fn f():\n    let fs = 0\n    view! {\n        <b on:click=move |_| {\n            Fs.read(fs)\n            fs::read(fs)\n            std.mem.drop(1);\n        }></b>\n    }\n",
+        ),
+        // A trailing comment that ends in `{`.
+        (
+            "fn f(fs: u8) {\n    view! {\n        <b on:click=move |_| {\n            std::mem::drop(1); // {\n            fs::read(fs); // {\n            std::mem::drop(2);\n        }></b>\n    }\n}\n",
+            "fn f(fs: u8):\n    view! {\n        <b on:click=move |_| {\n            std.mem.drop(1) // {\n            fs::read(fs) // {\n            std.mem.drop(2);\n        }></b>\n    }\n",
+        ),
+        // A nested `{` block.
+        (
+            "fn f(fs: u8, n: u8) {\n    view! {\n        <b on:click=move |_| {\n            if n > 1 {\n                std::mem::drop(1);\n            }\n            fs::read(fs);\n            std::mem::drop(2);\n        }></b>\n    }\n}\n",
+            "fn f(fs: u8, n: u8):\n    view! {\n        <b on:click=move |_| {\n            if n > 1 {\n                std.mem.drop(1)\n            }\n            fs::read(fs)\n            std.mem.drop(2);\n        }></b>\n    }\n",
+        ),
+    ];
+    for (rust, expected) in cases {
+        let renk = rust_to_renk(rust).unwrap();
+        assert_eq!(renk, expected, "{rust}");
+        assert_eq!(self::rust(&renk), rust);
+    }
+}

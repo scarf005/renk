@@ -129,3 +129,28 @@ fn long_view_blocks_convert_in_linear_time() {
     // Four times the statements take about four times as long, not sixteen.
     assert!(long < short * 8, "{short:?} {long:?}");
 }
+
+#[test]
+fn many_view_blocks_with_colon_paths_convert_in_linear_time() {
+    let _serial = SERIAL.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let convert = |views: usize| {
+        // In each `view!`, `fs::read` keeps its `::`, as `fs` is a parameter, and the
+        // `std::mem::drop` paths around it become `std.mem.drop`.
+        let views = (0..views)
+            .map(|n| {
+                format!(
+                    "    view! {{\n        <b on:click=move |_| {{\n            std::mem::drop({n});\n            fs::read(fs);\n            std::mem::drop({n});\n        }}></b>\n    }};\n"
+                )
+            })
+            .collect::<String>();
+        let rust = format!("fn f(fs: u8) {{\n{views}}}\n");
+        let start = std::time::Instant::now();
+        let renk = rust_to_renk(&rust).unwrap();
+        let elapsed = start.elapsed();
+        assert!(renk.contains("            std.mem.drop(0)\n            fs::read(fs)\n"), "{renk}");
+        elapsed
+    };
+    let (short, long) = (fastest(|| convert(25)), fastest(|| convert(100)));
+    // Four times the statements take about four times as long, not sixteen.
+    assert!(long < short * 8, "{short:?} {long:?}");
+}
