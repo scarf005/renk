@@ -25,28 +25,28 @@ macro_rules! view:
             let _ = (handler(1), $child);
             stringify!($tag)
         }
-    (<$tag:ident class:big=move || $n:ident > $limit:ident on:click=move |$e:tt| match $s:ident { $($arm:tt)* }></$close:ident>) =>:
+    (<$tag:ident class:big={move || $n:ident > $limit:ident} on:click=move |$e:tt| match $s:ident { $($arm:tt)* }></$close:ident>) =>:
         {
             let class = move || $n > $limit;
             let handler = move |$e: u8| match $s { $($arm)* };
             let _ = (class(), handler(1));
             stringify!($tag)
         }
-    (<$tag:ident class:big=move || $n:ident > 5 title=$title:literal on:click=move |$e:tt| match $s:ident { $($arm:tt)* }></$close:ident>) =>:
+    (<$tag:ident class:big={move || $n:ident > 5} title=$title:literal on:click=move |$e:tt| match $s:ident { $($arm:tt)* }></$close:ident>) =>:
         {
             let class = move || $n > 5;
             let handler = move |$e: u8| match $s { $($arm)* };
             let _ = (class(), handler(1), $title);
             stringify!($tag)
         }
-    (<$tag:ident class:big=move || $n:ident > 5 on:click=move |$e:tt| match $s:ident { $($arm:tt)* }></$close:ident>) =>:
+    (<$tag:ident class:big={move || $n:ident > 5} on:click=move |$e:tt| match $s:ident { $($arm:tt)* }></$close:ident>) =>:
         {
             let class = move || $n > 5;
             let handler = move |$e: u8| match $s { $($arm)* };
             let _ = (class(), handler(1));
             stringify!($tag)
         }
-    (<$tag:ident class:big=move || $n:ident > 5 on:x=move |$x:tt| -> u8 { $($body:tt)* } on:click=move |$e:tt| match $s:ident { $($arm:tt)* }></$close:ident>) =>:
+    (<$tag:ident class:big={move || $n:ident > 5} on:x={move |$x:tt| -> u8 { $($body:tt)* }} on:click=move |$e:tt| match $s:ident { $($arm:tt)* }></$close:ident>) =>:
         {
             let class = move || $n > 5;
             let other = move |$x: u8| -> u8 { $($body)* };
@@ -54,14 +54,14 @@ macro_rules! view:
             let _ = (class(), other(1), handler(1));
             stringify!($tag)
         }
-    (<$tag:ident class:big=move || $n:ident > $path:ident::<$ty:ty>($v:literal) on:click=move |$e:tt| match $s:ident { $($arm:tt)* }></$close:ident>) =>:
+    (<$tag:ident class:big={move || $n:ident > $path:ident::<$ty:ty>($v:literal)} on:click=move |$e:tt| match $s:ident { $($arm:tt)* }></$close:ident>) =>:
         {
             let class = move || $n > $path::<$ty>($v);
             let handler = move |$e: u8| match $s { $($arm)* };
             let _ = (class(), handler(1));
             stringify!($tag)
         }
-    (<$tag:ident class:big=move || $n:ident > 5 class:odd=move || $m:ident > 1 on:click=move |$e:tt| match $s:ident { $($arm:tt)* }></$close:ident>) =>:
+    (<$tag:ident class:big={move || $n:ident > 5} class:odd={move || $m:ident > 1} on:click=move |$e:tt| match $s:ident { $($arm:tt)* }></$close:ident>) =>:
         {
             let class = move || $n > 5;
             let odd = move || $m > 1;
@@ -69,7 +69,7 @@ macro_rules! view:
             let _ = (class(), odd(), handler(1));
             stringify!($tag)
         }
-    (<$tag:ident class:big=move || $n:ident > 5 on:click=move |$e:tt| match $s:ident { $($arm:tt)* }/>) =>:
+    (<$tag:ident class:big={move || $n:ident > 5} on:click=move |$e:tt| match $s:ident { $($arm:tt)* }/>) =>:
         {
             let class = move || $n > 5;
             let handler = move |$e: u8| match $s { $($arm)* };
@@ -136,7 +136,7 @@ pub fn glued_close_text() -> &'static str:
 
 pub fn uppercase_comparison(n: u8) -> &'static str:
     view! {
-        <f class:big=move || n > COUNT on:click=move |_| match n {
+        <f class:big={move || n > COUNT} on:click=move |_| match n {
             1 => 2,
             _ => 3,
         }></f>
@@ -144,7 +144,7 @@ pub fn uppercase_comparison(n: u8) -> &'static str:
 
 pub fn string_after_comparison(n: u8) -> &'static str:
     view! {
-        <g class:big=move || n > 5 title="<a>" on:click=move |_| match n {
+        <g class:big={move || n > 5} title="<a>" on:click=move |_| match n {
             1 => 2,
             _ => 3,
         }></g>
@@ -152,7 +152,7 @@ pub fn string_after_comparison(n: u8) -> &'static str:
 
 pub fn comment_after_comparison(n: u8) -> &'static str:
     view! {
-        <h class:big=move || n > 5 // <a>
+        <h class:big={move || n > 5} // <a>
             on:click=move |_| match n {
                 1 => 2,
                 _ => 3,
@@ -161,7 +161,7 @@ pub fn comment_after_comparison(n: u8) -> &'static str:
 
 pub fn arrow_after_comparison(n: u8) -> &'static str:
     view! {
-        <i class:big=move || n > 5 on:x=move |_| -> u8 { 1 } on:click=move |_| match n {
+        <i class:big={move || n > 5} on:x={move |_| -> u8 { 1 }} on:click=move |_| match n {
             1 => 2,
             _ => 3,
         }></i>
@@ -169,7 +169,7 @@ pub fn arrow_after_comparison(n: u8) -> &'static str:
 
 pub fn turbofish_after_comparison(n: u8) -> &'static str:
     view! {
-        <j class:big=move || n > same::<u8>(5) on:click=move |_| match n {
+        <j class:big={move || n > same::<u8>(5)} on:click=move |_| match n {
             1 => 2,
             _ => 3,
         }></j>
@@ -177,7 +177,7 @@ pub fn turbofish_after_comparison(n: u8) -> &'static str:
 
 pub fn two_comparisons(n: u8) -> &'static str:
     view! {
-        <k class:big=move || n > 5 class:odd=move || n > 1 on:click=move |_| match n {
+        <k class:big={move || n > 5} class:odd={move || n > 1} on:click=move |_| match n {
             1 => 2,
             _ => 3,
         }></k>
@@ -185,7 +185,7 @@ pub fn two_comparisons(n: u8) -> &'static str:
 
 pub fn self_closing_comparison(n: u8) -> &'static str:
     view! {
-        <l class:big=move || n > 5 on:click=move |_| match n {
+        <l class:big={move || n > 5} on:click=move |_| match n {
             1 => 2,
             _ => 3,
         }/>

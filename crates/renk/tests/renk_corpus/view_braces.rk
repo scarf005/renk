@@ -32,13 +32,13 @@ macro_rules! view:
             handler(1);
             "a"
         }
-    (<i on:click=move |$event:tt| if $left:ident > 0 $then:block></i>) =>:
+    (<i on:click=(move |$event:tt| if $left:ident > 0 $then:block)></i>) =>:
         {
             let handler = move |$event: u8| if $left > 0 $then;
             handler(1);
             "i"
         }
-    (<g value=$head:ident::<$ty:ty> { $($field:tt)* } />) =>:
+    (<g value=($head:ident::<$ty:ty> { $($field:tt)* }) />) =>:
         {
             let _ = $head::<$ty> { $($field)* };
             "g"
@@ -53,7 +53,7 @@ macro_rules! view:
             let _ = $child;
             "k"
         }
-    (<w on:click=move |$event:tt| if $left:ident > 0 && $right:ident $then:block></w>) =>:
+    (<w on:click=(move |$event:tt| if $left:ident > 0 && $right:ident $then:block)></w>) =>:
         {
             let handler = move |$event: u8| if $left > 0 && $right $then;
             handler(1);
@@ -103,29 +103,29 @@ macro_rules! view:
             let _ = $child;
             "x"
         }
-    (<h on:click=move |$event:ident: $ty:ty| $body:block></h>) =>:
+    (<h on:click=(move |$event:ident: $ty:ty| $body:block)></h>) =>:
         {
             let handler = move |$event: $ty| $body;
             handler(Box::new(|_| {}));
             "h"
         }
-    (<u class=move || if let $pattern:pat = $value:ident $then:block else $otherwise:block></u>) =>:
+    (<u class=(move || if let $pattern:pat = $value:ident $then:block else $otherwise:block)></u>) =>:
         {
             let class = move || if let $pattern = $value $then else $otherwise;
             let _ = class();
             "u"
         }
-    (<z class=match $scrutinee:ident as $ty:ty { $($arm:tt)* }></z>) =>:
+    (<z class=(match $scrutinee:ident as $ty:ty { $($arm:tt)* })></z>) =>:
         {
             let _ = match $scrutinee as $ty { $($arm)* };
             "z"
         }
-    (<v class=match $left:ident > $right:literal { $($arm:tt)* }></v>) =>:
+    (<v class=(match $left:ident > $right:literal { $($arm:tt)* })></v>) =>:
         {
             let _ = match $left > $right { $($arm)* };
             "v"
         }
-    (<b class=move || if let <$ty:ty>::$constant:ident = $value:ident $then:block else $otherwise:block></b>) =>:
+    (<b class=(move || if let <$ty:ty>::$constant:ident = $value:ident $then:block else $otherwise:block)></b>) =>:
         {
             let class = move || if let <$ty>::$constant = $value $then else $otherwise;
             let _ = class();
@@ -162,14 +162,14 @@ macro_rules! view:
             let _ = ($text, $child);
             "tw"
         }
-    (<cg cells=pick::<3, u8>($v:literal) on:click=move |$e:tt| match $s:ident { $($arm:tt)* }/>) =>:
+    (<cg cells=(pick::<3, u8>($v:literal)) on:click=move |$e:tt| match $s:ident { $($arm:tt)* }/>) =>:
         {
             let _ = pick::<3, u8>($v);
             let handler = move |$e: u8| match $s { $($arm)* };
             let _ = handler(1);
             "cg"
         }
-    (<ar on:click=move |$e:ident: $ty:ty| match $s:ident { $($arm:tt)* }></ar>) =>:
+    (<ar on:click=(move |$e:ident: $ty:ty| match $s:ident { $($arm:tt)* })></ar>) =>:
         {
             let handler = move |$e: $ty| match $s { $($arm)* };
             let _ = handler(Arr { x: [0; 3] });
@@ -181,28 +181,28 @@ macro_rules! view:
             handler(1);
             $text
         }
-    (<ql items=Vec::<<$t:ty as IntoIterator>::Item>::new() on:click=move |$e:tt| match $s:ident { $($arm:tt)* }/>) =>:
+    (<ql items=(Vec::<<$t:ty as IntoIterator>::Item>::new()) on:click=move |$e:tt| match $s:ident { $($arm:tt)* }/>) =>:
         {
             let _ = Vec::<<$t as IntoIterator>::Item>::new();
             let handler = move |$e: u8| match $s { $($arm)* };
             let _ = handler(1);
             "ql"
         }
-    (<gt class:big=move || $n:ident > 5 on:click=move |$e:tt| match $s:ident { $($arm:tt)* }></gt>) =>:
+    (<gt class:big={move || $n:ident > 5} on:click=move |$e:tt| match $s:ident { $($arm:tt)* }></gt>) =>:
         {
             let class = move || $n > 5;
             let handler = move |$e: u8| match $s { $($arm)* };
             let _ = (class(), handler(1));
             "gt"
         }
-    (<ge class:big=move || $n:ident >= 5 on:click=move |$e:tt| match $s:ident { $($arm:tt)* }></ge>) =>:
+    (<ge class:big={move || $n:ident >= 5} on:click=move |$e:tt| match $s:ident { $($arm:tt)* }></ge>) =>:
         {
             let class = move || $n >= 5;
             let handler = move |$e: u8| match $s { $($arm)* };
             let _ = (class(), handler(1));
             "ge"
         }
-    (<sh class:big=move || $n:ident >> 2 == 0 on:click=move |$e:tt| match $s:ident { $($arm:tt)* }></sh>) =>:
+    (<sh class:big={move || $n:ident >> 2 == 0} on:click=move |$e:tt| match $s:ident { $($arm:tt)* }></sh>) =>:
         {
             let class = move || $n >> 2 == 0;
             let handler = move |$e: u8| match $s { $($arm)* };
@@ -215,14 +215,14 @@ macro_rules! view:
             let _ = (handler(1), $child);
             "ol"
         }
-    (<wg class:big=move || $n:ident >= 5 on:click=move |$e:tt| match $s:ident { $($arm:tt)* }> Count </wg>) =>:
+    (<wg class:big={move || $n:ident >= 5} on:click=move |$e:tt| match $s:ident { $($arm:tt)* }> Count </wg>) =>:
         {
             let class = move || $n >= 5;
             let handler = move |$e: u8| match $s { $($arm)* };
             let _ = (class(), handler(1));
             "wg"
         }
-    (<wt class:big=move || $n:ident > 5 on:click=move |$e:tt| match $s:ident { $($arm:tt)* }> Count </wt>) =>:
+    (<wt class:big={move || $n:ident > 5} on:click=move |$e:tt| match $s:ident { $($arm:tt)* }> Count </wt>) =>:
         {
             let class = move || $n > 5;
             let handler = move |$e: u8| match $s { $($arm)* };
@@ -290,10 +290,10 @@ pub fn setter(point: &Cell[Point]) -> &'static str:
 
 pub fn toggle(count: &Cell[u8]) -> &'static str:
     view! {
-        <i on:click=move |ev| if ev > 0 {
+        <i on:click=(move |ev| if ev > 0 {
             count.set(1)
             count.set(2)
-        }></i>
+        })></i>
     }
 
 pub fn sycamore() -> &'static str:
@@ -306,10 +306,10 @@ pub fn sycamore() -> &'static str:
 
 pub fn turbofish() -> &'static str:
     view! {
-        <g value=Pair::<u8> {
+        <g value=(Pair::<u8> {
             x: 1,
             y: 2,
-        } />
+        }) />
     }
 
 pub fn after_text() -> &'static str:
@@ -336,11 +336,11 @@ pub fn after_comment() -> &'static str:
 
 pub fn wrapped_condition(count: &Cell[u8], ok: bool) -> &'static str:
     view! {
-        <w on:click=move |ev| if ev > 0
+        <w on:click=(move |ev| if ev > 0
             && ok {
             count.set(1)
             count.set(2)
-        }></w>
+        })></w>
     }
 
 pub fn string_scrutinee() -> &'static str:
@@ -372,11 +372,11 @@ pub fn commented_literal() -> &'static str:
 
 pub fn trailing_operator(count: &Cell[u8], ok: bool) -> &'static str:
     view! {
-        <w on:click=move |ev| if ev > 0 &&
+        <w on:click=(move |ev| if ev > 0 &&
             ok {
             count.set(1)
             count.set(2)
-        }></w>
+        })></w>
     }
 
 pub fn wrapped_call(count: &Cell[u8]) -> &'static str:
@@ -424,12 +424,12 @@ pub fn let_pattern_statements(point: Point) -> &'static str:
 
 pub fn wrapped_condition_brace(count: &Cell[u8], ok: bool) -> &'static str:
     view! {
-        <w on:click=move |ev| if ev > 0
+        <w on:click=(move |ev| if ev > 0
             && ok
         {
             count.set(1)
             count.set(2)
-        }></w>
+        })></w>
     }
 
 pub fn wrapped_let(value: Option[u8]) -> &'static str:
@@ -445,11 +445,11 @@ pub fn wrapped_let(value: Option[u8]) -> &'static str:
 
 pub fn wrapped_comparison(count: &Cell[u8]) -> &'static str:
     view! {
-        <i on:click=move |ev| if ev >
+        <i on:click=(move |ev| if ev >
             0 {
             count.set(1)
             count.set(2)
-        }></i>
+        })></i>
     }
 
 pub fn for_pattern(points: Vec[Point]) -> &'static str:
@@ -484,62 +484,62 @@ pub fn keyword_text() -> &'static str:
 
 pub fn higher_ranked() -> &'static str:
     view! {
-        <h on:click=move |ev: Box<dyn for<'a> Fn(&'a u8)>| {
+        <h on:click=(move |ev: Box<dyn for<'a> Fn(&'a u8)>| {
             let a = 1
             ev(&a)
-        }></h>
+        })></h>
     }
 
 pub fn nested_turbofish(pair: Pair[Vec[u8]]) -> &'static str:
     view! {
-        <u class=move || if let Pair::<Vec<u8>> { x, .. } = pair {
+        <u class=(move || if let Pair::<Vec<u8>> { x, .. } = pair {
             let n = x.len()
             n
         } else {
             0
-        }></u>
+        })></u>
     }
 
 pub fn turbofish_list(result: Result[Vec[u8], ()]) -> &'static str:
     view! {
-        <u class=move || if let Ok::<Vec<u8>, ()>(v) = result {
+        <u class=(move || if let Ok::<Vec<u8>, ()>(v) = result {
             let n = v.len()
             n
         } else {
             0
-        }></u>
+        })></u>
     }
 
 pub fn cast_scrutinee(n: u8) -> &'static str:
     view! {
-        <z class=match n as Same<u8> {
+        <z class=(match n as Same<u8> {
             0 => Point {
                 x: 1,
                 y: 2,
             },
             _ => Point { x: 0, y: 0 },
-        }></z>
+        })></z>
     }
 
 pub fn glued_comparison(a: &str) -> &'static str:
     view! {
-        <v class=match a>"x" {
+        <v class=(match a>"x" {
             true => {
                 let x = 1
                 x
             }
             false => 2,
-        }></v>
+        })></v>
     }
 
 pub fn qualified_path(n: u8) -> &'static str:
     view! {
-        <b class=move || if let <u8>::MAX = n {
+        <b class=(move || if let <u8>::MAX = n {
             let z = 1
             z
         } else {
             0
-        }></b>
+        })></b>
     }
 
 pub fn comparison_text() -> &'static str:
@@ -603,7 +603,7 @@ pub fn keyword_after_element() -> &'static str:
 
 pub fn const_turbofish_attribute(n: u8) -> &'static str:
     view! {
-        <cg cells=pick::<3, u8>(1) on:click=move |_| match n {
+        <cg cells=(pick::<3, u8>(1)) on:click=move |_| match n {
             1 => 2,
             _ => 3,
         }/>
@@ -611,10 +611,10 @@ pub fn const_turbofish_attribute(n: u8) -> &'static str:
 
 pub fn const_generic_parameter(n: u8) -> &'static str:
     view! {
-        <ar on:click=move |ev: Arr<3>| match n {
+        <ar on:click=(move |ev: Arr<3>| match n {
             1 => 2,
             _ => 3,
-        }></ar>
+        })></ar>
     }
 
 pub fn const_turbofish_condition(n: u8) -> &'static str:
@@ -631,7 +631,7 @@ pub fn const_turbofish_condition(n: u8) -> &'static str:
 
 pub fn qualified_turbofish_attribute(n: u8) -> &'static str:
     view! {
-        <ql items=Vec::<<Vec<u8> as IntoIterator>::Item>::new() on:click=move |_| match n {
+        <ql items=(Vec::<<Vec<u8> as IntoIterator>::Item>::new()) on:click=move |_| match n {
             1 => 2,
             _ => 3,
         }/>
@@ -639,7 +639,7 @@ pub fn qualified_turbofish_attribute(n: u8) -> &'static str:
 
 pub fn spaced_comparison_attribute(n: u8) -> &'static str:
     view! {
-        <gt class:big=move || n > 5 on:click=move |_| match n {
+        <gt class:big={move || n > 5} on:click=move |_| match n {
             1 => 2,
             _ => 3,
         }></gt>
@@ -647,7 +647,7 @@ pub fn spaced_comparison_attribute(n: u8) -> &'static str:
 
 pub fn spaced_greater_equal_attribute(n: u8) -> &'static str:
     view! {
-        <ge class:big=move || n >= 5 on:click=move |_| match n {
+        <ge class:big={move || n >= 5} on:click=move |_| match n {
             1 => 2,
             _ => 3,
         }></ge>
@@ -655,7 +655,7 @@ pub fn spaced_greater_equal_attribute(n: u8) -> &'static str:
 
 pub fn spaced_shift_attribute(n: u8) -> &'static str:
     view! {
-        <sh class:big=move || n >> 2 == 0 on:click=move |_| match n {
+        <sh class:big={move || n >> 2 == 0} on:click=move |_| match n {
             1 => 2,
             _ => 3,
         }></sh>
@@ -687,8 +687,8 @@ pub fn own_line_tag_end_after_closure() -> &'static str:
 pub fn wrapped_greater_equal_attribute(n: u8) -> &'static str:
     view! {
         <wg
-            class:big=move || n
-                >= 5
+            class:big={move || n
+                >= 5}
             on:click=move |_| match n {
                 1 => 2,
                 _ => 3,
@@ -701,8 +701,8 @@ pub fn wrapped_greater_equal_attribute(n: u8) -> &'static str:
 pub fn wrapped_greater_attribute(n: u8) -> &'static str:
     view! {
         <wt
-            class:big=move || n
-                > 5
+            class:big={move || n
+                > 5}
             on:click=move |_| match n {
                 1 => 2,
                 _ => 3,
