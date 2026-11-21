@@ -241,6 +241,87 @@ fn a_rust_analyzer_that_exits_at_once_starts_at_most_once_per_ten_seconds() {
 
 #[cfg(target_os = "linux")]
 #[test]
+fn a_rust_analyzer_that_never_answers_initialize_is_stopped_after_one_wait() {
+    let dir = temp_dir("lsp-script-silent");
+    let script = dir.join("tool.rk");
+    fs::write(&script, SCRIPT).unwrap();
+    let uri = format!("file://{}", script.display());
+    // Each start adds a line to `starts`, and the process reads its input but never answers.
+    let silent = "#!/bin/sh\necho >> \"$RENK_TEST_DIR/starts\"\nwhile read -r line; do :; done\n";
+    let (mut server, mut stdin, received) = start(&dir, silent);
+    let started = Instant::now();
+    send(
+        &mut stdin,
+        json!({"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {
+            "textDocument": {"uri": uri, "languageId": "renk", "version": 1, "text": SCRIPT},
+        }}),
+    );
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let silent = loop {
+        if let Some(&silent) = rust_analyzer_children(server.id()).first() {
+            break silent;
+        }
+        assert!(Instant::now() < deadline, "rust-analyzer did not start");
+        thread::sleep(Duration::from_millis(20));
+    };
+    // renk-lsp publishes the opened document's diagnostics once it stops waiting for `initialize`.
+    while received.recv_timeout(Duration::from_secs(30)).unwrap()["method"]
+        != "textDocument/publishDiagnostics"
+    {}
+
+    // Each hover waits five seconds if renk-lsp still asks the silent rust-analyzer.
+    let asked = Instant::now();
+    for id in 2..5 {
+        send(
+            &mut stdin,
+            json!({"jsonrpc": "2.0", "id": id, "method": "textDocument/hover", "params": {
+                "textDocument": {"uri": uri},
+                "position": {"line": 5, "character": 15},
+            }}),
+        );
+        response(&received, id);
+    }
+    let hovers = asked.elapsed();
+    let running = rust_analyzer_children(server.id());
+
+    for version in 2..=20 {
+        send(
+            &mut stdin,
+            json!({"jsonrpc": "2.0", "method": "textDocument/didChange", "params": {
+                "textDocument": {"uri": uri, "version": version},
+                "contentChanges": [{"text": SCRIPT}],
+            }}),
+        );
+    }
+    let mut published = 0;
+    while published < 19 {
+        let message = received.recv_timeout(Duration::from_secs(30)).unwrap();
+        if message["method"] == "textDocument/publishDiagnostics" {
+            published += 1;
+        }
+    }
+    let starts = fs::read_to_string(dir.join("starts"))
+        .unwrap_or_default()
+        .lines()
+        .count() as u64;
+    let elapsed = started.elapsed();
+    let _ = server.kill();
+    let _ = server.wait();
+    let _ = fs::remove_dir_all(&dir);
+    assert!(
+        hovers < Duration::from_secs(5),
+        "three hovers took {hovers:?}"
+    );
+    assert!(!running.contains(&silent), "{silent} still runs");
+    // One start for the open, and at most one more for each ten seconds since.
+    assert!(
+        (1..=1 + elapsed.as_secs() / 10).contains(&starts),
+        "{starts} starts in {elapsed:?}"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn a_script_that_becomes_a_module_leaves_its_own_rust_analyzer() {
     if rust_analyzer().is_none() {
         return;
