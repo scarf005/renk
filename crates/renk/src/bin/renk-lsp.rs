@@ -7,6 +7,7 @@ use std::{
         Arc, Weak,
         atomic::{AtomicU64, Ordering},
     },
+    time::{Duration, Instant},
 };
 
 use similar::{Algorithm, DiffOp, DiffTag, capture_diff_slices};
@@ -55,8 +56,9 @@ struct Backend {
     documents: Arc<RwLock<HashMap<Url, String>>>,
     /// The latest cargo check diagnostics rust-analyzer published of each Renk document's generated
     /// Rust, which map to the document's text when published: rust-analyzer does not publish
-    /// diagnostics again that did not change.
-    rust_diagnostics: Arc<RwLock<HashMap<Url, PublishDiagnosticsParams>>>,
+    /// diagnostics again that did not change. Each comes with the rust-analyzer that published it.
+    rust_diagnostics:
+        Arc<RwLock<HashMap<Url, (Weak<RustAnalyzerClient>, PublishDiagnosticsParams)>>>,
     /// rust-analyzer's own diagnostics of each Renk document's generated Rust, from the latest pull
     /// that answered, and the number of the latest pull sent: only its answer counts.
     pulled_diagnostics: Arc<RwLock<HashMap<Url, (u64, PublishDiagnosticsParams)>>>,
@@ -651,8 +653,36 @@ impl Backend {
         self.rust_diagnostics
             .write()
             .await
-            .insert(uri.clone(), params);
+            .insert(uri.clone(), (rust_analyzer.clone(), params));
         self.publish_diagnostics(uri).await;
+    }
+
+    /// Stops a rust-analyzer whose output ended, and takes back the diagnostics it gave, so the
+    /// editor shows only Renk's own until a new rust-analyzer answers.
+    async fn rust_analyzer_ended(&self, rust_analyzer: &Weak<RustAnalyzerClient>) {
+        // A rust-analyzer that renk-lsp dropped was stopped on purpose.
+        if let Some(ended) = rust_analyzer.upgrade() {
+            let _ = ended.child.lock().await.kill().await;
+            self.client
+                .log_message(MessageType::WARNING, "rust-analyzer exited")
+                .await;
+        }
+        let _sync = self.sync.lock().await;
+        let mut cleared = (self.opened.read().await.iter())
+            .filter(|(_, (open_in, _))| Arc::as_ptr(open_in) == rust_analyzer.as_ptr())
+            .map(|(uri, _)| uri.clone())
+            .collect::<HashSet<_>>();
+        (self.pulled_diagnostics.write().await).retain(|uri, _| !cleared.contains(uri));
+        (self.rust_diagnostics.write().await).retain(|uri, (from, _)| {
+            let ours = from.ptr_eq(rust_analyzer);
+            if ours {
+                cleared.insert(uri.clone());
+            }
+            !ours
+        });
+        for uri in cleared {
+            self.publish_diagnostics(uri).await;
+        }
     }
 
     /// Asks the rust-analyzer of an open document for its generated Rust's diagnostics, and
@@ -723,7 +753,8 @@ impl Backend {
 
     /// Starts the rust-analyzer for a document: one over the generated workspace mirror, or for a
     /// script, one linked to its generated cargo-script file, which rust-analyzer resolves the
-    /// frontmatter dependencies of.
+    /// frontmatter dependencies of. A new one replaces one that [`RustAnalyzerClient::restarts`],
+    /// and gets every document that was open in it.
     async fn ensure_rust_analyzer(&self, uri: &Url, text: &str) -> Option<Arc<RustAnalyzerClient>> {
         let script = is_script(uri, text);
         let workspace = self.rust_analyzer.read().await.as_ref().cloned();
@@ -739,8 +770,10 @@ impl Backend {
         } else {
             workspace
         };
-        if existing.is_some() {
-            return existing;
+        if let Some(existing) = &existing
+            && !existing.restarts().await
+        {
+            return Some(existing.clone());
         }
 
         let mut params = self.initialize_params.read().await.as_ref().cloned()?;
@@ -763,12 +796,14 @@ impl Backend {
                 let rust_analyzer = Arc::new(rust_analyzer);
                 let backend = self.clone();
                 let notified = Arc::downgrade(&rust_analyzer);
+                // The notifications end with rust-analyzer's output.
                 tokio::spawn(async move {
                     while let Some(notification) = received.recv().await {
                         backend
                             .rust_analyzer_notification(&notified, notification)
                             .await;
                     }
+                    backend.rust_analyzer_ended(&notified).await;
                 });
                 rust_analyzer
                     .notify("initialized", InitializedParams {})
@@ -778,6 +813,9 @@ impl Backend {
                         .write()
                         .await
                         .replace(rust_analyzer.clone());
+                }
+                if let Some(ended) = existing {
+                    self.reopen(&ended, &rust_analyzer).await;
                 }
                 Some(rust_analyzer)
             }
@@ -847,22 +885,38 @@ impl Backend {
                 if let Some((previous, previous_uri)) = previous {
                     close_in(&previous, previous_uri).await;
                 }
-                rust_analyzer
-                    .notify(
-                        "textDocument/didOpen",
-                        DidOpenTextDocumentParams {
-                            text_document: TextDocumentItem {
-                                uri: rust_uri,
-                                language_id: "rust".to_string(),
-                                version,
-                                text: rust,
-                            },
-                        },
-                    )
-                    .await;
+                open_in(&rust_analyzer, rust_uri, version, rust).await;
             }
         }
         self.pull_diagnostics(uri.clone()).await;
+    }
+
+    /// Opens every document open in `ended` in `rust_analyzer` instead, with its current generated
+    /// Rust, and pulls its diagnostics.
+    async fn reopen(
+        &self,
+        ended: &Arc<RustAnalyzerClient>,
+        rust_analyzer: &Arc<RustAnalyzerClient>,
+    ) {
+        let documents = (self.opened.read().await.iter())
+            .filter(|(_, (open_in, _))| Arc::ptr_eq(open_in, ended))
+            .map(|(uri, (_, rust_uri))| (uri.clone(), rust_uri.clone()))
+            .collect::<Vec<_>>();
+        for (uri, rust_uri) in documents {
+            let text = self.documents.read().await.get(&uri).cloned();
+            let Some(Ok(generated)) = text.map(|text| generated(&uri, &text)) else {
+                continue;
+            };
+            self.opened
+                .write()
+                .await
+                .insert(uri.clone(), (rust_analyzer.clone(), rust_uri.clone()));
+            // The editor's version is not kept, and any later one is above 0.
+            open_in(rust_analyzer, rust_uri, 0, generated.rust).await;
+            // `ended` may not have taken back its diagnostics yet.
+            self.pulled_diagnostics.write().await.remove(&uri);
+            self.pull_diagnostics(uri).await;
+        }
     }
 
     async fn close_rust_document(&self, uri: &Url) {
@@ -911,7 +965,8 @@ impl Backend {
         };
         let diagnostics = match generated(&uri, &text) {
             Ok(_) => {
-                let checked = self.rust_diagnostics.read().await.get(&uri).cloned();
+                let checked = (self.rust_diagnostics.read().await.get(&uri))
+                    .map(|(_, params)| params.clone());
                 let pulled = (self.pulled_diagnostics.read().await.get(&uri))
                     .map(|(_, params)| params.clone());
                 let mut diagnostics = Vec::new();
@@ -945,11 +1000,24 @@ struct RustAnalyzerClient {
     /// Where the responses to our requests go, until rust-analyzer's output ends.
     pending: Arc<Mutex<Option<HashMap<u64, oneshot::Sender<serde_json::Value>>>>>,
     next_id: AtomicU64,
-    _child: Arc<Mutex<tokio::process::Child>>,
+    child: Arc<Mutex<tokio::process::Child>>,
+    started: Instant,
 }
 
+/// renk-lsp starts a rust-analyzer whose output ended again only when a document opens or
+/// changes, and not sooner than this after that rust-analyzer started.
+const RESTART_INTERVAL: Duration = Duration::from_secs(10);
+
 impl RustAnalyzerClient {
-    /// Starts rust-analyzer, which sends its notifications to `notifications`.
+    /// Whether a new rust-analyzer replaces this one: its output ended, and it started at least
+    /// [`RESTART_INTERVAL`] ago.
+    async fn restarts(&self) -> bool {
+        self.pending.lock().await.is_none() && self.started.elapsed() >= RESTART_INTERVAL
+    }
+
+    /// Starts rust-analyzer, which sends its notifications to `notifications`. A rust-analyzer
+    /// that does not answer `initialize` is kept too, so that [`Self::restarts`] holds back the
+    /// next start.
     async fn spawn(
         params: InitializeParams,
         notifications: mpsc::UnboundedSender<serde_json::Value>,
@@ -998,18 +1066,11 @@ impl RustAnalyzerClient {
             sender,
             pending,
             next_id: AtomicU64::new(1),
-            _child: Arc::new(Mutex::new(child)),
+            child: Arc::new(Mutex::new(child)),
+            started: Instant::now(),
         };
         let initialize = rust_initialize_request(&params);
-        client
-            .request("initialize", initialize)
-            .await
-            .ok_or_else(|| {
-                std::io::Error::new(
-                    std::io::ErrorKind::TimedOut,
-                    "rust-analyzer did not initialize",
-                )
-            })?;
+        client.request("initialize", initialize).await;
         Ok(client)
     }
 
@@ -1071,6 +1132,22 @@ impl RustAnalyzerClient {
 /// ServerCancelled error unless its data says not to.
 fn retriggers(response: &serde_json::Value) -> bool {
     response["error"]["code"] == -32802 && response["error"]["data"]["retriggerRequest"] != false
+}
+
+async fn open_in(rust_analyzer: &RustAnalyzerClient, rust_uri: Url, version: i32, rust: String) {
+    rust_analyzer
+        .notify(
+            "textDocument/didOpen",
+            DidOpenTextDocumentParams {
+                text_document: TextDocumentItem {
+                    uri: rust_uri,
+                    language_id: "rust".to_string(),
+                    version,
+                    text: rust,
+                },
+            },
+        )
+        .await;
 }
 
 async fn close_in(rust_analyzer: &RustAnalyzerClient, rust_uri: Url) {
@@ -2875,9 +2952,70 @@ mod tests {
             sender,
             pending: Arc::new(Mutex::new(Some(HashMap::new()))),
             next_id: AtomicU64::new(1),
-            _child: Arc::new(Mutex::new(child)),
+            child: Arc::new(Mutex::new(child)),
+            started: Instant::now(),
         };
         (Arc::new(client), sent)
+    }
+
+    #[tokio::test]
+    async fn rust_analyzers_restart_once_their_output_ended_and_the_interval_passed() {
+        let (live, _sent) = rust_analyzer_client();
+        let mut live = Arc::into_inner(live).unwrap();
+        live.started -= RESTART_INTERVAL;
+        assert!(!live.restarts().await);
+
+        let (ended, _sent) = rust_analyzer_client();
+        let mut ended = Arc::into_inner(ended).unwrap();
+        ended.pending.lock().await.take();
+        // Started one second short of the interval: not yet.
+        ended.started -= RESTART_INTERVAL - Duration::from_secs(1);
+        assert!(!ended.restarts().await);
+        ended.started -= Duration::from_secs(1);
+        assert!(ended.restarts().await);
+    }
+
+    #[tokio::test]
+    async fn an_ended_rust_analyzer_takes_back_only_its_own_diagnostics() {
+        let (service, _socket) = LspService::new(Backend::new);
+        let backend = service.inner();
+        let (ended, _ended_sent) = rust_analyzer_client();
+        let (other, _other_sent) = rust_analyzer_client();
+        let (ours, unopened, theirs) = (
+            module_uri("src/ours.rk"),
+            module_uri("src/unopened.rk"),
+            module_uri("src/theirs.rk"),
+        );
+        let params = |path| PublishDiagnosticsParams::new(module_uri(path), Vec::new(), None);
+        backend.opened.write().await.extend([
+            (ours.clone(), (ended.clone(), module_uri("target/ours.rs"))),
+            (
+                theirs.clone(),
+                (other.clone(), module_uri("target/theirs.rs")),
+            ),
+        ]);
+        backend.pulled_diagnostics.write().await.extend([
+            (ours.clone(), (1, params("target/ours.rs"))),
+            (theirs.clone(), (2, params("target/theirs.rs"))),
+        ]);
+        // rust-analyzer also publishes the diagnostics of modules that are not open.
+        backend.rust_diagnostics.write().await.extend([
+            (ours, (Arc::downgrade(&ended), params("target/ours.rs"))),
+            (
+                unopened,
+                (Arc::downgrade(&ended), params("target/unopened.rs")),
+            ),
+            (
+                theirs.clone(),
+                (Arc::downgrade(&other), params("target/theirs.rs")),
+            ),
+        ]);
+
+        backend.rust_analyzer_ended(&Arc::downgrade(&ended)).await;
+        let pulled = backend.pulled_diagnostics.read().await;
+        assert_eq!(pulled.keys().collect::<Vec<_>>(), [&theirs]);
+        let pushed = backend.rust_diagnostics.read().await;
+        assert_eq!(pushed.keys().collect::<Vec<_>>(), [&theirs]);
     }
 
     #[tokio::test]

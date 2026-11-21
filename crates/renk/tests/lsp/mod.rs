@@ -40,9 +40,10 @@ pub fn rust_analyzer_children(pid: u32) -> Vec<u32> {
         .collect()
 }
 
-/// Kills the one rust-analyzer that the renk-lsp with `pid` runs, as a crash would.
+/// Kills the one rust-analyzer that the renk-lsp with `pid` runs, as a crash would, and returns
+/// its PID.
 #[cfg(target_os = "linux")]
-pub fn kill_rust_analyzer(pid: u32) {
+pub fn kill_rust_analyzer(pid: u32) -> u32 {
     let children = rust_analyzer_children(pid);
     assert_eq!(children.len(), 1, "{children:?}");
     let killed = std::process::Command::new("kill")
@@ -50,6 +51,7 @@ pub fn kill_rust_analyzer(pid: u32) {
         .status()
         .unwrap();
     assert!(killed.success());
+    children[0]
 }
 
 pub fn temp_dir(name: &str) -> PathBuf {

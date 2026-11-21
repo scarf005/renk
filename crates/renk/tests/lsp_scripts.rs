@@ -27,11 +27,7 @@ fn start(dir: &Path, rust_analyzer: &str) -> (Child, ChildStdin, Receiver<Value>
     let bin = dir.join("bin");
     fs::create_dir_all(&bin).unwrap();
     fs::write(bin.join("rust-analyzer"), rust_analyzer).unwrap();
-    fs::set_permissions(
-        bin.join("rust-analyzer"),
-        fs::Permissions::from_mode(0o755),
-    )
-    .unwrap();
+    fs::set_permissions(bin.join("rust-analyzer"), fs::Permissions::from_mode(0o755)).unwrap();
     let real = lsp::rust_analyzer().unwrap_or_default();
     let path = env::join_paths(
         std::iter::once(bin).chain(env::split_paths(&env::var_os("PATH").unwrap_or_default())),
@@ -118,11 +114,20 @@ fn hover_after_edits(name: &str, texts: &[&str], restart: bool) -> Option<Value>
     let column = "let name = String.from".len() - 2;
     let mut deadline = Instant::now() + Duration::from_secs(120);
     let mut id = 2;
-    let mut killed = false;
+    let mut killed: Option<u32> = None;
     let hover = loop {
-        if killed {
-            // renk-lsp starts rust-analyzer again for a change. Each id is above every version
-            // sent before, so it serves as the next version.
+        // renk-lsp starts rust-analyzer again for a change, so change until a new one runs.
+        // Further changes would cancel its work on a hover that renk-lsp stopped waiting for.
+        #[cfg(target_os = "linux")]
+        let restarting = killed.is_some_and(|killed| {
+            !rust_analyzer_children(server.id())
+                .iter()
+                .any(|&child| child != killed)
+        });
+        #[cfg(not(target_os = "linux"))]
+        let restarting = false;
+        if restarting {
+            // Each id is above every version sent before, so it serves as the next version.
             send(
                 &mut stdin,
                 json!({"jsonrpc": "2.0", "method": "textDocument/didChange", "params": {
@@ -140,10 +145,11 @@ fn hover_after_edits(name: &str, texts: &[&str], restart: bool) -> Option<Value>
         );
         let hover = response(&received, id);
         let found = hover["contents"].to_string().contains("fn from");
-        if found && restart && !killed {
+        if found && restart && killed.is_none() {
             #[cfg(target_os = "linux")]
-            lsp::kill_rust_analyzer(server.id());
-            killed = true;
+            {
+                killed = Some(lsp::kill_rust_analyzer(server.id()));
+            }
             deadline = Instant::now() + Duration::from_secs(120);
         } else if found || Instant::now() > deadline {
             break hover;

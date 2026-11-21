@@ -482,17 +482,24 @@ fn hover_works_again_after_an_edit_once_rust_analyzer_dies() {
     let hover = json!({"textDocument": {"uri": main}, "position": position(6, 13)});
     let from_rust_analyzer = |hover: &Value| hover["contents"].to_string().contains("i32");
     session.request_until("textDocument/hover", hover.clone(), from_rust_analyzer);
-    lsp::kill_rust_analyzer(session.server.id());
+    let killed = lsp::kill_rust_analyzer(session.server.id());
 
-    // renk-lsp starts rust-analyzer again for an edit, so edit until a new one answers.
+    // renk-lsp starts rust-analyzer again for an edit, so edit until a new one runs. Further
+    // edits would cancel its work on a hover that renk-lsp stopped waiting for.
     let deadline = Instant::now() + Duration::from_secs(120);
     for version in 2.. {
-        session.change("src/main.rk", version, MAIN);
+        let children = lsp::rust_analyzer_children(session.server.id());
+        if !children.iter().any(|&child| child != killed) {
+            session.change("src/main.rk", version, MAIN);
+        }
         let response = session.request("textDocument/hover", hover.clone());
         if from_rust_analyzer(&response) {
             break;
         }
-        assert!(Instant::now() < deadline, "no hover after the restart: {response}");
+        assert!(
+            Instant::now() < deadline,
+            "no hover after the restart: {response}"
+        );
         let _ = session.messages.recv_timeout(Duration::from_millis(500));
     }
 }
