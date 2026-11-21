@@ -216,22 +216,11 @@ fn long_view_bodies_of_nested_elements_convert_in_linear_time() {
 }
 
 #[test]
-fn long_view_bodies_of_closure_comparisons_convert_in_linear_time() {
-    let _serial = SERIAL.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    let tag = "<p class:big=move || n > 5>x</p>";
-    let (short, long) = (
-        fastest(|| convert_view_tags(tag, 50)),
-        fastest(|| convert_view_tags(tag, 200)),
-    );
-    // Four times the tags take about four times as long, not sixteen.
-    assert!(long < short * 8, "{short:?} {long:?}");
-}
-
-#[test]
 fn long_view_bodies_of_spaced_tag_ends_convert_in_linear_time() {
     let _serial = SERIAL.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    // Each spaced `>` looks ahead for a tag end, and the next `</b>` stops it.
-    let tag = "<b on:click=move |_| go() > Count </b>";
+    // Each tag ends at the spaced `>` after its closure value, and the text after it holds a
+    // bare `>`.
+    let tag = "<b on:click=move |_| go() > Count > more </b>";
     let (short, long) = (
         fastest(|| convert_view_tags(tag, 50)),
         fastest(|| convert_view_tags(tag, 200)),

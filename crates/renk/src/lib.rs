@@ -5367,13 +5367,14 @@ fn map_view_body(
     // of `if let`, `while let`, or `for` do not end it.
     let mut heads = vec![None::<&str>];
     // The depth of generic `<` in each open `(` or `[` while a head is set or in a tag, as in
-    // `Ok::<Vec<u8>,` or `|ev: Box<dyn Fn()>|`, so its `,` and `>` end no head or tag.
+    // `Ok::<Vec<u8>,` or `|ev: Box<dyn Fn()>|`, so its `,` and `>` end no head. Outside groups,
+    // only the generics of a tag name, as `<Comp<T>`, keep a `>` from ending the tag.
     let mut angles = vec![0usize];
     // Whether `index` is in a tag, as `<p class=x>`, or in the text after one, as `Find a match`
     // in `<p>Find a match</p>`; `None` before the first tag and in code without tags.
     let mut tag = None::<bool>;
-    // Whether the current tag has a closure value, as `move || n > 5` in `<p class:big=`.
-    let mut closure = false;
+    // The index of the `<` that starts the current tag.
+    let mut tag_start = 0usize;
     while index < chars.len() {
         let top = heads.len() - 1;
         if heads[top].is_none() && tag != Some(true) {
@@ -5487,63 +5488,6 @@ fn map_view_body(
                         || previous.is_none_or(|(c, _)| !is_ident_continue(c) && c != ':'))
             };
             let after_path = |i: usize| is_ident_continue(chars[i]) || chars[i] == ':';
-            // Whether a tag end, as `>` or `/>`, comes after `from` before the next tag start, as
-            // `<a` or `</a`, at the same bracket depth. The scan skips strings, comments, groups,
-            // and generics, as `same::<u8>(5)`, and stops at the first `>` or tag start.
-            let tag_end_follows = |from: usize| {
-                let mut groups = Vec::new();
-                let mut index = from;
-                while index < chars.len() {
-                    if let Some(end) = opaque_span_end(&chars, index) {
-                        index = end + 1;
-                        continue;
-                    }
-                    let next = chars.get(index + 1).copied();
-                    match chars[index] {
-                        '(' | '[' | '{' => groups.push(chars[index]),
-                        ')' | ']' | '}' => {
-                            while groups.last() == Some(&'<') {
-                                groups.pop();
-                            }
-                            if groups.pop().is_none() {
-                                return false;
-                            }
-                        }
-                        '<' if after_path(index - 1) && !matches!(next, Some('/' | '=')) => {
-                            groups.push('<')
-                        }
-                        '<' if groups.is_empty()
-                            && (next == Some('/')
-                                || next.is_some_and(|c| is_ident_start(c) || c == '>')) =>
-                        {
-                            return false;
-                        }
-                        '>' if !matches!(chars[index - 1], '-' | '=') => {
-                            if groups.last() == Some(&'<') {
-                                groups.pop();
-                            } else if groups.is_empty() {
-                                return true;
-                            }
-                        }
-                        _ => {}
-                    }
-                    index += 1;
-                }
-                false
-            };
-            // Whether the `>` at `at` is a comparison after a closure value. It needs a space
-            // before it and a space, `=`, or `>` after it, as `n > 5`, `n >= 5`, or `n >> 2`, also
-            // wrapped onto its own line, so `go() >Click` ends the tag. A tag end must also follow
-            // before the next tag start: `move || n > 5>x` and `move || n > 5 />` compare, but
-            // `move |_| go() > Count </b>` ends the tag at its `>`, and so does `go() > Count {`
-            // with `</b>` after the block.
-            let compares = || {
-                let from = at + 1 + usize::from(matches!(next, Some('=' | '>')));
-                closure
-                    && (chars[at - 1] == ' ' && matches!(next, Some(' ' | '=' | '>'))
-                        || chars[at - 2..at] == [' ', '>'] && next == Some(' '))
-                    && tag_end_follows(from)
-            };
             match chars[at] {
                 '<' if markup
                     && top == 0
@@ -5552,7 +5496,7 @@ fn map_view_body(
                     && starts_tag() =>
                 {
                     tag = Some(true);
-                    closure = false
+                    tag_start = at
                 }
                 '(' | '[' => {
                     heads.push(None);
@@ -5566,21 +5510,20 @@ fn map_view_body(
                 // `Vec::<<T as Tr>::X>`.
                 '<' if at > 0
                     && (after_path(at - 1) || at > 1 && chars[at - 1] == '<' && after_path(at - 2))
-                    && !matches!(next, Some('/' | '=')) =>
+                    && !matches!(next, Some('/' | '='))
+                    && (tag != Some(true)
+                        || top > 0
+                        || angles[top] > 0
+                        || (tag_start + 1..at).all(after_path)) =>
                 {
                     angles[top] += 1
                 }
                 '>' if angles[top] > 0 && !matches!(chars[at - 1], '-' | '=') => angles[top] -= 1,
-                '|' if tag == Some(true) && top == 0 => closure = true,
-                // A tag end, and not `a > b` in `if a > b`, a comparison in a closure value, or
-                // `->`.
-                '>' if tag == Some(true)
-                    && top == 0
-                    && heads[top].is_none()
-                    && !matches!(chars[at - 1], '-' | '=')
-                    && !compares() =>
-                {
-                    tag = Some(false)
+                // A tag end, as in Leptos: the first `>` outside groups, literals, and comments,
+                // also in `n > 5`, `->`, or `=>`. Text after it, as `> more`, may hold a `>`.
+                '>' if tag == Some(true) && top == 0 => {
+                    tag = Some(false);
+                    heads[top] = None
                 }
                 ',' if angles[top] > 0 => {}
                 ',' | ';' | ')' | ']' | '}' => heads[top] = None,
