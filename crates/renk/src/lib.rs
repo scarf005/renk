@@ -5373,8 +5373,9 @@ fn map_view_body(
     // Whether `index` is in a tag, as `<p class=x>`, or in the text after one, as `Find a match`
     // in `<p>Find a match</p>`; `None` before the first tag and in code without tags.
     let mut tag = None::<bool>;
-    // The index of the `<` that starts the current tag.
-    let mut tag_start = 0usize;
+    // The index just after the name of the current tag, as `Comp` in `<Comp<T>`, where a `<`
+    // opens the name's generics.
+    let mut name_end = 0usize;
     while index < chars.len() {
         let top = heads.len() - 1;
         if heads[top].is_none() && tag != Some(true) {
@@ -5496,7 +5497,9 @@ fn map_view_body(
                     && starts_tag() =>
                 {
                     tag = Some(true);
-                    tag_start = at
+                    name_end = (at + 1..chars.len())
+                        .find(|&i| !after_path(i))
+                        .unwrap_or(chars.len())
                 }
                 '(' | '[' => {
                     heads.push(None);
@@ -5511,17 +5514,15 @@ fn map_view_body(
                 '<' if at > 0
                     && (after_path(at - 1) || at > 1 && chars[at - 1] == '<' && after_path(at - 2))
                     && !matches!(next, Some('/' | '='))
-                    && (tag != Some(true)
-                        || top > 0
-                        || angles[top] > 0
-                        || (tag_start + 1..at).all(after_path)) =>
+                    && (tag != Some(true) || top > 0 || angles[top] > 0 || at == name_end) =>
                 {
                     angles[top] += 1
                 }
                 '>' if angles[top] > 0 && !matches!(chars[at - 1], '-' | '=') => angles[top] -= 1,
-                // A tag end, as in Leptos: the first `>` outside groups, literals, and comments,
-                // also in `n > 5`, `->`, or `=>`. Text after it, as `> more`, may hold a `>`.
-                '>' if tag == Some(true) && top == 0 => {
+                // A tag end, as in Leptos: the first `>` outside groups, literals, comments, and
+                // the tag name's generics, also in `n > 5`, `->`, or `=>`, but not in the `->` of
+                // `<Comp<F: Fn() -> u8>`. Text after it, as `> more`, may hold a `>`.
+                '>' if tag == Some(true) && top == 0 && angles[top] == 0 => {
                     tag = Some(false);
                     heads[top] = None
                 }
