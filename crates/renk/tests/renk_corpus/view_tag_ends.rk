@@ -124,8 +124,27 @@ macro_rules! view:
             let _ = (handler(1), $child);
             stringify!($tag)
         }
+    (<$tag:ident<$g:ident: Fn() -> u8> value=$head:ident { $($field:tt)* } />) =>:
+        {
+            let _ = $head { $($field)* };
+            stringify!($tag)
+        }
+    (<$tag:ident<$g:ident: Fn(u8) -> Vec<u8>> value=$head:ident { $($field:tt)* } />) =>:
+        {
+            let _ = $head { $($field)* };
+            stringify!($tag)
+        }
+    (<$tag:ident<$g:ident: Fn() -> u8> value=$head:ident { $($field:tt)* } > Count $child:block </$close:ident>) =>:
+        {
+            let _ = ($head { $($field)* }, $child);
+            stringify!($tag)
+        }
 #[allow(unused_imports)]
 pub(crate) use view
+
+pub struct Point:
+    pub x: u8
+    pub y: u8
 
 pub const COUNT: u8 = 5
 
@@ -363,4 +382,42 @@ pub fn generic_tag_name() -> &'static str:
             let z = 1
             z
         } > more </ac>
+    }
+
+pub fn arrow_in_tag_name_generics() -> &'static str:
+    view! {
+        <ad<F: Fn() -> u8> value=Point {
+            x: 1,
+            y: 2,
+        } />
+    }
+
+pub fn arrow_to_generic_in_tag_name_generics() -> &'static str:
+    view! {
+        <ae<F: Fn(u8) -> Vec<u8>> value=Point {
+            x: 1,
+            y: 2,
+        } />
+    }
+
+pub fn arrow_in_tag_name_generics_on_own_line() -> &'static str:
+    view! {
+        <af<F: Fn() -> u8>
+            value=Point {
+                x: 1,
+                y: 2,
+            }
+        />
+    }
+
+pub fn text_after_arrow_in_tag_name_generics() -> &'static str:
+    view! {
+        <ag<F: Fn() -> u8> value=Point {
+            x: 1,
+            y: 2,
+        } > Count {
+            let z = 1
+            z
+        }
+        </ag>
     }
