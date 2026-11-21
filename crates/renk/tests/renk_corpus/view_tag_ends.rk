@@ -1,5 +1,5 @@
-// A stand-in for `view!` macros that type-checks the closure values and child blocks of tags with
-// a spaced `>` after a closure value.
+// A stand-in for `view!` macros that type-checks the closure values and child blocks of tags that
+// end at the first `>` outside groups, literals, and comments.
 macro_rules! view:
     (<$tag:ident on:click=move |$e:tt| $f:ident() > Count $child:block </$close:ident>) =>:
         {
@@ -74,6 +74,54 @@ macro_rules! view:
             let class = move || $n > 5;
             let handler = move |$e: u8| match $s { $($arm)* };
             let _ = (class(), handler(1));
+            stringify!($tag)
+        }
+    (<$tag:ident on:click=move |$e:tt| $f:ident() > Count $child:block > more </$close:ident>) =>:
+        {
+            let handler = move |$e: u8| $f();
+            let _ = (handler(1), $child);
+            stringify!($tag)
+        }
+    (<$tag:ident on:click=move |$e:tt| $f:ident() > a > b $child:block > c </$close:ident>) =>:
+        {
+            let handler = move |$e: u8| $f();
+            let _ = (handler(1), $child);
+            stringify!($tag)
+        }
+    (<$tag:ident on:click=move |$e:tt| $f:ident() >= Count $child:block > more </$close:ident>) =>:
+        {
+            let handler = move |$e: u8| $f();
+            let _ = (handler(1), $child);
+            stringify!($tag)
+        }
+    (<$tag:ident on:click=move |$e:tt| $f:ident() >> Count $child:block > more </$close:ident>) =>:
+        {
+            let handler = move |$e: u8| $f();
+            let _ = (handler(1), $child);
+            stringify!($tag)
+        }
+    (<$tag:ident on:click=move |$e:tt| $f:ident() -> Count $child:block </$close:ident>) =>:
+        {
+            let handler = move |$e: u8| $f();
+            let _ = (handler(1), $child);
+            stringify!($tag)
+        }
+    (<$tag:ident on:click=move |$e:tt| $f:ident() => Count $child:block </$close:ident>) =>:
+        {
+            let handler = move |$e: u8| $f();
+            let _ = (handler(1), $child);
+            stringify!($tag)
+        }
+    (<$tag:ident title=$value:tt on:click=move |$e:tt| $f:ident() > Count $child:block > more </$close:ident>) =>:
+        {
+            let handler = move |$e: u8| $f();
+            let _ = ($value, handler(1), $child);
+            stringify!($tag)
+        }
+    (<$tag:ident<$ty:ty> on:click=move |$e:tt| $f:ident() > Count $child:block > more </$close:ident>) =>:
+        {
+            let handler = move |$e: $ty| $f();
+            let _ = (handler(1), $child);
             stringify!($tag)
         }
 #[allow(unused_imports)]
@@ -189,4 +237,130 @@ pub fn self_closing_comparison(n: u8) -> &'static str:
             1 => 2,
             _ => 3,
         }/>
+    }
+
+pub fn text_after_block() -> &'static str:
+    view! {
+        <m on:click=move |_| go() > Count {
+            let z = 1
+            z
+        } > more </m>
+    }
+
+pub fn own_line_text_after_block() -> &'static str:
+    view! {
+        <o on:click=move |_| go()
+            > Count {
+                let z = 1
+                z
+            }
+            > more
+        </o>
+    }
+
+pub fn bare_greater_text() -> &'static str:
+    view! {
+        <q on:click=move |_| go() > a > b {
+            let z = 1
+            z
+        } > c </q>
+    }
+
+pub fn greater_equal_tag_end() -> &'static str:
+    view! {
+        <r on:click=move |_| go() >= Count {
+            let z = 1
+            z
+        } > more </r>
+    }
+
+pub fn shift_tag_end() -> &'static str:
+    view! {
+        <s on:click=move |_| go() >> Count {
+            let z = 1
+            z
+        } > more </s>
+    }
+
+pub fn arrow_tag_end() -> &'static str:
+    view! {
+        <t on:click=move |_| go() -> Count {
+            let z = 1
+            z
+        }
+        </t>
+    }
+
+pub fn fat_arrow_tag_end() -> &'static str:
+    view! {
+        <u on:click=move |_| go() => Count {
+            let z = 1
+            z
+        }
+        </u>
+    }
+
+pub fn greater_in_parentheses(n: u8) -> &'static str:
+    view! {
+        <v title=(n > 5) on:click=move |_| go() > Count {
+            let z = 1
+            z
+        } > more </v>
+    }
+
+pub fn greater_in_brackets(n: u8) -> &'static str:
+    view! {
+        <w title=[n > 5] on:click=move |_| go() > Count {
+            let z = 1
+            z
+        } > more </w>
+    }
+
+pub fn greater_in_braces(n: u8) -> &'static str:
+    view! {
+        <x title={n > 5} on:click=move |_| go() > Count {
+            let z = 1
+            z
+        } > more </x>
+    }
+
+pub fn greater_in_string() -> &'static str:
+    view! {
+        <y title=">" on:click=move |_| go() > Count {
+            let z = 1
+            z
+        } > more </y>
+    }
+
+pub fn greater_in_char() -> &'static str:
+    view! {
+        <z title='>' on:click=move |_| go() > Count {
+            let z = 1
+            z
+        } > more </z>
+    }
+
+pub fn greater_in_line_comment() -> &'static str:
+    view! {
+        <aa title="a" // >
+            on:click=move |_| go() > Count {
+                let z = 1
+                z
+            } > more </aa>
+    }
+
+pub fn greater_in_block_comment() -> &'static str:
+    view! {
+        <ab title="a" /* > */ on:click=move |_| go() > Count {
+            let z = 1
+            z
+        } > more </ab>
+    }
+
+pub fn generic_tag_name() -> &'static str:
+    view! {
+        <ac<u8> on:click=move |_| go() > Count {
+            let z = 1
+            z
+        } > more </ac>
     }
