@@ -472,6 +472,47 @@ fn code_actions_edit_a_scripts_top_level_lines() {
     );
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn hover_works_again_after_an_edit_once_rust_analyzer_dies() {
+    let Some(mut session) = Session::open("lsp-restart", MAIN) else {
+        return;
+    };
+    let main = session.uri("src/main.rk");
+    let hover = json!({"textDocument": {"uri": main}, "position": position(6, 13)});
+    let from_rust_analyzer = |hover: &Value| hover["contents"].to_string().contains("i32");
+    session.request_until("textDocument/hover", hover.clone(), from_rust_analyzer);
+    lsp::kill_rust_analyzer(session.server.id());
+
+    // renk-lsp starts rust-analyzer again for an edit, so edit until a new one answers.
+    let deadline = Instant::now() + Duration::from_secs(120);
+    for version in 2.. {
+        session.change("src/main.rk", version, MAIN);
+        let response = session.request("textDocument/hover", hover.clone());
+        if from_rust_analyzer(&response) {
+            break;
+        }
+        assert!(Instant::now() < deadline, "no hover after the restart: {response}");
+        let _ = session.messages.recv_timeout(Duration::from_millis(500));
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn rust_analyzer_diagnostics_go_when_rust_analyzer_dies() {
+    let main = format!("{MAIN}    let wrong: u8 = \"text\"\n");
+    let Some(mut session) = Session::open("lsp-dead-diagnostics", &main) else {
+        return;
+    };
+    let uri = session.uri("src/main.rk");
+    session.diagnostics_until(&uri, |diagnostics| {
+        diagnostics.iter().any(|d| d["source"] == "rust-analyzer")
+    });
+    lsp::kill_rust_analyzer(session.server.id());
+    // No edit follows, so only the end of rust-analyzer's output can take its diagnostics back.
+    session.diagnostics_until(&uri, <[Value]>::is_empty);
+}
+
 #[test]
 fn rust_analyzer_diagnostics_go_while_the_renk_text_does_not_transpile() {
     let main = format!("{MAIN}    let wrong: u8 = \"text\"\n");

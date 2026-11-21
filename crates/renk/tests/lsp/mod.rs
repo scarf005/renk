@@ -23,6 +23,35 @@ pub fn rust_analyzer() -> Option<PathBuf> {
     found
 }
 
+/// The live rust-analyzer processes that the renk-lsp with `pid` has started.
+#[cfg(target_os = "linux")]
+pub fn rust_analyzer_children(pid: u32) -> Vec<u32> {
+    let children = fs::read_dir(format!("/proc/{pid}/task"))
+        .unwrap()
+        .flat_map(|task| fs::read_to_string(task.unwrap().path().join("children")))
+        .collect::<String>();
+    children
+        .split_whitespace()
+        .filter(|child| {
+            let stat = fs::read_to_string(format!("/proc/{child}/stat")).unwrap_or_default();
+            stat.contains("(rust-analyzer)") && !stat.contains(") Z ")
+        })
+        .filter_map(|child| child.parse().ok())
+        .collect()
+}
+
+/// Kills the one rust-analyzer that the renk-lsp with `pid` runs, as a crash would.
+#[cfg(target_os = "linux")]
+pub fn kill_rust_analyzer(pid: u32) {
+    let children = rust_analyzer_children(pid);
+    assert_eq!(children.len(), 1, "{children:?}");
+    let killed = std::process::Command::new("kill")
+        .args(["-KILL", &children[0].to_string()])
+        .status()
+        .unwrap();
+    assert!(killed.success());
+}
+
 pub fn temp_dir(name: &str) -> PathBuf {
     let path = env::temp_dir().join(format!("renk-{name}-{}", std::process::id()));
     let _ = fs::remove_dir_all(&path);
