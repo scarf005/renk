@@ -1015,9 +1015,16 @@ impl RustAnalyzerClient {
         self.pending.lock().await.is_none() && self.started.elapsed() >= RESTART_INTERVAL
     }
 
+    /// Stops rust-analyzer as if its output ended: its pending requests fail, and nothing more is
+    /// sent to it.
+    async fn end(&self) {
+        self.pending.lock().await.take();
+        let _ = self.child.lock().await.kill().await;
+    }
+
     /// Starts rust-analyzer, which sends its notifications to `notifications`. A rust-analyzer
-    /// that does not answer `initialize` is kept too, so that [`Self::restarts`] holds back the
-    /// next start.
+    /// that does not answer `initialize` within the request timeout is stopped, and kept, so that
+    /// [`Self::restarts`] holds back the next start.
     async fn spawn(
         params: InitializeParams,
         notifications: mpsc::UnboundedSender<serde_json::Value>,
@@ -1070,7 +1077,9 @@ impl RustAnalyzerClient {
             started: Instant::now(),
         };
         let initialize = rust_initialize_request(&params);
-        client.request("initialize", initialize).await;
+        if client.request("initialize", initialize).await.is_none() {
+            client.end().await;
+        }
         Ok(client)
     }
 
@@ -1078,6 +1087,9 @@ impl RustAnalyzerClient {
         let Ok(params) = serde_json::to_value(params) else {
             return;
         };
+        if self.pending.lock().await.is_none() {
+            return;
+        }
         let _ = self.sender.send(serde_json::json!({
             "jsonrpc": "2.0",
             "method": method,
@@ -3039,6 +3051,22 @@ mod tests {
         let response = tokio::time::timeout(std::time::Duration::from_secs(5), response).await;
         assert!(matches!(response, Ok(Err(_))), "{response:?}");
         assert!(rust_analyzer.send_request("hover", ()).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_stopped_rust_analyzer_fails_its_pulls_and_gets_nothing_more() {
+        let (rust_analyzer, mut sent) = rust_analyzer_client();
+        let pull = rust_analyzer.send_request("textDocument/diagnostic", ());
+        let pull = pull.await.unwrap();
+        sent.try_recv().unwrap();
+        rust_analyzer.end().await;
+
+        // The pull task, which waits on the answer to `pull`, ends.
+        let pull = tokio::time::timeout(Duration::from_secs(5), pull).await;
+        assert!(matches!(pull, Ok(Err(_))), "{pull:?}");
+        assert!(rust_analyzer.send_request("hover", ()).await.is_none());
+        rust_analyzer.notify("textDocument/didChange", ()).await;
+        assert!(sent.try_recv().is_err());
     }
 
     #[tokio::test]
