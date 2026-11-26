@@ -3552,6 +3552,7 @@ mod tests {
             next_id: AtomicU64::new(1),
             child: Arc::new(Mutex::new(child)),
             started: Instant::now(),
+            legend: SemanticTokensLegend::default(),
         };
         (Arc::new(client), sent)
     }
