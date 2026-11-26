@@ -663,10 +663,8 @@ fn hovers_come_from_rust_analyzer_when_the_editor_opens_a_member_directory() {
 
 #[test]
 fn hovers_come_from_rust_analyzer_through_a_path_dependency_outside_the_workspace() {
-    let app = "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\nshared = { path = \"../shared\" }\n";
-    let mut files = WORKSPACE;
-    files[1] = ("app/Cargo.toml", app);
-    let Some(mut session) = Session::start("lsp-outside", &files[1..], &["app"], "app/src/main.rk")
+    let files = app_and_shared();
+    let Some(mut session) = Session::start("lsp-outside", &files, &["app"], "app/src/main.rk")
     else {
         return;
     };
@@ -675,4 +673,54 @@ fn hovers_come_from_rust_analyzer_through_a_path_dependency_outside_the_workspac
         hover["contents"].to_string().contains("fn helper"),
         "{hover}"
     );
+}
+
+/// The package `app`, with a path dependency on the package `shared` beside it.
+fn app_and_shared() -> [(&'static str, &'static str); 4] {
+    let app = "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\nshared = { path = \"../shared\" }\n";
+    let [_, _, main, shared, lib] = WORKSPACE;
+    [("app/Cargo.toml", app), main, shared, lib]
+}
+
+#[test]
+fn hovers_come_from_rust_analyzer_in_the_second_workspace_folder() {
+    let files = app_and_shared();
+    let Some(mut session) =
+        Session::start("lsp-folders", &files, &["shared", "app"], "app/src/main.rk")
+    else {
+        return;
+    };
+    let hover = session.hover_helper("app/src/main.rk");
+    assert!(
+        hover["contents"].to_string().contains("fn helper"),
+        "{hover}"
+    );
+}
+
+#[test]
+fn hovers_come_from_rust_analyzer_without_a_workspace_folder() {
+    let files = app_and_shared();
+    let Some(mut session) = Session::start("lsp-no-folder", &files, &[], "app/src/main.rk") else {
+        return;
+    };
+    let hover = session.hover_helper("app/src/main.rk");
+    assert!(
+        hover["contents"].to_string().contains("fn helper"),
+        "{hover}"
+    );
+}
+
+#[test]
+fn shows_renk_syntax_errors_in_a_file_outside_every_package_without_a_workspace_folder() {
+    // A tab on line 1 is a Renk syntax error.
+    let files = [("loose.rk", "fn main():\n\tprintln!(\"hi\")\n")];
+    let Some(mut session) = Session::start("lsp-loose", &files, &[], "loose.rk") else {
+        return;
+    };
+    let uri = session.uri("loose.rk");
+    let found = session.diagnostics_until(&uri, |diagnostics| {
+        diagnostics.iter().any(|d| d["source"] == "renk")
+    });
+    let error = found.iter().find(|d| d["source"] == "renk");
+    assert_eq!(error.unwrap()["range"]["start"]["line"], 1, "{found:?}");
 }
