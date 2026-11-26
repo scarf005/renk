@@ -2,21 +2,24 @@
 
 ARG FEDORA_MINIMAL_IMAGE=registry.fedoraproject.org/fedora-minimal@sha256:ee37c006cc45336b22d0f939286ad06f0a98f9bdfcb7650be1470f2a50b8e1ca
 ARG RUSTUP_TOOLCHAIN=1.96.0
-ARG RUSTUP_INIT_SHA256=6c30b75a75b28a96fd913a037c8581b580080b6ee9b8169a3c0feb1af7fe8caf
+ARG RUSTUP_VERSION=1.29.3
+ARG RUSTUP_INIT_SHA256=b1c8cb14e30889e7e2999e6b69e62d9e9b9ffc0f4df8180564d306d9680e6c55
 ARG DENO_VERSION=2.9.8
 ARG DENO_SHA256=e890975bc2549807bbcc0b584ffafda72cc7c93349dd99c80483dd784f6c4609
 FROM ${FEDORA_MINIMAL_IMAGE} AS rust-base
 ARG RUSTUP_TOOLCHAIN
+ARG RUSTUP_VERSION
 ARG RUSTUP_INIT_SHA256
 ENV CARGO_HOME=/usr/local/cargo \
     RUSTUP_HOME=/usr/local/rustup \
     PATH=/usr/local/cargo/bin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 RUN microdnf --setopt=install_weak_deps=0 install -y ca-certificates curl gcc glibc-devel tini unzip \
     && microdnf clean all \
-    && curl -fsSL https://sh.rustup.rs -o /tmp/rustup-init.sh \
-    && echo "${RUSTUP_INIT_SHA256}  /tmp/rustup-init.sh" | sha256sum -c - \
-    && sh /tmp/rustup-init.sh -y --profile minimal --default-toolchain "${RUSTUP_TOOLCHAIN}" \
-    && rm /tmp/rustup-init.sh \
+    && curl -fsSL "https://static.rust-lang.org/rustup/archive/${RUSTUP_VERSION}/x86_64-unknown-linux-gnu/rustup-init" -o /tmp/rustup-init \
+    && echo "${RUSTUP_INIT_SHA256}  /tmp/rustup-init" | sha256sum -c - \
+    && chmod +x /tmp/rustup-init \
+    && /tmp/rustup-init -y --profile minimal --default-toolchain "${RUSTUP_TOOLCHAIN}" \
+    && rm /tmp/rustup-init \
     && rustup target add wasm32-unknown-unknown \
     && chmod -R a+rx /usr/local/cargo /usr/local/rustup
 
