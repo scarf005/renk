@@ -208,14 +208,11 @@ impl LanguageServer for Backend {
             Some(saved) => Some(saved),
             // The editor's rust-analyzer serves a Rust file, but the workspace check reads its copy.
             None if is_rust(&uri) => {
-                let lookup = uri.clone();
-                match blocking(move || mirrored_file(&lookup)).await.flatten() {
-                    Some((workspace, copy)) => {
-                        let found = self.workspaces.read().await.get(&workspace.root).cloned();
-                        found.zip(Url::from_file_path(copy).ok())
-                    }
-                    None => None,
-                }
+                let (lookup, workspaces) = (uri.clone(), self.workspaces.read().await.clone());
+                let found = blocking(move || mirrored_file(&lookup)).await.flatten();
+                found.and_then(|(workspace, copy)| {
+                    (workspaces.get(&workspace.root).cloned()).zip(Url::from_file_path(copy).ok())
+                })
             }
             None => None,
         };
@@ -1546,16 +1543,13 @@ fn mirror_manifest(workspace: &Workspace, dir: &Path) -> Option<PathBuf> {
             .filter(|package| **package != workspace.root)
             .filter_map(|package| {
                 let copy = mirror_path(&workspace.root, package);
-                Some(
-                    copy.strip_prefix(rust_root(dir))
-                        .ok()?
-                        .display()
-                        .to_string(),
-                )
+                let relative = copy.strip_prefix(rust_root(dir)).ok()?;
+                Some(relative.display().to_string())
             })
-            .collect::<toml_edit::Array>();
+            // In one order, so a refresh rewrites the manifest only when its packages change.
+            .collect::<BTreeSet<_>>();
         let table = manifest.entry("workspace").or_insert(toml_edit::table());
-        table["members"] = toml_edit::value(members);
+        table["members"] = toml_edit::value(members.into_iter().collect::<toml_edit::Array>());
     }
     let copy = mirror_path(&workspace.root, &dir.join("Cargo.toml"));
     write_if_changed(&copy, &manifest.to_string());
@@ -4387,11 +4381,8 @@ mod tests {
         let linked = mirror_path(&temp, &member.join("src/lib.rs"));
         assert!(fs::read_to_string(linked).unwrap().contains("fn linked()"));
         let copy = mirror_path(&temp, &member).display().to_string();
-        assert!(
-            mirrored("Cargo.toml").contains(&copy),
-            "{}",
-            mirrored("Cargo.toml")
-        );
+        let manifest = mirrored("Cargo.toml");
+        assert!(manifest.contains(&copy), "{manifest}");
         for skipped in ["src/cycle", "src/node_modules", "notes"] {
             assert!(!rust_root.join(skipped).exists(), "{skipped}");
         }
@@ -4474,11 +4465,12 @@ mod tests {
     fn mirror_manifests_list_every_package_and_point_path_dependencies_at_their_copies() {
         let temp = std::env::temp_dir().join(format!("renk-lsp-manifest-{}", std::process::id()));
         let _ = fs::remove_dir_all(&temp);
-        for package in ["a", "b", "old"] {
+        let dependency = "\n[dependencies]\nb = { path = \"../b\" } # local\n";
+        for (package, dependencies) in [("a", dependency), ("b", ""), ("old", "")] {
             fs::create_dir_all(temp.join("crates").join(package)).unwrap();
             fs::write(
                 temp.join("crates").join(package).join("Cargo.toml"),
-                format!("[package]\nname = \"{package}\"\n"),
+                format!("[package]\nname = \"{package}\"\n{dependencies}"),
             )
             .unwrap();
         }
@@ -4488,23 +4480,12 @@ mod tests {
             "[workspace]\nmembers = [\"crates/*\"]\nexclude = [\"crates/old\"]\n",
         )
         .unwrap();
-        fs::write(
-            temp.join("crates/a/Cargo.toml"),
-            "[package]\nname = \"a\"\n\n[dependencies]\nb = { path = \"../b\" } # local\n",
-        )
-        .unwrap();
         let workspace = project::workspace(&temp).unwrap();
 
         let root = fs::read_to_string(mirror_manifest(&workspace, &temp).unwrap()).unwrap();
-        let members = root.parse::<DocumentMut>().unwrap()["workspace"]["members"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|member| member.as_str().unwrap().to_string())
-            .collect::<HashSet<_>>();
-        assert_eq!(
-            members,
-            HashSet::from(["crates/a".into(), "crates/b".into()])
+        assert!(
+            root.contains("members = [\"crates/a\", \"crates/b\"]"),
+            "{root}"
         );
         let a = fs::read_to_string(mirror_manifest(&workspace, &temp.join("crates/a")).unwrap());
         let b = temp.join("target/renk/crates/b").display().to_string();

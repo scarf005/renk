@@ -21,12 +21,13 @@ const MAIN: &str = "mod extra\nmod util\nuse extra.EXTRA\nuse util.helper\n\nfn 
 
 const PACKAGE: &str = "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2024\"\n";
 
-/// `app/src/main.rk`, which calls `helper` of the package `shared` on line 3.
-const HELPER_MAIN: &str =
-    "use shared.helper\n\nfn main():\n    let a = helper()\n    println!(\"{a}\")\n";
-
-/// A workspace with the members `app` and `shared`. `app` takes its version from the workspace.
+/// A workspace with the members `app` and `shared`. `app` takes its version from the workspace,
+/// and its `app/src/main.rk` calls `helper` of `shared` on line 3.
 const WORKSPACE: [(&str, &str); 5] = [
+    (
+        "app/src/main.rk",
+        "use shared.helper\n\nfn main():\n    let a = helper()\n    println!(\"{a}\")\n",
+    ),
     (
         "Cargo.toml",
         "[workspace]\nmembers = [\"app\", \"shared\"]\nresolver = \"3\"\n\n[workspace.package]\nversion = \"0.1.0\"\n",
@@ -35,7 +36,6 @@ const WORKSPACE: [(&str, &str); 5] = [
         "app/Cargo.toml",
         "[package]\nname = \"app\"\nversion.workspace = true\nedition = \"2024\"\n\n[dependencies]\nshared = { path = \"../shared\" }\n",
     ),
-    ("app/src/main.rk", HELPER_MAIN),
     (
         "shared/Cargo.toml",
         "[package]\nname = \"shared\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
@@ -56,17 +56,17 @@ impl Session {
     /// `None` without rust-analyzer.
     fn open(name: &str, main: &str) -> Option<Self> {
         let files = [
-            ("Cargo.toml", PACKAGE),
             ("src/main.rk", main),
+            ("Cargo.toml", PACKAGE),
             ("src/util.rk", "pub fn helper() -> i32 = 1\n"),
             ("src/extra.rs", "pub const EXTRA: i32 = 2;\n"),
         ];
-        Self::start(name, &files, &[""], "src/main.rk")
+        Self::start(name, &files, &[""])
     }
 
     /// renk-lsp over a directory with `files`, the folders `roots` of it as the editor's
-    /// workspace folders, and the file `open` of `files` open.
-    fn start(name: &str, files: &[(&str, &str)], roots: &[&str], open: &str) -> Option<Self> {
+    /// workspace folders, and the first of `files` open.
+    fn start(name: &str, files: &[(&str, &str)], roots: &[&str]) -> Option<Self> {
         rust_analyzer()?;
         let dir = temp_dir(name);
         for (path, text) in files {
@@ -109,27 +109,12 @@ impl Session {
             json!({"processId": null, "rootUri": root, "workspaceFolders": folders, "capabilities": watching}),
         );
         session.notify("initialized", json!({}));
-        let (uri, text) = (
-            session.uri(open),
-            files.iter().find(|(path, _)| *path == open)?.1,
-        );
+        let (uri, text) = (session.uri(files[0].0), files[0].1);
         session.notify(
             "textDocument/didOpen",
             json!({"textDocument": {"uri": uri, "languageId": "renk", "version": 1, "text": text}}),
         );
         Some(session)
-    }
-
-    /// Hovers `helper` in `HELPER_MAIN` until rust-analyzer names it, and fails if it never does.
-    fn assert_hover_names_helper(&mut self, main: &str) {
-        let uri = self.uri(main);
-        let names = |hover: &Value| hover["contents"].to_string().contains("fn helper");
-        let hover = self.request_until(
-            "textDocument/hover",
-            json!({"textDocument": {"uri": uri}, "position": position(3, 13)}),
-            names,
-        );
-        assert!(names(&hover), "{hover}");
     }
 
     fn uri(&self, path: &str) -> String {
@@ -644,14 +629,14 @@ fn rust_analyzer_ends_when_the_editor_exits_without_shutdown() {
             .map_or(true, |stat| stat.contains(") Z "))
     };
     let deadline = Instant::now() + Duration::from_secs(10);
-    while !(session.server.try_wait().unwrap().is_some() && gone()) && Instant::now() < deadline {
+    while session.server.try_wait().unwrap().is_none() || !gone() {
+        assert!(
+            Instant::now() < deadline,
+            "renk-lsp or rust-analyzer {} runs",
+            children[0]
+        );
         thread::sleep(Duration::from_millis(100));
     }
-    assert!(
-        session.server.try_wait().unwrap().is_some(),
-        "renk-lsp runs"
-    );
-    assert!(gone(), "rust-analyzer {} runs", children[0]);
 }
 
 #[test]
@@ -721,67 +706,57 @@ fn leaves_out_code_actions_that_change_nothing_or_do_not_transpile_back() {
     assert_eq!(titles(&actions), ["Rewrite as raw string"], "{actions}");
 }
 
-#[test]
-fn hovers_come_from_rust_analyzer_in_a_virtual_workspace() {
-    let Some(mut session) = Session::start("lsp-members", &WORKSPACE, &[""], "app/src/main.rk")
-    else {
+/// Opens `app/src/main.rk` of `WORKSPACE`, or with `outside` of its packages without the
+/// workspace, with the folders `roots`, and hovers `helper` until rust-analyzer names it.
+fn assert_hover_names_helper(name: &str, roots: &[&str], outside: bool) {
+    let app = WORKSPACE[2]
+        .1
+        .replace("version.workspace = true", "version = \"0.1.0\"");
+    let mut files = WORKSPACE.to_vec();
+    if outside {
+        files[2].1 = &app;
+        files.remove(1);
+    }
+    let Some(mut session) = Session::start(name, &files, roots) else {
         return;
     };
-    session.assert_hover_names_helper("app/src/main.rk");
+    let uri = session.uri(files[0].0);
+    let names = |hover: &Value| hover["contents"].to_string().contains("fn helper");
+    let at = json!({"textDocument": {"uri": uri}, "position": position(3, 13)});
+    let hover = session.request_until("textDocument/hover", at, names);
+    assert!(names(&hover), "{hover}");
+}
+
+#[test]
+fn hovers_come_from_rust_analyzer_in_a_virtual_workspace() {
+    assert_hover_names_helper("lsp-members", &[""], false);
 }
 
 #[test]
 fn hovers_come_from_rust_analyzer_when_the_editor_opens_a_member_directory() {
-    let Some(mut session) =
-        Session::start("lsp-member-dir", &WORKSPACE, &["app"], "app/src/main.rk")
-    else {
-        return;
-    };
-    session.assert_hover_names_helper("app/src/main.rk");
+    assert_hover_names_helper("lsp-member-dir", &["app"], false);
 }
 
 #[test]
 fn hovers_come_from_rust_analyzer_through_a_path_dependency_outside_the_workspace() {
-    let files = app_and_shared();
-    let Some(mut session) = Session::start("lsp-outside", &files, &["app"], "app/src/main.rk")
-    else {
-        return;
-    };
-    session.assert_hover_names_helper("app/src/main.rk");
-}
-
-/// The package `app`, with a path dependency on the package `shared` beside it.
-fn app_and_shared() -> [(&'static str, &'static str); 4] {
-    let app = "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\nshared = { path = \"../shared\" }\n";
-    let [_, _, main, shared, lib] = WORKSPACE;
-    [("app/Cargo.toml", app), main, shared, lib]
+    assert_hover_names_helper("lsp-outside", &["app"], true);
 }
 
 #[test]
 fn hovers_come_from_rust_analyzer_in_the_second_workspace_folder() {
-    let files = app_and_shared();
-    let Some(mut session) =
-        Session::start("lsp-folders", &files, &["shared", "app"], "app/src/main.rk")
-    else {
-        return;
-    };
-    session.assert_hover_names_helper("app/src/main.rk");
+    assert_hover_names_helper("lsp-folders", &["shared", "app"], true);
 }
 
 #[test]
 fn hovers_come_from_rust_analyzer_without_a_workspace_folder() {
-    let files = app_and_shared();
-    let Some(mut session) = Session::start("lsp-no-folder", &files, &[], "app/src/main.rk") else {
-        return;
-    };
-    session.assert_hover_names_helper("app/src/main.rk");
+    assert_hover_names_helper("lsp-no-folder", &[], true);
 }
 
 #[test]
 fn shows_renk_syntax_errors_in_a_file_outside_every_package_without_a_workspace_folder() {
     // A tab on line 1 is a Renk syntax error.
     let files = [("loose.rk", "fn main():\n\tprintln!(\"hi\")\n")];
-    let Some(mut session) = Session::start("lsp-loose", &files, &[], "loose.rk") else {
+    let Some(mut session) = Session::start("lsp-loose", &files, &[]) else {
         return;
     };
     let uri = session.uri("loose.rk");
