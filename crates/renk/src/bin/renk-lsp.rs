@@ -647,7 +647,7 @@ impl LanguageServer for Backend {
                 .into_iter()
                 .filter_map(|action| match action {
                     CodeActionOrCommand::CodeAction(action) => {
-                        let edit = origins.workspace_edit(action.edit.clone()?, true)?;
+                        let edit = origins.workspace_edit(action.edit.clone()?, true).ok()?;
                         if changes_nothing(&edit) {
                             return None;
                         }
@@ -2353,7 +2353,8 @@ impl Origins {
 
     /// Edits of rust-analyzer's file as edits of the editor's: in a Renk document, checked to
     /// replace the same text, or with `convert`, converted with [`renk_edits`] and checked to
-    /// transpile to the edited Rust. `None` when an edit does not map.
+    /// transpile to the edited Rust. `None` when an edit does not map or the Renk document does not
+    /// transpile.
     fn text_edits(
         &mut self,
         rust_uri: &Url,
@@ -2383,7 +2384,7 @@ impl Origins {
                 Some((uri.clone(), edits))
             }
             Some(Origin::File(uri)) => Some((uri.clone(), edits)),
-            None => Some((self.uri(rust_uri), edits)),
+            None => (self.renk_uri(rust_uri).is_none()).then(|| (self.uri(rust_uri), edits)),
         }
     }
 
@@ -2398,7 +2399,11 @@ impl Origins {
         }
     }
 
-    fn document_edit(&mut self, edit: TextDocumentEdit, convert: bool) -> Option<TextDocumentEdit> {
+    fn document_edit(
+        &mut self,
+        edit: TextDocumentEdit,
+        convert: bool,
+    ) -> std::result::Result<TextDocumentEdit, Url> {
         let edits = edit
             .edits
             .into_iter()
@@ -2407,10 +2412,11 @@ impl Origins {
                 OneOf::Right(annotated) => annotated.text_edit,
             })
             .collect();
-        let (uri, edits) = self.text_edits(&edit.text_document.uri, edits, convert)?;
         let mut text_document = edit.text_document;
+        let (uri, edits) = (self.text_edits(&text_document.uri, edits, convert))
+            .ok_or_else(|| text_document.uri.clone())?;
         text_document.uri = uri;
-        Some(TextDocumentEdit {
+        Ok(TextDocumentEdit {
             text_document,
             edits: edits.into_iter().map(OneOf::Left).collect(),
         })
@@ -2481,30 +2487,40 @@ impl Origins {
                 ));
             }
         }
-        // Every Renk edit passed `checked_edit`, so each one maps.
-        self.workspace_edit(edit, false)
-            .ok_or_else(|| "cannot rename".to_string())
+        // Every Renk edit passed `checked_edit`, so only a document that does not transpile fails.
+        self.workspace_edit(edit, false).map_err(|rust_uri| {
+            let uri = self.renk_uri(&rust_uri).unwrap_or(rust_uri);
+            let path = uri.to_file_path().unwrap_or_else(|_| uri.path().into());
+            format!(
+                "cannot rename in {}, which does not transpile.",
+                path.display()
+            )
+        })
     }
 
-    /// A workspace edit of rust-analyzer's files as one of the editor's, or `None` when any of
-    /// its edits does not map; `convert` as in [`Self::text_edits`].
-    fn workspace_edit(&mut self, edit: WorkspaceEdit, convert: bool) -> Option<WorkspaceEdit> {
+    /// A workspace edit of rust-analyzer's files as one of the editor's, or a file of
+    /// rust-analyzer's with edits that do not map; `convert` as in [`Self::text_edits`].
+    fn workspace_edit(
+        &mut self,
+        edit: WorkspaceEdit,
+        convert: bool,
+    ) -> std::result::Result<WorkspaceEdit, Url> {
         let changes = edit
             .changes
             .map(|changes| {
                 changes
                     .into_iter()
-                    .map(|(uri, edits)| self.text_edits(&uri, edits, convert))
-                    .collect::<Option<HashMap<_, _>>>()
+                    .map(|(uri, edits)| self.text_edits(&uri, edits, convert).ok_or(uri))
+                    .collect::<std::result::Result<HashMap<_, _>, _>>()
             })
-            .map_or(Some(None), |changes| changes.map(Some))?;
+            .transpose()?;
         let document_changes = match edit.document_changes {
             None => None,
             Some(DocumentChanges::Edits(edits)) => Some(DocumentChanges::Edits(
                 edits
                     .into_iter()
                     .map(|edit| self.document_edit(edit, convert))
-                    .collect::<Option<_>>()?,
+                    .collect::<std::result::Result<_, _>>()?,
             )),
             Some(DocumentChanges::Operations(operations)) => Some(DocumentChanges::Operations(
                 operations
@@ -2514,13 +2530,13 @@ impl Origins {
                             .document_edit(edit, convert)
                             .map(DocumentChangeOperation::Edit),
                         DocumentChangeOperation::Op(op) => {
-                            Some(DocumentChangeOperation::Op(self.resource_op(op)))
+                            Ok(DocumentChangeOperation::Op(self.resource_op(op)))
                         }
                     })
-                    .collect::<Option<_>>()?,
+                    .collect::<std::result::Result<_, _>>()?,
             )),
         };
-        Some(WorkspaceEdit {
+        Ok(WorkspaceEdit {
             changes,
             document_changes,
             change_annotations: edit.change_annotations,
@@ -4225,7 +4241,7 @@ mod tests {
         );
         assert_eq!(
             origins.workspace_edit(edit(vec![rename, brace]), false),
-            None
+            Err(rust_uri)
         );
     }
 
