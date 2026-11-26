@@ -16,7 +16,7 @@ jobs:
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@v7
-      # The test compares the MIR that nightly emits.
-      - run: rustup toolchain install stable nightly --profile minimal
+      # The test compares the MIR that nightly emits. Keep NIGHTLY in tests/real_crates.rs equal to it.
+      - run: rustup toolchain install stable nightly-2026-04-10 --profile minimal
       - uses: Swatinem/rust-cache@v2
       - run: cargo test -p renk --test real_crates -- --ignored
