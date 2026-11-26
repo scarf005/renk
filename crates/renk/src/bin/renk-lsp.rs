@@ -511,6 +511,9 @@ impl LanguageServer for Backend {
                 .filter_map(|action| match action {
                     CodeActionOrCommand::CodeAction(action) => {
                         let edit = origins.workspace_edit(action.edit.clone()?, true)?;
+                        if changes_nothing(&edit) {
+                            return None;
+                        }
                         let diagnostics = action.diagnostics.map(|diagnostics| {
                             diagnostics
                                 .into_iter()
@@ -1808,6 +1811,21 @@ fn completion_item(
     })
 }
 
+/// `text` after `edits`, which do not overlap.
+fn edited(text: &str, edits: &[TextEdit]) -> String {
+    let mut edited = text.to_string();
+    let mut edits = edits.to_vec();
+    edits.sort_by_key(|edit| std::cmp::Reverse(offset(text, edit.range.start)));
+    for edit in edits {
+        let start = offset(text, edit.range.start);
+        edited.replace_range(
+            start..offset(text, edit.range.end).max(start),
+            &edit.new_text,
+        );
+    }
+    edited
+}
+
 /// Renk edits of `source` that make the change `edits` make to its generated Rust `rust`, or
 /// `None` when some of it falls where `source` differs from `rust` converted back to Renk, or in
 /// a script's frontmatter or `fn main` wrapper header, which do not convert back.
@@ -1817,16 +1835,7 @@ fn completion_item(
 /// conversion's lines match: a hunk applies only when the lines it replaces match consecutive
 /// lines of `source`, or when it inserts next to a matching line.
 fn renk_edits(source: &str, rust: &str, edits: &[TextEdit], script: bool) -> Option<Vec<TextEdit>> {
-    let mut edited = rust.to_string();
-    let mut edits = edits.to_vec();
-    edits.sort_by_key(|edit| std::cmp::Reverse(offset(rust, edit.range.start)));
-    for edit in edits {
-        let start = offset(rust, edit.range.start);
-        edited.replace_range(
-            start..offset(rust, edit.range.end).max(start),
-            &edit.new_text,
-        );
-    }
+    let edited = edited(rust, edits);
     let to_renk = |rust: &str| match script {
         true => script_renk(source, rust),
         false => rust_to_renk(rust).ok().map(|renk| (renk, String::new())),
@@ -2113,8 +2122,8 @@ impl Origins {
     }
 
     /// Edits of rust-analyzer's file as edits of the editor's: in a Renk document, checked to
-    /// replace the same text, or with `convert`, converted with [`renk_edits`]. `None` when an
-    /// edit does not map.
+    /// replace the same text, or with `convert`, converted with [`renk_edits`] and checked to
+    /// transpile to the edited Rust. `None` when an edit does not map.
     fn text_edits(
         &mut self,
         rust_uri: &Url,
@@ -2129,7 +2138,14 @@ impl Origins {
                 script,
             }) => {
                 let edits = if convert {
-                    renk_edits(text, &generated.rust, &edits, *script)?
+                    let renk = renk_edits(text, &generated.rust, &edits, *script)?;
+                    // The converted text must give back the Rust that rust-analyzer's edits make,
+                    // up to whitespace.
+                    let rust = crate::generated(uri, &edited(text, &renk)).ok()?.rust;
+                    let expected = edited(&generated.rust, &edits);
+                    rust.split_whitespace()
+                        .eq(expected.split_whitespace())
+                        .then_some(renk)?
                 } else {
                     edits
                         .into_iter()
@@ -2237,6 +2253,23 @@ impl Origins {
             change_annotations: edit.change_annotations,
         })
     }
+}
+
+/// Whether `edit` has no text edit and no file operation.
+fn changes_nothing(edit: &WorkspaceEdit) -> bool {
+    let document_changes = match &edit.document_changes {
+        None => true,
+        Some(DocumentChanges::Edits(edits)) => edits.iter().all(|edit| edit.edits.is_empty()),
+        Some(DocumentChanges::Operations(operations)) => operations.iter().all(|operation| {
+            matches!(operation, DocumentChangeOperation::Edit(edit) if edit.edits.is_empty())
+        }),
+    };
+    document_changes
+        && edit
+            .changes
+            .iter()
+            .flat_map(HashMap::values)
+            .all(Vec::is_empty)
 }
 
 /// The symbol of the item `node`. Its range ends with the last of the document's `lines` that the
