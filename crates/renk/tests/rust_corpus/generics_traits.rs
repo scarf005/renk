@@ -36,3 +36,23 @@ pub trait Flags {
         Self::ALL
     }
 }
+
+pub trait Dispatch {
+    fn receive(&mut self, message: Result<(u8, Option<u8>), ()>)
+        -> Result<(), ()>;
+    fn ready(&self)
+        // The count of waiting messages.
+        -> u8;
+    fn total(&self, extra: u8)
+        -> u8
+    {
+        self.ready() + extra
+    }
+    fn reset(&mut self)
+        -> u8
+    where
+        Self: Sized,
+    {
+        0
+    }
+}
