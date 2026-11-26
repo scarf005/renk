@@ -5,6 +5,22 @@ default:
 test:
     cargo test -p renk --no-fail-fast
 
+# Check the Rust formatting, the same command as CI.
+fmt-check:
+    cargo fmt --all --check
+
+# Run the tree-sitter grammar corpus tests.
+grammar-test:
+    cd editors/zed/tree-sitter-renk && tree-sitter test
+
+# Type-check and lint the web demo from the repository root.
+web-check:
+    cd web && deno task check
+
+# Run the web demo tests from the repository root.
+web-test:
+    cd web && deno task test
+
 # Run the renk-web tests that need unprivileged user namespaces.
 test-web-namespaces:
     cargo test -p renk --bin renk-web -- --ignored
