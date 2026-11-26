@@ -759,6 +759,32 @@ fn formats_each_file_as_renk_fmt_writes_it() {
     assert_eq!(outcomes, ["edit", "edit", "formatted", "error"]);
 }
 
+#[test]
+fn signature_help_names_the_parameter_at_the_cursor() {
+    let main = "fn f(a: i32, b: i32) -> i32 = a + b\n\nfn g(x: i32) -> i32 = x\n\nfn main():\n    let s = f(1, 2)\n    println!(\"{} {f(s, 2)}\", g(1))\n";
+    let Some(mut session) = Session::open("lsp-signature", main) else {
+        return;
+    };
+    let main = session.uri("src/main.rk");
+    let at = |line, character| json!({"textDocument": {"uri": main}, "position": position(line, character)});
+    let parameter = |help: &Value| {
+        let signature = &help["signatures"][help["activeSignature"].as_u64().unwrap_or(0) as usize];
+        let active = signature
+            .get("activeParameter")
+            .unwrap_or(&help["activeParameter"]);
+        let label = &signature["parameters"][active.as_u64().unwrap_or(0) as usize]["label"];
+        format!("{} {label}", signature["label"])
+    };
+    let help = session.request_until("textDocument/signatureHelp", at(5, 17), |help| {
+        help["signatures"].is_array()
+    });
+    let f = r#""fn f(a: i32, b: i32) -> i32" "b: i32""#;
+    assert_eq!(parameter(&help), f, "{help}");
+    // The call in the format string moves behind `g(1)` in the Rust.
+    let help = session.request("textDocument/signatureHelp", at(6, 23));
+    assert!(help.is_null() || parameter(&help) == f, "{help}");
+}
+
 /// Opens `app/src/main.rk` of `WORKSPACE`, or with `outside` of its packages without the
 /// workspace, with the folders `roots`, and hovers `helper` until rust-analyzer names it.
 fn assert_hover_names_helper(name: &str, roots: &[&str], outside: bool) {
