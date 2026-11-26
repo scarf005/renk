@@ -46,18 +46,25 @@ fn a_script_path_runs_like_renk_script() {
     )
     .unwrap();
 
-    let output = Command::new(env!("CARGO_BIN_EXE_renk"))
-        .args([script.to_str().unwrap(), "a", "--help", "-x"])
-        .env("XDG_CACHE_HOME", dir.join("cache"))
-        .output()
-        .unwrap();
-
-    assert_eq!(
-        String::from_utf8_lossy(&output.stdout),
-        "a|--help|-x\n",
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    let script = script.to_str().unwrap();
+    for (args, expected) in [
+        (&[script, "a", "--help", "-x"][..], "a|--help|-x\n"),
+        (&[script, "--", "4"], "--|4\n"),
+        (&["script", script, "--", "4"], "--|4\n"),
+        (&["script", script, "--cargo", "-x"], "--cargo|-x\n"),
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_renk"))
+            .args(args)
+            .env("XDG_CACHE_HOME", dir.join("cache"))
+            .output()
+            .unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            expected,
+            "{args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
     let _ = fs::remove_dir_all(dir);
 }
 
