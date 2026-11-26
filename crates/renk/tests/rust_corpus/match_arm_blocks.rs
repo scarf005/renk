@@ -34,3 +34,27 @@ pub fn looping(mut count: u8) -> u8 {
         },
     }
 }
+
+pub fn guarded(value: Option<(u8, u8)>, limit: u8) -> u8 {
+    match value {
+        Some((first, second))
+            if first == limit =>
+        {
+            let total = first + second;
+            total
+        }
+        Some((
+            first,
+            _,
+        ))
+            if first > limit => first,
+        Some((_, second)) if second > limit => {
+            let doubled = second * 2;
+            doubled
+        }
+        Some(pair)
+            // The pair is below the limit.
+            if pair.0 < limit => pair.1,
+        _ => 0,
+    }
+}
