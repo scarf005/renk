@@ -14,7 +14,7 @@ use std::{
 };
 
 #[cfg(unix)]
-use std::os::unix::process::CommandExt;
+use std::os::unix::process::{CommandExt, ExitStatusExt};
 
 use axum::{
     Json, Router,
@@ -50,9 +50,12 @@ const RATE_LIMIT_WINDOW: Duration = Duration::from_secs(60);
 /// When the rate table holds this many clients with a run in the last minute, a new client
 /// gets 429.
 const MAX_RATE_LIMITED_CLIENTS: usize = 4096;
-const CHILD_FILE_SIZE_MIB: u64 = 64;
+/// rustc writes the program, about 5.5 MB for the trpl example.
+const COMPILE_FILE_SIZE_MIB: u64 = 64;
 const CHILD_OPEN_FILES: u64 = 64;
-const CHILD_FILE_SIZE_BYTES: u64 = CHILD_FILE_SIZE_MIB * BYTES_PER_MIB;
+const COMPILE_FILE_SIZE_BYTES: u64 = COMPILE_FILE_SIZE_MIB * BYTES_PER_MIB;
+/// One byte over the output limit, so the server can see that the output was cut.
+const RUN_FILE_SIZE_BYTES: u64 = MAX_OUTPUT_BYTES as u64 + 1;
 /// rustc finds its toolchain through these. The submitted program gets the same variables.
 const CHILD_ENV: [&str; 4] = ["PATH", "RUSTUP_HOME", "RUSTUP_TOOLCHAIN", "LANG"];
 
@@ -101,6 +104,9 @@ enum Sandbox {
 struct ChildOptions {
     timeout: Duration,
     sandbox: Sandbox,
+    /// The size limit of each file that the step writes. A write past it ends the step with
+    /// `SIGXFSZ`.
+    max_file_bytes: u64,
 }
 
 #[derive(Debug)]
@@ -120,6 +126,8 @@ struct CommandResult {
     timed_out: bool,
     stdout_truncated: bool,
     stderr_truncated: bool,
+    /// The step wrote past `max_file_bytes` and `SIGXFSZ` ended it.
+    output_limited: bool,
     elapsed_ms: f64,
 }
 
@@ -189,6 +197,7 @@ fn log_namespace_support(sandbox: Sandbox) -> std::io::Result<()> {
     let options = ChildOptions {
         timeout: Duration::from_secs(5),
         sandbox: Sandbox::Namespaces,
+        max_file_bytes: COMPILE_FILE_SIZE_BYTES,
     };
     let probe = run_command("rustc", &["--version"], &dir, options);
     let _ = fs::remove_dir_all(dir);
@@ -361,6 +370,7 @@ async fn handle_run_request(
     let options = ChildOptions {
         timeout: state.config.run_timeout,
         sandbox: state.config.sandbox,
+        max_file_bytes: RUN_FILE_SIZE_BYTES,
     };
     let run_deps = state.run_deps.clone();
     // Axum drops the handler when the client goes away or the request times out. The job keeps
@@ -445,7 +455,11 @@ fn compile_and_run_rust(
         compile_args.extend(["-L".to_string(), format!("native={}", native.display())]);
     }
     let compile_args = compile_args.iter().map(String::as_str).collect::<Vec<_>>();
-    let compile = run_command("rustc", &compile_args, &dir, options);
+    let compile_options = ChildOptions {
+        max_file_bytes: COMPILE_FILE_SIZE_BYTES,
+        ..options
+    };
+    let compile = run_command("rustc", &compile_args, &dir, compile_options);
     if compile.status != Some(0) || compile.timed_out {
         let total_ms = elapsed_ms(started);
         let compile_ms = compile.elapsed_ms;
@@ -554,6 +568,7 @@ fn run_command(command: &str, args: &[&str], cwd: &Path, options: ChildOptions) 
             timed_out: false,
             stdout_truncated: false,
             stderr_truncated: false,
+            output_limited: false,
             elapsed_ms: elapsed_ms(started),
         };
     };
@@ -596,6 +611,7 @@ fn run_command(command: &str, args: &[&str], cwd: &Path, options: ChildOptions) 
             timed_out: false,
             stdout_truncated: false,
             stderr_truncated: false,
+            output_limited: false,
             elapsed_ms: elapsed_ms(started),
         };
     };
@@ -623,6 +639,7 @@ fn run_command(command: &str, args: &[&str], cwd: &Path, options: ChildOptions) 
                     timed_out,
                     stdout_truncated: false,
                     stderr_truncated: false,
+                    output_limited: false,
                     elapsed_ms: elapsed_ms(started),
                 };
             }
@@ -630,7 +647,7 @@ fn run_command(command: &str, args: &[&str], cwd: &Path, options: ChildOptions) 
     }
 
     let _ = unsafe { libc::kill(-(child_pid as i32), libc::SIGKILL) };
-    let status = child.wait().map(|status| status.code());
+    let status = child.wait();
     kill_orphans(child_pid);
     let (stdout, stdout_truncated) = read_limited_utf8(&stdout_path, MAX_OUTPUT_BYTES);
     let (mut stderr, stderr_truncated) = read_limited_utf8(&stderr_path, MAX_OUTPUT_BYTES);
@@ -638,12 +655,13 @@ fn run_command(command: &str, args: &[&str], cwd: &Path, options: ChildOptions) 
     let _ = fs::remove_file(stderr_path);
     match status {
         Ok(status) => CommandResult {
-            status,
+            status: status.code(),
             stdout,
             stderr,
             timed_out,
             stdout_truncated,
             stderr_truncated,
+            output_limited: status.signal() == Some(libc::SIGXFSZ),
             elapsed_ms: elapsed_ms(started),
         },
         Err(error) => {
@@ -658,6 +676,7 @@ fn run_command(command: &str, args: &[&str], cwd: &Path, options: ChildOptions) 
                 timed_out,
                 stdout_truncated,
                 stderr_truncated,
+                output_limited: false,
                 elapsed_ms: elapsed_ms(started),
             }
         }
@@ -699,7 +718,7 @@ fn configure_child_process(command: &mut Command, options: ChildOptions) {
                 libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) == 0,
             )?;
             // Set the limits before `enter_namespaces` forks, so both processes get them.
-            apply_child_limits(cpu_seconds)?;
+            apply_child_limits(cpu_seconds, options.max_file_bytes)?;
             match &id_maps {
                 Some((uid_map, gid_map)) => enter_namespaces(uid_map, gid_map),
                 None => Ok(()),
@@ -803,14 +822,10 @@ fn sandbox_step(step: &str, succeeded: bool) -> std::io::Result<()> {
 }
 
 #[cfg(unix)]
-fn apply_child_limits(cpu_seconds: u64) -> std::io::Result<()> {
+fn apply_child_limits(cpu_seconds: u64, max_file_bytes: u64) -> std::io::Result<()> {
     set_limit(libc::RLIMIT_CPU, cpu_seconds, cpu_seconds)?;
     set_limit(libc::RLIMIT_CORE, 0, 0)?;
-    set_limit(
-        libc::RLIMIT_FSIZE,
-        CHILD_FILE_SIZE_BYTES,
-        CHILD_FILE_SIZE_BYTES,
-    )?;
+    set_limit(libc::RLIMIT_FSIZE, max_file_bytes, max_file_bytes)?;
     set_limit(libc::RLIMIT_NOFILE, CHILD_OPEN_FILES, CHILD_OPEN_FILES)
 }
 
@@ -895,6 +910,7 @@ fn run_response_json(response: RunResponse) -> Value {
         "timedOut": response.result.timed_out,
         "stdoutTruncated": response.result.stdout_truncated,
         "stderrTruncated": response.result.stderr_truncated,
+        "outputLimited": response.result.output_limited,
         "compileMs": response.compile_ms,
         "runMs": response.run_ms,
         "totalMs": response.total_ms,
@@ -1079,6 +1095,7 @@ mod tests {
         ChildOptions {
             timeout,
             sandbox: Sandbox::Unsandboxed,
+            max_file_bytes: RUN_FILE_SIZE_BYTES,
         }
     }
 
@@ -1297,8 +1314,8 @@ mod tests {
         let server = fs::read_link("/proc/self/ns/net").unwrap();
         let readlink = |sandbox| {
             let options = ChildOptions {
-                timeout: Duration::from_secs(5),
                 sandbox,
+                ..unsandboxed(Duration::from_secs(5))
             };
             run_command("readlink", &["/proc/self/ns/net"], &dir, options)
         };
@@ -1372,8 +1389,8 @@ mod tests {
         for sandbox in [Sandbox::Namespaces, Sandbox::Unsandboxed] {
             let dir = temp_dir("setsid");
             let options = ChildOptions {
-                timeout: Duration::from_millis(300),
                 sandbox,
+                ..unsandboxed(Duration::from_millis(300))
             };
             let script =
                 format!("setsid -f sleep {sleep}; kill -0 {server} && echo signalled; sleep 60");
