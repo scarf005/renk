@@ -75,7 +75,14 @@ pub fn workspace(start: &Path) -> Option<Workspace> {
             );
         }
     }
-    let mut seen = queue.clone();
+    let mut seen = Vec::new();
+    queue.retain(|dir| {
+        let new = !seen.contains(dir);
+        if new {
+            seen.push(dir.clone());
+        }
+        new
+    });
     let mut packages = Vec::new();
     // A path dependency can name a package that has path dependencies of its own.
     while let Some(dir) = queue.pop() {
