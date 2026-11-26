@@ -1030,7 +1030,7 @@ fn insert_static_header(headers: &mut HeaderMap, name: &'static str, value: &'st
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::{body::to_bytes, http::Request};
+    use axum::{body::to_bytes, extract::ConnectInfo, http::Request};
     use tower::ServiceExt;
 
     fn temp_dir(name: &str) -> PathBuf {
@@ -1084,7 +1084,10 @@ mod tests {
     }
 
     fn run_with_headers(headers: &[(&str, &str)], body: impl Into<Body>) -> Request<Body> {
-        let mut request = Request::builder().method(Method::POST).uri("/api/run");
+        let mut request = Request::builder()
+            .method(Method::POST)
+            .uri("/api/run")
+            .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 40000))));
         for (name, value) in headers {
             request = request.header(*name, *value);
         }
@@ -1462,10 +1465,8 @@ mod tests {
         let _ = fs::remove_dir_all(dist);
     }
 
-    /// One test owns the process-wide run rate counter, so no other test sends `/api/run`
-    /// requests that it would count.
     #[tokio::test]
-    async fn run_requests_are_validated_and_rate_limited() {
+    async fn run_requests_are_validated() {
         let dist = temp_dir("run");
         let app = router(state(&dist, 5));
         let error = |body: &[u8]| serde_json::from_slice::<Value>(body).unwrap()["error"].clone();
@@ -1491,20 +1492,47 @@ mod tests {
                 .unwrap()
                 .contains("runner dependency `trpl` not found")
         );
-
-        // Bodies over the transport limit are rejected before they count against the rate limit.
         let (status, _, _) = send(&app, run("x".repeat(MAX_BODY_BYTES + 1))).await;
         assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
-        let (status, _, _) = send(&app, run("{}")).await;
-        assert_eq!(status, StatusCode::BAD_REQUEST);
-        let (status, _, body) = send(&app, run("{}")).await;
+        let _ = fs::remove_dir_all(dist);
+    }
+
+    /// Client 10.0.0.1 sends four requests that fail validation, then two runs within its limit
+    /// of 2, and its third run gets 429. Client 10.0.0.2 can still run.
+    #[tokio::test]
+    async fn run_rate_limit_counts_valid_runs_per_client() {
+        let dist = temp_dir("rate");
+        let app = router(state(&dist, 2));
+        let from = |client: u8, body: String| {
+            let mut request = run(body);
+            let address = SocketAddr::from(([10, 0, 0, client], 40000));
+            request.extensions_mut().insert(ConnectInfo(address));
+            request
+        };
+        let valid = r#"{"rust": "fn main() {}"}"#.to_string();
+        let invalid = [
+            "not json".to_string(),
+            "{}".to_string(),
+            json!({ "rust": "x".repeat(MAX_RUN_SOURCE_BYTES + 1) }).to_string(),
+            "x".repeat(MAX_BODY_BYTES + 1),
+        ];
+        for body in invalid.into_iter().chain([valid.clone(), valid.clone()]) {
+            let (status, _, _) = send(&app, from(1, body)).await;
+            assert_ne!(status, StatusCode::TOO_MANY_REQUESTS);
+        }
+        let (status, _, body) = send(&app, from(1, valid.clone())).await;
         assert_eq!(
-            (status, error(&body)),
+            (
+                status,
+                serde_json::from_slice::<Value>(&body).unwrap()["error"].clone()
+            ),
             (
                 StatusCode::TOO_MANY_REQUESTS,
                 json!("run rate limit exceeded")
             )
         );
+        let (status, _, _) = send(&app, from(2, valid)).await;
+        assert_ne!(status, StatusCode::TOO_MANY_REQUESTS);
         let _ = fs::remove_dir_all(dist);
     }
 
