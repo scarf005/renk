@@ -9476,6 +9476,23 @@ pub fn normalized_names(lines: Vec<String>) -> Vec<String> {
     }
 
     #[test]
+    fn canonical_format_macros_skip_a_quote_in_a_comment_or_a_lifetime() {
+        // A `'` that opens no char literal must not hide the code after it up to the next `'`.
+        let call = "fn f(s: &S) {\n    format!(\"{}\", s.token);\n}\n";
+        let inlined = canonical_format_macros(call);
+        assert!(inlined.contains("format!(\"{s.token}\")"), "{inlined}");
+        for before in [
+            "// the literal's span\n",
+            "/* it's */\n",
+            "fn g(x: &'static str) {}\n",
+            "const Q: char = '\\'';\n",
+        ] {
+            let text = format!("{before}{call}");
+            assert_eq!(canonical_format_macros(&text), format!("{before}{inlined}"));
+        }
+    }
+
+    #[test]
     fn emits_source_map_json() {
         let output = transpile("fn id(x: i32) -> i32 = x\n").unwrap();
         assert_eq!(output.source_map[0].source_line, 1);
