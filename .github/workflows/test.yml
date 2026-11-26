@@ -2,22 +2,66 @@ name: test
 
 on:
   push:
-    paths-ignore: [docs/**]
   pull_request:
-    paths-ignore: [docs/**]
   workflow_dispatch:
 
 permissions: { contents: read }
 
 concurrency: { group: "test-${{ github.head_ref || github.ref_name }}", cancel-in-progress: true }
 
+env: { CARGO_TERM_COLOR: always }
+
 jobs:
   test:
     runs-on: ubuntu-latest
-    env: { CARGO_TERM_COLOR: always }
     steps:
       - uses: actions/checkout@v7
       # Script tests run `cargo +nightly -Zscript`, and rust-analyzer needs the std sources.
       - run: rustup toolchain install stable nightly --profile minimal --component rust-analyzer,rust-src
       - uses: Swatinem/rust-cache@v2
       - run: cargo test -p renk --no-fail-fast
+      # Ubuntu 24.04 restricts unprivileged user namespaces through AppArmor.
+      - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - run: cargo test -p renk --bin renk-web -- --ignored
+
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install stable --profile minimal --component rustfmt
+      - run: cargo fmt --all --check
+
+  cross-check:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix: { target: [x86_64-pc-windows-gnu, x86_64-apple-darwin] }
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install stable --profile minimal --target ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check -p renk --bins --target ${{ matrix.target }}
+
+  grammar:
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: editors/zed/tree-sitter-renk } }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with: { node-version: 24 }
+      - run: npm install --global "tree-sitter-cli@$(node -p "require('./package.json').devDependencies['tree-sitter-cli']")"
+      - run: tree-sitter generate
+      - run: git diff --exit-code
+      - run: tree-sitter test
+
+  web:
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: web } }
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install stable --profile minimal --target wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - uses: denoland/setup-deno@v2
+        with: { deno-version: 2.5.6 }
+      - run: deno task check
+      - run: deno task test
+      - run: deno task build
