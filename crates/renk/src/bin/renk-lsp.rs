@@ -29,22 +29,23 @@ use tower_lsp::{
         CompletionTextEdit, Diagnostic, DiagnosticSeverity, DidChangeTextDocumentParams,
         DidChangeWatchedFilesParams, DidChangeWatchedFilesRegistrationOptions,
         DidCloseTextDocumentParams, DidOpenTextDocumentParams, DidSaveTextDocumentParams,
-        DocumentChangeOperation, DocumentChanges, DocumentSymbol, DocumentSymbolParams,
-        DocumentSymbolResponse, FileChangeType, FileEvent, FileSystemWatcher, GlobPattern,
-        GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverContents, HoverParams,
-        InitializeParams, InitializeResult, InitializedParams, InlayHint, InlayHintLabel,
-        InlayHintParams, InsertReplaceEdit, Location, MarkupContent, MarkupKind, MessageType,
-        NumberOrString, OneOf, Position, PrepareRenameResponse, PublishDiagnosticsParams, Range,
-        ReferenceParams, Registration, RenameOptions, RenameParams, ResourceOp, ServerCapabilities,
-        SymbolKind, TextDocumentContentChangeEvent, TextDocumentEdit, TextDocumentIdentifier,
-        TextDocumentItem, TextDocumentPositionParams, TextDocumentSyncCapability,
-        TextDocumentSyncKind, TextDocumentSyncOptions, TextDocumentSyncSaveOptions, TextEdit, Url,
-        VersionedTextDocumentIdentifier, WorkspaceEdit, WorkspaceFolder,
+        DocumentChangeOperation, DocumentChanges, DocumentFormattingParams, DocumentSymbol,
+        DocumentSymbolParams, DocumentSymbolResponse, FileChangeType, FileEvent, FileSystemWatcher,
+        GlobPattern, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverContents,
+        HoverParams, InitializeParams, InitializeResult, InitializedParams, InlayHint,
+        InlayHintLabel, InlayHintParams, InsertReplaceEdit, Location, MarkupContent, MarkupKind,
+        MessageType, NumberOrString, OneOf, Position, PrepareRenameResponse,
+        PublishDiagnosticsParams, Range, ReferenceParams, Registration, RenameOptions,
+        RenameParams, ResourceOp, ServerCapabilities, SymbolKind, TextDocumentContentChangeEvent,
+        TextDocumentEdit, TextDocumentIdentifier, TextDocumentItem, TextDocumentPositionParams,
+        TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions,
+        TextDocumentSyncSaveOptions, TextEdit, Url, VersionedTextDocumentIdentifier, WorkspaceEdit,
+        WorkspaceFolder,
     },
 };
 
 use renk::{
-    SourceMapNode, SourceSyntax, TranspileError, TranspileOutput,
+    SourceMapNode, SourceSyntax, TranspileError, TranspileOutput, format_source_with,
     project::{self, Workspace},
     rust_to_renk,
     script::{
@@ -103,6 +104,7 @@ impl LanguageServer for Backend {
                 code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
                 inlay_hint_provider: Some(OneOf::Left(true)),
                 document_symbol_provider: Some(OneOf::Left(true)),
+                document_formatting_provider: Some(OneOf::Left(true)),
                 hover_provider: Some(tower_lsp::lsp_types::HoverProviderCapability::Simple(true)),
                 definition_provider: Some(OneOf::Left(true)),
                 completion_provider: Some(CompletionOptions {
@@ -348,6 +350,28 @@ impl LanguageServer for Backend {
         )))
     }
 
+    async fn formatting(&self, params: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {
+        let uri = params.text_document.uri;
+        let Some(text) = self.documents.read().await.get(&uri).cloned() else {
+            return Ok(None);
+        };
+        let end = Position::new(
+            text.matches('\n').count() as u32,
+            utf16_len(text.rsplit('\n').next().unwrap_or_default()),
+        );
+        let formatted = blocking(move || {
+            formatted(&uri, &text).map(|formatted| (formatted != text).then_some(formatted))
+        });
+        let formatted =
+            (formatted.await.ok_or_else(Error::internal_error)?).map_err(request_failed)?;
+        Ok(formatted.map(|formatted| {
+            vec![TextEdit::new(
+                Range::new(Position::new(0, 0), end),
+                formatted,
+            )]
+        }))
+    }
+
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
         let uri = params
             .text_document_position_params
@@ -532,14 +556,7 @@ impl LanguageServer for Backend {
             return Ok(None);
         };
         let mut origins = self.origins().await;
-        (origins.rename_edit(edit))
-            .map(Some)
-            .map_err(|message| Error {
-                // The protocol's RequestFailed.
-                code: ErrorCode::from(-32803),
-                message: message.into(),
-                data: None,
-            })
+        origins.rename_edit(edit).map(Some).map_err(request_failed)
     }
 
     async fn code_action(
@@ -1643,6 +1660,48 @@ fn files(dir: &Path, skipped: &Path) -> Vec<PathBuf> {
             _ => Vec::new(),
         })
         .collect()
+}
+
+/// The protocol's RequestFailed error with `message`, which the editor shows.
+fn request_failed(message: String) -> Error {
+    Error {
+        code: ErrorCode::from(-32803),
+        message: message.into(),
+        data: None,
+    }
+}
+
+/// A document's text as `renk fmt --write` writes it, or the error that `renk fmt` prints. rustfmt
+/// runs in the document's folder, so it reads the `rustfmt.toml` of the document's project.
+fn formatted(uri: &Url, text: &str) -> std::result::Result<String, String> {
+    // The formatter ends even an empty file with a line break.
+    if text.is_empty() {
+        return Ok(String::new());
+    }
+    std::process::Command::new("rustfmt")
+        .arg("--version")
+        .output()
+        .map_err(|error| {
+            format!("cannot run rustfmt ({error}); install it with `rustup component add rustfmt`")
+        })?;
+    let path = uri.to_file_path().ok();
+    let dir = (path.as_ref().and_then(|path| path.parent())).filter(|dir| dir.is_dir());
+    let rustfmt = |rust: &str| {
+        let mut command = std::process::Command::new("rustfmt");
+        command.args(["--edition", "2024"]).stdin(Stdio::piped());
+        command.stdout(Stdio::piped()).stderr(Stdio::null());
+        if let Some(dir) = dir {
+            command.current_dir(dir);
+        }
+        let mut child = command.spawn().ok()?;
+        std::io::Write::write_all(&mut child.stdin.take()?, rust.as_bytes()).ok()?;
+        let output = child.wait_with_output().ok()?;
+        (output.status.success()).then(|| String::from_utf8(output.stdout).ok())?
+    };
+    format_source_with(text, &rustfmt).map_err(|error| {
+        let name = path.map_or_else(|| uri.to_string(), |path| path.display().to_string());
+        format!("{name}:{}: {}", error.line, error.message)
+    })
 }
 
 /// Whether a document is Rust, which the editor's own rust-analyzer serves: as a Renk document,
