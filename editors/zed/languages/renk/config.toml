@@ -3,6 +3,7 @@ grammar = "renk"
 path_suffixes = ["rk"]
 line_comments = ["// "]
 tab_size = 4
+increase_indent_pattern = '^(?:[^/]|/[^/])*:\s*(?://.*)?$'
 autoclose_before = ";:.,=}])"
 brackets = [
   { start = "{", end = "}", close = true, newline = true },

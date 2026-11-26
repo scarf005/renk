@@ -6,8 +6,7 @@
       "camelcase": "Renk",
       "scope": "source.renk",
       "path": ".",
-      "file-types": ["rk"],
-      "highlights": "../languages/renk/highlights.scm"
+      "file-types": ["rk"]
     }
   ],
   "metadata": {

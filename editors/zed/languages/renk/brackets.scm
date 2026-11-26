@@ -1,8 +1,3 @@
-((punctuation) @open
-  (#any-of? @open "(" "[" "{"))
-
-((punctuation) @close
-  (#any-of? @close ")" "]" "}"))
-
-(string) @open @close
-(char) @open @close
+(paren_group "(" @open ")" @close)
+(bracket_group "[" @open "]" @close)
+(brace_group "{" @open "}" @close)
