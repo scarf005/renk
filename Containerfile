@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 ARG FEDORA_MINIMAL_IMAGE=registry.fedoraproject.org/fedora-minimal@sha256:ee37c006cc45336b22d0f939286ad06f0a98f9bdfcb7650be1470f2a50b8e1ca
-ARG RUSTUP_TOOLCHAIN=stable
+ARG RUSTUP_TOOLCHAIN=1.96.0
 ARG RUSTUP_INIT_SHA256=6c30b75a75b28a96fd913a037c8581b580080b6ee9b8169a3c0feb1af7fe8caf
 ARG DENO_VERSION=2.5.6
 ARG DENO_SHA256=fd4f6abc1b6a134fa9a4dba56519f1631f44c88e04e4e3e9a8ff5975dfa66e1a
@@ -29,8 +29,8 @@ RUN curl -fsSL "https://github.com/denoland/deno/releases/download/v${DENO_VERSI
     && unzip /tmp/deno.zip -d /usr/local/bin \
     && rm /tmp/deno.zip
 COPY . .
-RUN cargo build --release -p renk --bin renk --bin renk-web
-RUN cargo build --manifest-path runner/Cargo.toml --release
+RUN cargo build --locked --release -p renk --bin renk --bin renk-web
+RUN cargo build --locked --manifest-path runner/Cargo.toml --release
 RUN cd web && VITE_RUN_API=1 deno task build
 
 FROM rust-base AS runtime-rust
