@@ -1417,6 +1417,33 @@ mod tests {
         let _ = fs::remove_dir_all(dir);
     }
 
+    /// A program can write one byte past the output limit, so the server sees that the output
+    /// was cut. One more byte ends the program with `SIGXFSZ`, and the answer says so.
+    #[test]
+    fn output_past_the_limit_ends_the_program() {
+        let dir = temp_dir("output-limit");
+        let write = |bytes: usize| {
+            let script = format!("exec head -c {bytes} /dev/zero");
+            let options = unsandboxed(Duration::from_secs(5));
+            run_command("sh", &["-c", &script], &dir, options)
+        };
+        let fits = write(MAX_OUTPUT_BYTES + 1);
+        let fits = (fits.status, fits.stdout_truncated, fits.output_limited);
+        assert_eq!(fits, (Some(0), true, false));
+        let flood = write(MAX_OUTPUT_BYTES + 2);
+        assert_eq!((flood.status, flood.stdout_truncated), (None, true));
+        let response = RunResponse {
+            result: flood,
+            ok: false,
+            stage: "run",
+            compile_ms: 0.0,
+            run_ms: 0.0,
+            total_ms: 0.0,
+        };
+        assert_eq!(run_response_json(response)["outputLimited"], json!(true));
+        let _ = fs::remove_dir_all(dir);
+    }
+
     #[tokio::test]
     async fn static_files_are_served_inside_dist_only() {
         let dist = temp_dir("static");
