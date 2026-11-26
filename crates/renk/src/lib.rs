@@ -2186,7 +2186,14 @@ fn source_lines(source: &str) -> Result<Vec<SourceLine>, TranspileError> {
             if let Some(owner) = lines
                 .iter()
                 .rposition(|owner| owner.indent <= indent)
-                .filter(|&owner| lines[owner].indent == indent && !trimmed.is_empty())
+                // A value on the line after `=`, as in `let a =` / `    f(|| {`, closes at its
+                // own indent.
+                .filter(|&owner| {
+                    let value = lines[owner].text.lines().last().unwrap_or_default();
+                    (lines[owner].indent == indent
+                        || (lines[owner].text.contains('\n') && raw_indent(value) == indent))
+                        && !trimmed.is_empty()
+                })
             {
                 // The line closes what its block's head left open, as `})` after `f(|x| {`.
                 let head = &lines[owner];
