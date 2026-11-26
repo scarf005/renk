@@ -1853,6 +1853,11 @@ fn range_text(text: &str, range: Range) -> &str {
     &text[start..offset(text, range.end).max(start)]
 }
 
+/// Whether `a` and `b` are the same Rust up to whitespace.
+fn same_rust(a: &str, b: &str) -> bool {
+    a.split_whitespace().eq(b.split_whitespace())
+}
+
 /// An edit of a document's generated Rust as the same edit of the document, when the document
 /// has the text the edit replaces where it maps to.
 fn checked_edit(generated: &Generated, text: &str, edit: TextEdit) -> Option<TextEdit> {
@@ -2239,15 +2244,11 @@ impl Origins {
             }) => {
                 let edits = if convert {
                     let renk = renk_edits(text, &generated.rust, &edits, *script)?;
-                    // The converted text must give back the Rust that rust-analyzer's edits make,
-                    // up to whitespace.
+                    // The converted text must give back the Rust that rust-analyzer's edits make.
                     let rust = transpile_document(uri, &edited(text, &renk), *script)
                         .ok()?
                         .rust;
-                    let expected = edited(&generated.rust, &edits);
-                    rust.split_whitespace()
-                        .eq(expected.split_whitespace())
-                        .then_some(renk)?
+                    same_rust(&rust, &edited(&generated.rust, &edits)).then_some(renk)?
                 } else {
                     edits
                         .into_iter()
@@ -4106,6 +4107,12 @@ mod tests {
             origins.workspace_edit(edit(vec![rename, brace]), false),
             None
         );
+    }
+
+    #[test]
+    fn same_rust_ignores_spaces_between_tokens_but_not_inside_a_string() {
+        assert!(same_rust("f( 1,\n  2 );", "f(1, 2);"));
+        assert!(!same_rust("f(\"a b\");", "f(\"a  b\");"));
     }
 
     /// Renames `name` to `count` in `source` with an edit of each `name` in its generated Rust, as
