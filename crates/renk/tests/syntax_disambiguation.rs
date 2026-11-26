@@ -41,6 +41,24 @@ fn bracket_calls_and_uppercase_paths_are_generic_application() {
 }
 
 #[test]
+fn generic_arguments_with_qualified_paths_lower_as_one_type_list() {
+    // `<T as Tr>` and `as` inside the brackets are types, so `Vec[...]` still becomes `Vec::<...>`.
+    let output = rust(
+        "fn demo(xs: &[u32], i: u8):\n    let items = Vec[<Vec[u8] as IntoIterator>::Item].new()\n    let BITS = xs[i as usize].count_ones()\n    let TABLE = [xs[i as usize] as u8]\n    let rows = TABLE[i as usize].count_ones()\n",
+    );
+    assert!(
+        output.contains("Vec::<<Vec<u8> as IntoIterator>::Item>::new()"),
+        "{output}"
+    );
+    assert!(output.contains("xs[i as usize].count_ones()"), "{output}");
+    assert!(output.contains("[xs[i as usize] as u8]"), "{output}");
+    assert!(
+        output.contains("TABLE[i as usize].count_ones()"),
+        "{output}"
+    );
+}
+
+#[test]
 fn explicit_paths_and_parentheses_bound_dot_inference() {
     let output = rust(
         "fn demo():\n    let length = (TEXT).len()\n    let default_len = Config::DEFAULT.len()\n    let typed = Foo[String]::DEFAULT.len()\n",
