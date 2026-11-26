@@ -136,9 +136,11 @@ enum Sandbox {
 enum Proc {
     /// A new `proc` with only the processes of the step.
     Own,
-    /// An empty read-only tmpfs. The kernel refuses a new `proc` in a user namespace when a
-    /// container masks paths below `/proc`.
-    Hidden,
+    /// The kernel refuses a new `proc` in a user namespace when a container masks paths below
+    /// `/proc`. rustc and the linker read `/proc/self/exe`, so the compile step keeps the `/proc`
+    /// of the server. The compile step runs no submitted code. The run step gets an empty
+    /// read-only tmpfs on `/proc`.
+    Masked,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -191,7 +193,7 @@ pub async fn main() -> std::io::Result<()> {
     let run_deps = run_dependency_dir();
     require_dependency_rlib(&run_deps, "trpl")?;
     let listener = tokio::net::TcpListener::bind(&addr).await?;
-    let state = AppState {
+    let mut state = AppState {
         config: ServerConfig {
             request_timeout: Duration::from_millis(read_u64_env(
                 "RENK_REQUEST_TIMEOUT_MS",
@@ -227,7 +229,7 @@ pub async fn main() -> std::io::Result<()> {
     };
     become_child_subreaper();
     remove_stale_run_dirs(&env::temp_dir(), state.config.run_timeout);
-    log_namespace_support(state.config.sandbox)?;
+    state.config.sandbox = probe_namespaces(state.config.sandbox)?;
     eprintln!("renk-web listening on http://{addr}");
     serve(listener, state).await
 }
@@ -247,30 +249,45 @@ async fn serve(listener: tokio::net::TcpListener, state: AppState) -> std::io::R
         .map_err(std::io::Error::other)
 }
 
-fn log_namespace_support(sandbox: Sandbox) -> std::io::Result<()> {
+/// Runs `rustc --version` in namespaces with a new `proc`. If that fails, runs it as a compile
+/// step and `true` as a run step with `/proc` masked. Logs the result and gives `sandbox` the
+/// first form that worked.
+fn probe_namespaces(sandbox: Sandbox) -> std::io::Result<Sandbox> {
     let dir = temp_run_dir();
     fs::create_dir_all(&dir)?;
-    let options = ChildOptions {
-        timeout: Duration::from_secs(5),
-        sandbox: Sandbox::Namespaces(Proc::Own),
-        max_file_bytes: COMPILE_FILE_SIZE_BYTES,
-        run_step: false,
+    let error = |proc, run_step, command: &str, args: &[&str]| {
+        let options = ChildOptions {
+            timeout: Duration::from_secs(5),
+            sandbox: Sandbox::Namespaces(proc),
+            max_file_bytes: COMPILE_FILE_SIZE_BYTES,
+            run_step,
+        };
+        let probe = run_command(command, args, &dir, options);
+        (probe.status != Some(0)).then(|| probe.stderr.trim().to_string())
     };
-    let probe = run_command("rustc", &["--version"], &dir, options);
+    let masked = || {
+        error(Proc::Masked, false, "rustc", &["--version"])
+            .or_else(|| error(Proc::Masked, true, "true", &[]))
+            .is_none()
+    };
+    let (proc, result) = match error(Proc::Own, false, "rustc", &["--version"]) {
+        None => (Proc::Own, "namespaces work".to_string()),
+        Some(own) if masked() => (
+            Proc::Masked,
+            format!("namespaces work, /proc is hidden ({own})"),
+        ),
+        Some(own) => (Proc::Own, format!("namespaces do not work ({own})")),
+    };
     let _ = fs::remove_dir_all(dir);
     let mode = match sandbox {
         Sandbox::Namespaces(_) => "runs need them",
         Sandbox::Unsandboxed => "RENK_WEB_UNSANDBOXED=1 runs code without them",
     };
-    if probe.status == Some(0) {
-        eprintln!("renk-web: namespaces work, {mode}");
-    } else {
-        eprintln!(
-            "renk-web: namespaces do not work ({}), {mode}",
-            probe.stderr.trim()
-        );
-    }
-    Ok(())
+    eprintln!("renk-web: {result}, {mode}");
+    Ok(match sandbox {
+        Sandbox::Namespaces(_) => Sandbox::Namespaces(proc),
+        Sandbox::Unsandboxed => sandbox,
+    })
 }
 
 fn router(state: AppState) -> Router {
@@ -781,18 +798,22 @@ fn read_limited_utf8(path: &Path, limit: usize) -> (String, bool) {
 fn configure_child_process(command: &mut Command, cwd: &Path, options: ChildOptions) {
     let cpu_seconds = options.timeout.as_secs().saturating_add(1).max(1);
     // Make the strings here: the code between `fork` and `exec` must not allocate.
-    let setup = matches!(options.sandbox, Sandbox::Namespaces(_)).then(|| {
-        let (uid, gid) = unsafe { (libc::getuid(), libc::getgid()) };
-        let path =
-            |path: &Path| CString::new(path.as_os_str().as_encoded_bytes()).unwrap_or_default();
-        NamespaceSetup {
-            uid_map: format!("{uid} {uid} 1"),
-            gid_map: format!("{gid} {gid} 1"),
-            run_dir: path(cwd),
-            temp_dir: path(cwd.parent().unwrap_or(cwd)),
-            max_processes: options.run_step.then_some(RUN_PROCESSES),
+    let setup = match options.sandbox {
+        Sandbox::Namespaces(proc) => {
+            let (uid, gid) = unsafe { (libc::getuid(), libc::getgid()) };
+            let path =
+                |path: &Path| CString::new(path.as_os_str().as_encoded_bytes()).unwrap_or_default();
+            Some(NamespaceSetup {
+                uid_map: format!("{uid} {uid} 1"),
+                gid_map: format!("{gid} {gid} 1"),
+                run_dir: path(cwd),
+                temp_dir: path(cwd.parent().unwrap_or(cwd)),
+                proc,
+                run_step: options.run_step,
+            })
         }
-    });
+        Sandbox::Unsandboxed => None,
+    };
     unsafe {
         command.pre_exec(move || {
             create_child_process_group()?;
@@ -830,9 +851,8 @@ struct NamespaceSetup {
     run_dir: CString,
     /// The directory that holds the run directories, usually `/tmp`.
     temp_dir: CString,
-    /// `RLIMIT_NPROC` counts the processes of the user in the current user namespace, so it is
-    /// set only after `unshare`. Outside, it would count every process of the server user.
-    max_processes: Option<u64>,
+    proc: Proc,
+    run_step: bool,
 }
 
 /// Runs between `fork` and `exec`, so it makes only async-signal-safe calls.
@@ -848,11 +868,13 @@ fn enter_namespaces(setup: &NamespaceSetup) -> std::io::Result<()> {
     write_proc_file("setgroups", c"/proc/self/setgroups", b"deny")?;
     write_proc_file("uid_map", c"/proc/self/uid_map", setup.uid_map.as_bytes())?;
     write_proc_file("gid_map", c"/proc/self/gid_map", setup.gid_map.as_bytes())?;
-    if let Some(processes) = setup.max_processes {
-        set_limit(libc::RLIMIT_NPROC, processes, processes)?;
+    // `RLIMIT_NPROC` counts the processes of the user in the current user namespace, so set it
+    // only after `unshare`. Outside, it would count every process of the server user.
+    if setup.run_step {
+        set_limit(libc::RLIMIT_NPROC, RUN_PROCESSES, RUN_PROCESSES)?;
     }
     hide_other_run_dirs(setup)?;
-    fork_pid_one()
+    fork_pid_one(setup)
 }
 
 /// Mounts a new tmpfs over the directory of the run directories and binds the run directory of
@@ -898,7 +920,7 @@ fn mount_step(
 /// outside the namespace, waits for PID 1 and exits with its status. When the server kills this
 /// process, `PR_SET_PDEATHSIG` kills PID 1, and the kernel then kills the whole namespace.
 #[cfg(target_os = "linux")]
-fn fork_pid_one() -> std::io::Result<()> {
+fn fork_pid_one(setup: &NamespaceSetup) -> std::io::Result<()> {
     let parent = unsafe { libc::syscall(libc::SYS_pidfd_open, libc::getpid(), 0) } as libc::c_int;
     sandbox_step("pidfd_open", parent >= 0)?;
     let pid = unsafe { libc::fork() };
@@ -917,9 +939,24 @@ fn fork_pid_one() -> std::io::Result<()> {
             unsafe { libc::_exit(1) };
         }
         unsafe { libc::close(parent) };
-        // A new `proc` shows the processes of the new PID namespace only.
         let flags = libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOEXEC;
-        return mount_step("mount /proc", Some(c"proc"), c"/proc", Some(c"proc"), flags);
+        return match (setup.proc, setup.run_step) {
+            // A new `proc` shows the processes of the new PID namespace only.
+            (Proc::Own, _) => {
+                mount_step("mount /proc", Some(c"proc"), c"/proc", Some(c"proc"), flags)
+            }
+            (Proc::Masked, true) => {
+                let flags = flags | libc::MS_RDONLY;
+                mount_step(
+                    "hide /proc",
+                    Some(c"tmpfs"),
+                    c"/proc",
+                    Some(c"tmpfs"),
+                    flags,
+                )
+            }
+            (Proc::Masked, false) => Ok(()),
+        };
     }
     // `spawn` waits until every copy of its `exec` error pipe is closed. Only PID 1 calls
     // `exec`, so close the copy of this process.
@@ -1593,13 +1630,13 @@ mod tests {
         assert_eq!(body["stdout"], json!("true [\"1\"]\n"), "{body}");
     }
 
-    /// Hides `/proc` as in a container that masks it. rustc, the linker and the program must
-    /// still work, and the program must find `/proc` empty.
+    /// Masks `/proc` as for a container that masks it. The program must compile, run, print and
+    /// find no entry in `/proc`.
     #[tokio::test]
     #[ignore = "needs unprivileged user namespaces"]
     async fn runs_a_program_with_proc_hidden() {
         let body = run_in_namespaces(
-            Proc::Hidden,
+            Proc::Masked,
             r#"fn main() {
                 println!("hello {}", std::fs::read_dir("/proc").unwrap().count());
             }"#,
