@@ -1,6 +1,7 @@
 use std::{
     env, fs,
     io::Read,
+    net::SocketAddr,
     path::{Component, Path, PathBuf},
     process::{Command, Stdio},
     sync::atomic::{AtomicU64, AtomicUsize, Ordering},
@@ -17,7 +18,7 @@ use axum::{
     extract::{DefaultBodyLimit, State},
     http::{
         HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri,
-        header::{CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE},
+        header::{CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE, HOST, ORIGIN},
     },
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -56,6 +57,8 @@ struct AppState {
     config: ServerConfig,
     dist: PathBuf,
     run_deps: PathBuf,
+    /// `Host` header values that `/api/run` accepts.
+    hosts: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -102,6 +105,7 @@ async fn main() -> std::io::Result<()> {
     let addr = env::var("RENK_WEB_ADDR").unwrap_or_else(|_| DEFAULT_ADDR.to_string());
     let run_deps = run_dependency_dir();
     require_dependency_rlib(&run_deps, "trpl")?;
+    let listener = tokio::net::TcpListener::bind(&addr).await?;
     let state = AppState {
         config: ServerConfig {
             request_timeout: Duration::from_millis(read_u64_env(
@@ -124,8 +128,11 @@ async fn main() -> std::io::Result<()> {
         },
         dist: PathBuf::from(env::var("RENK_WEB_DIST").unwrap_or_else(|_| DEFAULT_DIST.to_string())),
         run_deps,
+        hosts: allowed_hosts(
+            listener.local_addr()?,
+            &env::var("RENK_WEB_HOSTS").unwrap_or_default(),
+        ),
     };
-    let listener = tokio::net::TcpListener::bind(&addr).await?;
     eprintln!("renk-web listening on http://{addr}");
     axum::serve(listener, router(state))
         .with_graceful_shutdown(shutdown_signal())
@@ -202,7 +209,57 @@ async fn limit_active_requests(
         })
 }
 
-async fn handle_run_request(State(state): State<AppState>, body: Bytes) -> Response {
+/// Accept `/api/run` only as JSON from a page of this server. A page on any site can send a
+/// `text/plain` POST here. After DNS rebinding, the browser sends the attacker's domain as `Host`.
+fn is_same_site_json(headers: &HeaderMap, hosts: &[String]) -> bool {
+    let json = headers
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .is_some_and(|value| value.trim().eq_ignore_ascii_case("application/json"));
+    let Some(host) = headers.get(HOST).and_then(|value| value.to_str().ok()) else {
+        return false;
+    };
+    let origin_matches = headers.get(ORIGIN).is_none_or(|origin| {
+        origin
+            .to_str()
+            .ok()
+            .and_then(|origin| origin.split_once("://"))
+            .is_some_and(|(_, authority)| authority.eq_ignore_ascii_case(host))
+    });
+    json && origin_matches
+        && hosts
+            .iter()
+            .any(|allowed| allowed.eq_ignore_ascii_case(host))
+}
+
+fn allowed_hosts(listen: SocketAddr, extra: &str) -> Vec<String> {
+    let port = listen.port();
+    [
+        listen.to_string(),
+        format!("localhost:{port}"),
+        format!("127.0.0.1:{port}"),
+        format!("[::1]:{port}"),
+    ]
+    .into_iter()
+    .chain(
+        extra
+            .split(',')
+            .map(str::trim)
+            .filter(|host| !host.is_empty())
+            .map(str::to_string),
+    )
+    .collect()
+}
+
+async fn handle_run_request(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    if !is_same_site_json(&headers, &state.hosts) {
+        return json_response(StatusCode::FORBIDDEN, json!({ "error": "forbidden" }));
+    }
     if !try_run_rate_limit(state.config.run_rate_limit_per_minute) {
         return json_response(
             StatusCode::TOO_MANY_REQUESTS,
