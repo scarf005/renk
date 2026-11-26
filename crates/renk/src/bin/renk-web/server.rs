@@ -59,6 +59,10 @@ const CHILD_OPEN_FILES: u64 = 64;
 const COMPILE_FILE_SIZE_BYTES: u64 = COMPILE_FILE_SIZE_MIB * BYTES_PER_MIB;
 /// One byte over the output limit, so the server can see that the output was cut.
 const RUN_FILE_SIZE_BYTES: u64 = MAX_OUTPUT_BYTES as u64 + 1;
+/// A program that reserves more memory than this gets an allocation error.
+const RUN_ADDRESS_SPACE_BYTES: u64 = 1024 * BYTES_PER_MIB;
+/// The processes and threads of one run, the program included.
+const RUN_PROCESSES: u64 = 32;
 /// rustc finds its toolchain through these. The submitted program gets the same variables.
 const CHILD_ENV: [&str; 4] = ["PATH", "RUSTUP_HOME", "RUSTUP_TOOLCHAIN", "LANG"];
 
@@ -112,6 +116,9 @@ struct ChildOptions {
     /// The size limit of each file that the step writes. A write past it ends the step with
     /// `SIGXFSZ`.
     max_file_bytes: u64,
+    /// Limit the address space and, in namespaces, the processes of the step. The compile step
+    /// does not get these limits.
+    run_step: bool,
 }
 
 #[derive(Debug)]
@@ -204,6 +211,7 @@ fn log_namespace_support(sandbox: Sandbox) -> std::io::Result<()> {
         timeout: Duration::from_secs(5),
         sandbox: Sandbox::Namespaces,
         max_file_bytes: COMPILE_FILE_SIZE_BYTES,
+        run_step: false,
     };
     let probe = run_command("rustc", &["--version"], &dir, options);
     let _ = fs::remove_dir_all(dir);
@@ -409,6 +417,7 @@ async fn handle_run_request(
         timeout: state.config.run_timeout,
         sandbox: state.config.sandbox,
         max_file_bytes: RUN_FILE_SIZE_BYTES,
+        run_step: true,
     };
     let run_deps = state.run_deps.clone();
     // Axum drops the handler when the client goes away or the request times out. The job keeps
@@ -495,6 +504,7 @@ fn compile_and_run_rust(
     let compile_args = compile_args.iter().map(String::as_str).collect::<Vec<_>>();
     let compile_options = ChildOptions {
         max_file_bytes: COMPILE_FILE_SIZE_BYTES,
+        run_step: false,
         ..options
     };
     let compile = run_command("rustc", &compile_args, &dir, compile_options);
@@ -753,6 +763,7 @@ fn configure_child_process(command: &mut Command, cwd: &Path, options: ChildOpti
             gid_map: format!("{gid} {gid} 1"),
             run_dir: path(cwd),
             temp_dir: path(cwd.parent().unwrap_or(cwd)),
+            max_processes: options.run_step.then_some(RUN_PROCESSES),
         }
     });
     unsafe {
@@ -763,7 +774,7 @@ fn configure_child_process(command: &mut Command, cwd: &Path, options: ChildOpti
                 libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) == 0,
             )?;
             // Set the limits before `enter_namespaces` forks, so both processes get them.
-            apply_child_limits(cpu_seconds, options.max_file_bytes)?;
+            apply_child_limits(cpu_seconds, options)?;
             match &setup {
                 Some(setup) => enter_namespaces(setup),
                 None => Ok(()),
@@ -792,6 +803,9 @@ struct NamespaceSetup {
     run_dir: CString,
     /// The directory that holds the run directories, usually `/tmp`.
     temp_dir: CString,
+    /// `RLIMIT_NPROC` counts the processes of the user in the current user namespace, so it is
+    /// set only after `unshare`. Outside, it would count every process of the server user.
+    max_processes: Option<u64>,
 }
 
 /// Runs between `fork` and `exec`, so it makes only async-signal-safe calls.
@@ -807,6 +821,9 @@ fn enter_namespaces(setup: &NamespaceSetup) -> std::io::Result<()> {
     write_proc_file("setgroups", c"/proc/self/setgroups", b"deny")?;
     write_proc_file("uid_map", c"/proc/self/uid_map", setup.uid_map.as_bytes())?;
     write_proc_file("gid_map", c"/proc/self/gid_map", setup.gid_map.as_bytes())?;
+    if let Some(processes) = setup.max_processes {
+        set_limit(libc::RLIMIT_NPROC, processes, processes)?;
+    }
     hide_other_run_dirs(setup)?;
     fork_pid_one()
 }
@@ -920,10 +937,14 @@ fn sandbox_step(step: &str, succeeded: bool) -> std::io::Result<()> {
 }
 
 #[cfg(unix)]
-fn apply_child_limits(cpu_seconds: u64, max_file_bytes: u64) -> std::io::Result<()> {
+fn apply_child_limits(cpu_seconds: u64, options: ChildOptions) -> std::io::Result<()> {
     set_limit(libc::RLIMIT_CPU, cpu_seconds, cpu_seconds)?;
     set_limit(libc::RLIMIT_CORE, 0, 0)?;
-    set_limit(libc::RLIMIT_FSIZE, max_file_bytes, max_file_bytes)?;
+    let (file_bytes, address_bytes) = (options.max_file_bytes, RUN_ADDRESS_SPACE_BYTES);
+    set_limit(libc::RLIMIT_FSIZE, file_bytes, file_bytes)?;
+    if options.run_step {
+        set_limit(libc::RLIMIT_AS, address_bytes, address_bytes)?;
+    }
     set_limit(libc::RLIMIT_NOFILE, CHILD_OPEN_FILES, CHILD_OPEN_FILES)
 }
 
@@ -1194,6 +1215,7 @@ mod tests {
             timeout,
             sandbox: Sandbox::Unsandboxed,
             max_file_bytes: RUN_FILE_SIZE_BYTES,
+            run_step: true,
         }
     }
 
