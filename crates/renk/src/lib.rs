@@ -1,5 +1,7 @@
 use std::{cell::RefCell, fmt};
 
+#[cfg(not(target_arch = "wasm32"))]
+pub mod project;
 mod rust_layout;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod script;
