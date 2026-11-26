@@ -230,6 +230,19 @@ fn source_tree_columns_are_where_the_source_text_starts() {
 }
 
 #[test]
+fn line_one_columns_count_a_byte_order_mark() {
+    // The mark is one UTF-16 unit at the start of line 1, which puts `if c:` at column 24.
+    let source = "\u{feff}fn g(c: bool) -> i32 = if c: // if c:\n    1\nelse:\n    2\n";
+    let item = &transpile(source).unwrap().source_tree[0];
+    assert_eq!((item.source_line, item.source_column), (1, 1));
+    let branch = &item.children[0];
+    assert_eq!(
+        (branch.source_line, branch.source_text.as_str(), branch.source_column),
+        (1, "if c:", 24)
+    );
+}
+
+#[test]
 fn rust_round_trips_reach_a_fixed_point_after_one_pass() {
     let round_trip = |rust: &str| transpile(&rust_to_renk(rust).unwrap()).unwrap().rust;
     let rust = rust_sources().into_iter().chain(
@@ -250,6 +263,7 @@ fn malformed_sources_fail_at_the_offending_line() {
         ("fn main():\n    let x = 1\n      let y = 2\n", 2),
         ("struct A:\n    x: i32\n        y: i32\n", 2),
         ("fn f() = g(x):\n    1\n", 1),
+        ("\u{feff}fn f() = g(x):\n    1\n", 1),
         ("fn main():\n    let x = (\n", 2),
         ("fn main():\n    let s = \"open\n", 2),
     ];
