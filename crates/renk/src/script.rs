@@ -605,7 +605,8 @@ mod tests {
         let second = script_cache_path(root, Path::new("/b/tool.rk"));
 
         assert_ne!(first, second);
-        assert_eq!(first.file_name().unwrap(), "tool.rs");
+        // FNV-1a of the path bytes, which stays the same across Rust releases.
+        assert_eq!(first, Path::new("/cache/ed765c00339e0889/tool.rs"));
         assert!(first.starts_with("/cache"));
         assert_eq!(first, script_cache_path(root, Path::new("/a/tool.rk")));
         let dotted = script_cache_path(root, Path::new("/a/setup-itch.io.rk"));
