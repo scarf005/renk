@@ -415,7 +415,7 @@ pub fn wrap_script_statements(
     let in_literal = lines_ending_in_literal(source);
     let starts_code = |index: usize| index == 0 || !in_literal[index - 1];
     let declares_main = |line: &str| {
-        let line = line.strip_prefix("pub ").unwrap_or(line);
+        let line = without_visibility(line);
         let line = line.strip_prefix("async ").unwrap_or(line);
         line.strip_prefix("fn main")
             .is_some_and(|rest| rest.trim_start().starts_with('('))
@@ -1182,7 +1182,6 @@ fn drop_semicolon(line: &str) -> Option<String> {
 /// paths whose head Renk lowers back, that is, any head but `self` and constants.
 fn dot_rust_paths(line: &str) -> Option<String> {
     let code = line.trim_start();
-    let code = code.strip_prefix("pub ").unwrap_or(code);
     let any_head = is_use_or_extern_crate(code)
         || is_impl_or_mod_item(code)
         || (is_function(code) && code.ends_with(':'));
@@ -2931,11 +2930,7 @@ fn opens_struct_literal(text: &str) -> bool {
         .rfind(|&(_, character)| !is_ident_continue(character) && character != ':')
         .map_or(0, |(at, character)| at + character.len_utf8());
     let name = head[path_start..].rsplit("::").next().unwrap_or_default();
-    let header = text.lines().next().unwrap_or_default().trim_start();
-    let header = match header.strip_prefix("pub(") {
-        Some(rest) => rest.split_once(") ").map_or(rest, |(_, item)| item),
-        None => header.strip_prefix("pub ").unwrap_or(header),
-    };
+    let header = without_visibility(text.lines().next().unwrap_or_default().trim_start());
     name.starts_with(|character: char| character.is_ascii_uppercase())
         && !head[..path_start].trim_end().ends_with("->")
         && !ends_in_condition(&head[..path_start])
@@ -7720,20 +7715,15 @@ fn without_attributes(mut text: &str) -> &str {
 /// Whether `text` starts a function item after its qualifiers, as in
 /// `pub(crate) const unsafe extern "C" fn`; `let q = quote! { fn f() {} }` is not one.
 fn is_function(text: &str) -> bool {
-    let mut rest = without_attributes(text);
+    let mut rest = without_visibility(without_attributes(text));
     loop {
         if rest.starts_with("fn ") {
             return true;
         }
-        let qualified = match rest.strip_prefix("pub(") {
-            Some(scope) => scope.find(')').map(|at| &scope[at + 1..]),
-            None => [
-                "pub", "const", "async", "unsafe", "safe", "default", "extern",
-            ]
+        let qualified = ["const", "async", "unsafe", "safe", "default", "extern"]
             .iter()
             .find_map(|qualifier| rest.strip_prefix(qualifier))
-            .filter(|after| after.starts_with(' ')),
-        };
+            .filter(|after| after.starts_with(' '));
         let Some(after) = qualified else {
             return false;
         };
@@ -7872,14 +7862,12 @@ fn is_inline_if_expression(text: &str) -> bool {
     !rest[then_index + "then".len()..].trim().is_empty()
 }
 
+/// Whether `text` starts with `keyword` after any visibility, as in `pub(in crate.a) mod m`.
 fn starts_item(text: &str, keyword: &str) -> bool {
+    let text = without_visibility(text);
     text == keyword
-        || text.starts_with(&format!("{} ", keyword))
-        || text.starts_with(&format!("{}[", keyword))
-        || text.starts_with(&format!("pub {} ", keyword))
-        || text.starts_with(&format!("pub {}[", keyword))
-        || text.starts_with(&format!("pub(crate) {} ", keyword))
-        || text.starts_with(&format!("pub(crate) {}[", keyword))
+        || text.starts_with(&format!("{keyword} "))
+        || text.starts_with(&format!("{keyword}["))
 }
 
 fn is_let(text: &str) -> bool {
