@@ -251,7 +251,8 @@ fn transpile_lines(source: &str) -> Result<TranspileOutput, TranspileError> {
             .filter(|name| !modules.contains(name))
             .collect(),
     );
-    emit_nodes(&nodes, Context::Root, &mut emitter);
+    // A file, like an `impl` or `mod` body, has no tail value, so its last `name!(...)` gets a `;`.
+    emit_sequence(&nodes, Context::Root, false, &mut emitter);
     for (line, comment) in &emitter.comments {
         emitter.lines[*line].push_str(comment);
     }
@@ -4488,7 +4489,8 @@ fn emit_general(node: &Node, context: Context, is_last: bool, emitter: &mut Emit
             format!("{}{};", spaces(node.indent), lower_signature(text)),
         );
     } else if is_impl_or_mod_item(block_text) {
-        emit_braced_item(node, Context::Block, emitter, lower_signature(block_text));
+        let header = lower_signature(block_text);
+        emit_braced_item_statement(node, Context::Block, emitter, header, false, false);
     } else {
         let (text, has_explicit_semicolon) = strip_explicit_semicolon(text);
         let (block_text, _) = strip_block_marker(text);
