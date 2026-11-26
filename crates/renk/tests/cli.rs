@@ -560,13 +560,100 @@ fn cargo_wrapper_maps_only_its_own_files_in_a_workspace() {
     let stderr = text(&output.stderr);
     assert_eq!(output.status.code(), Some(0), "{stderr}");
     assert!(stderr.contains("--> src/main.rs:2:9\n"), "{stderr}");
-    assert!(stderr.contains("--> src/main.rk:2:9\n"), "{stderr}");
+    assert!(stderr.contains("--> b/src/main.rk:2:9\n"), "{stderr}");
 
     let output = cargo_wrapper(&member, &["run", "-q", "-p", "root"]);
     let stderr = text(&output.stderr);
     assert_eq!(output.status.code(), Some(101), "{stderr}");
     assert!(stderr.contains("panicked at src/main.rs:4:"), "{stderr}");
     assert!(!stderr.contains("main.rk"), "{stderr}");
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Writes each `(path, text)` under `dir`.
+fn write_files(dir: &Path, files: &[(&str, &str)]) {
+    for (path, text) in files {
+        let path = dir.join(path);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, text).unwrap();
+    }
+}
+
+#[test]
+fn cargo_wrapper_transpiles_every_package_cargo_can_build() {
+    let dir = temp_dir("cargo-packages");
+    let package = |name: &str, dependencies: &str| {
+        format!(
+            "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\n{dependencies}"
+        )
+    };
+    let app = package(
+        "app",
+        "lib1 = { path = \"../crates/lib1\" }\noutside = { path = \"../../outside\" }\n",
+    );
+    let main = |word: &str| {
+        format!("fn main():\n    println!(\"{word} {{lib1.NAME}} {{outside.NAME}}\")\n")
+    };
+    write_files(
+        &dir,
+        &[
+            (
+                "ws/Cargo.toml",
+                "[workspace]\nmembers = [\"app\", \"crates/lib1\"]\nresolver = \"3\"\n",
+            ),
+            ("ws/app/Cargo.toml", &app),
+            ("ws/app/src/main.rk", &main("one")),
+            ("ws/crates/lib1/Cargo.toml", &package("lib1", "")),
+            (
+                "ws/crates/lib1/src/lib.rk",
+                "pub const NAME: &str = \"lib1\"\n",
+            ),
+            ("outside/Cargo.toml", &package("outside", "")),
+            ("outside/src/lib.rk", "pub const NAME: &str = \"outside\"\n"),
+        ],
+    );
+    let run = |cwd: &str, args: &[&str]| {
+        let output = Command::new(env!("CARGO_BIN_EXE_renk"))
+            .args(args)
+            .current_dir(dir.join(cwd))
+            .env("CARGO_TARGET_DIR", dir.join("target"))
+            .output()
+            .unwrap();
+        (
+            output.status.code(),
+            text(&output.stdout),
+            text(&output.stderr),
+        )
+    };
+
+    let (code, _, stderr) = run("ws", &["build", "-q"]);
+    assert_eq!(code, Some(0), "{stderr}");
+    fs::write(dir.join("ws/app/src/main.rk"), main("two")).unwrap();
+    let (code, stdout, stderr) = run("ws/app/src", &["run", "-q"]);
+    assert_eq!(
+        (code, stdout.as_str()),
+        (Some(0), "two lib1 outside\n"),
+        "{stderr}"
+    );
+    fs::write(dir.join("ws/app/src/main.rk"), main("three")).unwrap();
+    let (code, stdout, stderr) = run(".", &["run", "-q", "--manifest-path", "ws/app/Cargo.toml"]);
+    assert_eq!(
+        (code, stdout.as_str()),
+        (Some(0), "three lib1 outside\n"),
+        "{stderr}"
+    );
+
+    fs::write(
+        dir.join("ws/crates/lib1/src/lib.rk"),
+        "pub const NAME: &str = 1\n",
+    )
+    .unwrap();
+    let (code, _, stderr) = run("ws/app", &["check"]);
+    assert_eq!(code, Some(101), "{stderr}");
+    assert!(
+        stderr.contains("--> crates/lib1/src/lib.rk:1:24\n"),
+        "{stderr}"
+    );
     let _ = fs::remove_dir_all(dir);
 }
 
