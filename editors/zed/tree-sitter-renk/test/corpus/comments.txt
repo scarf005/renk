@@ -59,3 +59,16 @@ a / b /= c
   (identifier)
   (operator)
   (identifier))
+
+========================================
+slash before raw string
+========================================
+
+a /r"x"
+
+----------------------------------------
+
+(source_file
+  (identifier)
+  (operator)
+  (raw_string))
