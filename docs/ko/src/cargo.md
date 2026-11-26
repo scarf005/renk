@@ -2,8 +2,9 @@
 
 Cargo가 `.rs` 파일을 기대하는 자리에 `.rk` 파일을 둔다. 다음 명령은 `src`, `examples`, `tests`,
 `benches` 아래의 모든 `.rk` 파일과 `build.rk`를 각각 옆의 `.rs` 파일로 트랜스파일한 뒤 같은
-Cargo 명령을 실행한다. 워크스페이스 멤버와 `path` 의존성까지, Cargo가 빌드할 수 있는 모든
-패키지가 대상이다.
+Cargo 명령을 실행한다. 대상은 루트 패키지, `workspace.exclude`에 걸리지 않은 `workspace.members`,
+그 패키지들의 `path` 의존성이다. `vendor/dep`나 `tests/fixtures/demo`처럼 루트 아래에 있어도
+그 외의 패키지는 건드리지 않는다.
 
 ```sh
 renk build

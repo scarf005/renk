@@ -18,7 +18,8 @@ const SOURCE_ROOTS: [&str; 5] = ["build.rk", "src", "examples", "tests", "benche
 pub struct Workspace {
     /// The directory that rustc runs in. rustc names the files of packages under it relative to it.
     pub root: PathBuf,
-    /// Every package under `root`, and every package that a `path` dependency names outside it.
+    /// The root package, the `workspace.members` that `workspace.exclude` keeps, and every package
+    /// that a `path` dependency of those names, inside or outside `root`.
     pub packages: Vec<PathBuf>,
 }
 
@@ -44,18 +45,36 @@ pub fn workspace(start: &Path) -> Option<Workspace> {
             package
                 .ancestors()
                 .find(|dir| {
-                    manifest_at(dir).is_some_and(|document| document.contains_key("workspace"))
+                    manifest_at(dir).is_some_and(|document| {
+                        document.contains_key("workspace")
+                            && !excluded(dir, &document)
+                                .iter()
+                                .any(|path| package.starts_with(path))
+                    })
                 })
                 .map(Path::to_path_buf)
         })
         .unwrap_or(package);
 
     let mut queue = Vec::new();
-    let _ = walk(&root, &mut |path| {
-        if path.file_name().is_some_and(|name| name == "Cargo.toml") {
-            queue.extend(path.parent().map(Path::to_path_buf));
+    if let Some(document) = manifest_at(&root) {
+        queue.push(root.clone());
+        let excluded = excluded(&root, &document);
+        for pattern in workspace_paths(&document, "members") {
+            let parts = pattern
+                .split('/')
+                .filter(|part| !matches!(*part, "" | "."))
+                .collect::<Vec<_>>();
+            let mut found = Vec::new();
+            expand(&root, &parts, &mut found);
+            queue.extend(
+                found
+                    .into_iter()
+                    .filter_map(|dir| fs::canonicalize(dir).ok())
+                    .filter(|dir| !excluded.iter().any(|path| dir.starts_with(path))),
+            );
         }
-    });
+    }
     let mut seen = queue.clone();
     let mut packages = Vec::new();
     // A path dependency can name a package that has path dependencies of its own.
@@ -67,7 +86,7 @@ pub fn workspace(start: &Path) -> Option<Workspace> {
             let found = path
                 .as_str()
                 .and_then(|path| fs::canonicalize(dir.join(path)).ok())
-                .filter(|path| !path.starts_with(&root) && !seen.contains(path));
+                .filter(|path| !seen.contains(path));
             if let Some(path) = found {
                 seen.push(path.clone());
                 queue.push(path);
@@ -78,6 +97,65 @@ pub fn workspace(start: &Path) -> Option<Workspace> {
         }
     }
     Some(Workspace { root, packages })
+}
+
+/// The strings of the array `workspace.<key>` in `document`.
+fn workspace_paths<'a>(document: &'a DocumentMut, key: &str) -> impl Iterator<Item = &'a str> {
+    document
+        .get("workspace")
+        .and_then(|workspace| workspace.get(key))
+        .and_then(|paths| paths.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|path| path.as_str())
+}
+
+/// The `workspace.exclude` paths of the manifest `document` in `dir`.
+fn excluded(dir: &Path, document: &DocumentMut) -> Vec<PathBuf> {
+    workspace_paths(document, "exclude")
+        .map(|path| dir.join(path))
+        .collect()
+}
+
+/// Pushes to `found` each directory below `dir` that the path components `parts` name. A
+/// component can hold `*` and `?`, and a `**` component stands for any number of directories.
+fn expand(dir: &Path, parts: &[&str], found: &mut Vec<PathBuf>) {
+    let Some((part, rest)) = parts.split_first() else {
+        found.push(dir.to_path_buf());
+        return;
+    };
+    if !part.contains(['*', '?']) {
+        return expand(&dir.join(part), rest, found);
+    }
+    if *part == "**" {
+        expand(dir, rest, found);
+    }
+    let pattern = part.chars().collect::<Vec<_>>();
+    for entry in fs::read_dir(dir).into_iter().flatten().flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str().filter(|name| !skipped(name)) else {
+            continue;
+        };
+        if !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            continue;
+        }
+        if *part == "**" {
+            expand(&entry.path(), parts, found);
+        } else if wildcard(&pattern, &name.chars().collect::<Vec<_>>()) {
+            expand(&entry.path(), rest, found);
+        }
+    }
+}
+
+/// Whether `name` matches `pattern`, where `*` stands for any characters and `?` for one.
+fn wildcard(pattern: &[char], name: &[char]) -> bool {
+    match pattern.split_first() {
+        None => name.is_empty(),
+        Some(('*', rest)) => (0..=name.len()).any(|skip| wildcard(rest, &name[skip..])),
+        Some((&c, rest)) => {
+            name.first().is_some_and(|&first| c == '?' || c == first) && wildcard(rest, &name[1..])
+        }
+    }
 }
 
 /// The manifest in `dir`, if it is valid TOML.
@@ -129,30 +207,29 @@ fn visit_paths(dependencies: &mut dyn TableLike, visit: &mut dyn FnMut(&mut Valu
     }
 }
 
-/// Calls `visit` with each file under `dir`. It skips `target`, `node_modules`, and the
-/// directories whose names start with `.`.
+/// Whether `walk` skips the directory `name`.
+fn skipped(name: &str) -> bool {
+    name.starts_with('.') || name == "target" || name == "node_modules"
+}
+
+/// Calls `visit` with each file under `dir`. It skips `target`, `node_modules`, the directories
+/// whose names start with `.`, and symlinks to directories.
 fn walk(dir: &Path, visit: &mut dyn FnMut(&Path)) -> io::Result<()> {
     for entry in fs::read_dir(dir)? {
-        let path = entry?.path();
-        let skipped = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| {
-                name.starts_with('.') || name == "target" || name == "node_modules"
-            });
-        if path.is_dir() {
-            if !skipped {
+        let entry = entry?;
+        let path = entry.path();
+        if entry.file_type()?.is_dir() {
+            if !skipped(&entry.file_name().to_string_lossy()) {
                 walk(&path, visit)?;
             }
-        } else {
+        } else if !path.is_dir() {
             visit(&path);
         }
     }
     Ok(())
 }
 
-/// The `.rk` files under `dir` in sorted order. It skips `target`, `node_modules`, and the
-/// directories whose names start with `.`.
+/// The `.rk` files under `dir` in sorted order, found as `walk` does.
 pub fn renk_files(dir: &Path) -> io::Result<Vec<PathBuf>> {
     let mut files = Vec::new();
     walk(dir, &mut |path| {
@@ -164,15 +241,24 @@ pub fn renk_files(dir: &Path) -> io::Result<Vec<PathBuf>> {
     Ok(files)
 }
 
-/// The `.rk` files in the source directories of `package`, and its `build.rk`. It deletes each
-/// generated `.rs` file there that has no `.rk` file with the same stem beside it.
+/// The `.rk` files in the source directories of `package`, and its `build.rk`, but not those of
+/// a package nested in them. It deletes each generated `.rs` file there that has no `.rk` file
+/// with the same stem beside it.
 pub fn sources(package: &Path) -> io::Result<Vec<PathBuf>> {
     let mut sources = Vec::new();
     let mut rust = Vec::new();
-    let mut visit = |path: &Path| match path.extension().and_then(|extension| extension.to_str()) {
-        Some("rk") => sources.push(path.to_path_buf()),
-        Some("rs") => rust.push(path.to_path_buf()),
-        _ => {}
+    let mut visit = |path: &Path| {
+        // A directory with its own manifest is another package, such as `tests/fixtures/demo`.
+        let nested = path
+            .ancestors()
+            .skip(1)
+            .take_while(|dir| *dir != package)
+            .any(|dir| dir.join("Cargo.toml").is_file());
+        match path.extension().and_then(|extension| extension.to_str()) {
+            Some("rk") if !nested => sources.push(path.to_path_buf()),
+            Some("rs") if !nested => rust.push(path.to_path_buf()),
+            _ => {}
+        }
     };
     for root in SOURCE_ROOTS.map(|root| package.join(root)) {
         if root.is_dir() {

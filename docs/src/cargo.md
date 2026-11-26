@@ -2,8 +2,9 @@
 
 Put `.rk` files where Cargo expects `.rs` files. These commands transpile every `.rk` file
 under `src`, `examples`, `tests`, and `benches`, plus `build.rk`, to a `.rs` file beside it,
-then run the same Cargo command. That covers every package Cargo can build: the workspace
-members and the `path` dependencies.
+then run the same Cargo command. That covers the root package, the `workspace.members`
+that `workspace.exclude` keeps, and the `path` dependencies of those packages. Other packages
+under the root, such as `vendor/dep` or `tests/fixtures/demo`, are left alone.
 
 ```sh
 renk build
