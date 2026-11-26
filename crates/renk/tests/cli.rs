@@ -152,7 +152,9 @@ fn refuses_to_write_the_output_of_transpile_and_from_rust_over_the_input() {
 fn reports_errors_on_stderr_with_exit_code_one() {
     let dir = temp_dir("errors");
     fs::write(dir.join("bad.rk"), "fn main():\n\tx\n").unwrap();
-    let cases: [(&[&str], i32, &str); 9] = [
+    fs::write(dir.join("bad.rs"), "fn main( {\n    let x = ;\n}\n").unwrap();
+    fs::write(dir.join("open.rs"), "fn main() {\n    let s = \"open;\n}\n").unwrap();
+    let cases: [(&[&str], i32, &str); 11] = [
         (
             &["transpile", "bad.rk"],
             1,
@@ -160,6 +162,9 @@ fn reports_errors_on_stderr_with_exit_code_one() {
         ),
         (&["transpile", "missing.rk"], 1, "renk: missing.rk: "),
         (&["from-rust", "missing.rs"], 1, "renk: missing.rs: "),
+        // The first syntax error, at the `{` that `fn main(` does not expect.
+        (&["from-rust", "bad.rs"], 1, "renk: bad.rs:1:10: "),
+        (&["from-rust", "open.rs"], 1, "renk: open.rs:2:13: "),
         (
             &["missing.rk"],
             1,
