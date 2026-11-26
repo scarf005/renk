@@ -29,6 +29,23 @@ fn long_groups_convert_in_linear_time() {
 }
 
 #[test]
+fn long_tables_of_raw_strings_convert_in_linear_time() {
+    let _serial = SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let convert = |rows: usize| {
+        let rows = "    (r#\"a\"#, r\"b\"),\n".repeat(rows);
+        let rust = format!("pub static TABLE: [(&str, &str); 2] = [\n{rows}];\n");
+        let start = std::time::Instant::now();
+        transpile(&rust_to_renk(&rust).unwrap()).unwrap();
+        start.elapsed()
+    };
+    let (short, long) = (fastest(|| convert(500)), fastest(|| convert(2_000)));
+    // Four times the rows take about four times as long, not sixteen.
+    assert!(long < short * 8, "{short:?} {long:?}");
+}
+
+#[test]
 fn long_block_argument_chains_convert_in_linear_time() {
     let _serial = SERIAL
         .lock()
