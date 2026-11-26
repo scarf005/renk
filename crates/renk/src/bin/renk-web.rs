@@ -1529,6 +1529,16 @@ mod tests {
         let _ = fs::remove_dir_all(dir);
     }
 
+    #[test]
+    fn default_run_deps_match_the_image() {
+        let containerfile = include_str!("../../../../Containerfile");
+        let line = format!("RENK_RUN_DEPS={DEFAULT_RUN_DEPS} ");
+        assert!(
+            containerfile.contains(&line),
+            "no `{line}` in the Containerfile"
+        );
+    }
+
     #[tokio::test]
     async fn static_files_are_served_inside_dist_only() {
         let dist = temp_dir("static");
@@ -1558,6 +1568,7 @@ mod tests {
             "/../renk-web-secret.txt",
             "/assets/../../renk-web-secret.txt",
             "/missing.js",
+            "/rust-examples/hello",
         ] {
             let (status, _, body) = send(&app, get(Method::GET, path)).await;
             assert_eq!(status, StatusCode::NOT_FOUND, "{path}");
