@@ -5409,19 +5409,26 @@ fn is_std_expression_macro(name: &str) -> bool {
 }
 
 /// Whether a macro name after `before`, read nearest character first, is a std macro path:
-/// `write`, `std::write`, and `::core::write` are, `defmt::write` is not.
+/// `write`, `std::write`, `std.write` and `::core::write` are, `defmt::write` and `log.write` are
+/// not.
 fn is_std_macro_path(before: impl Iterator<Item = char>) -> bool {
     let mut before = before.peekable();
-    if before.next_if_eq(&':').is_none() || before.next_if_eq(&':').is_none() {
+    if before.next_if_eq(&'.').is_none()
+        && (before.next_if_eq(&':').is_none() || before.next_if_eq(&':').is_none())
+    {
         return true;
     }
     let root = std::iter::from_fn(|| before.next_if(|character| is_ident_continue(*character)))
         .collect::<Vec<_>>();
-    // A `::` before the root must not follow another segment, as in `a::std::write`.
+    // The root must not follow another segment, as in `a::std::write` or `a.std.write`.
     ["std", "core"]
         .iter()
         .any(|name| name.chars().rev().eq(root.iter().copied()))
-        && (before.next() != Some(':') || before.nth(1).is_none_or(|c| !is_ident_continue(c)))
+        && match before.next() {
+            Some('.') => false,
+            Some(':') => before.nth(1).is_none_or(|c| !is_ident_continue(c)),
+            _ => true,
+        }
 }
 
 /// Multi-line `{` blocks in a `view!` body, as in a Leptos handler `on:click=move |_| {`, hold
