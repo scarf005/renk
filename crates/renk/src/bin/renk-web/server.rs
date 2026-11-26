@@ -197,9 +197,15 @@ pub async fn main() -> std::io::Result<()> {
     remove_stale_run_dirs(&env::temp_dir(), state.config.run_timeout);
     log_namespace_support(state.config.sandbox)?;
     eprintln!("renk-web listening on http://{addr}");
+    serve(listener, state).await
+}
+
+/// Serves until ctrl-c or SIGTERM, then waits for the open requests.
+async fn serve(listener: tokio::net::TcpListener, state: AppState) -> std::io::Result<()> {
+    let shutdown = shutdown_signal()?;
     let app = router(state).into_make_service_with_connect_info::<SocketAddr>();
     axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal()?)
+        .with_graceful_shutdown(shutdown)
         .await
         .map_err(std::io::Error::other)
 }
@@ -1233,8 +1239,13 @@ mod tests {
         state
     }
 
+    /// One test sends SIGTERM to this process, and the server then ends every step. The tests
+    /// with namespaces take this lock, so they run one at a time.
+    static NAMESPACE_TESTS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
     /// Sends `rust` to `/api/run` of a server with namespaces on and a run timeout of 2 s.
     async fn run_in_namespaces(rust: &str) -> Value {
+        let _lock = NAMESPACE_TESTS.lock().await;
         let app = router(namespace_state(Duration::from_secs(2)));
         let (status, _, body) = send(&app, run(json!({ "rust": rust }).to_string())).await;
         let body = serde_json::from_slice::<Value>(&body).unwrap();
@@ -1572,6 +1583,56 @@ mod tests {
         let stopped =
             body["timedOut"] == json!(false) && stdout.contains("temporarily unavailable");
         assert!(stopped, "{body}");
+    }
+
+    /// Starts a run that writes `started` and sleeps for 60 s, with a run timeout of 30 s. Then
+    /// sends SIGTERM to this process. The run and the server must end within 10 s.
+    #[tokio::test]
+    #[ignore = "needs unprivileged user namespaces"]
+    async fn sigterm_ends_the_runs_and_the_server() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let _lock = NAMESPACE_TESTS.lock().await;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut stream = tokio::net::TcpStream::connect(listener.local_addr().unwrap())
+            .await
+            .unwrap();
+        let server = tokio::spawn(serve(listener, namespace_state(Duration::from_secs(30))));
+        let rust = r#"fn main() {
+            std::fs::write("started", "").unwrap();
+            std::thread::sleep(std::time::Duration::from_secs(60));
+        }"#;
+        let body = json!({ "rust": rust }).to_string();
+        let request = format!(
+            "POST /api/run HTTP/1.1\r\nHost: localhost:8080\r\nContent-Type: application/json\r\n\
+             Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        stream.write_all(request.as_bytes()).await.unwrap();
+        let started = || {
+            fs::read_dir(env::temp_dir())
+                .unwrap()
+                .flatten()
+                .any(|entry| {
+                    entry.file_name().to_string_lossy().starts_with("renk-run-")
+                        && entry.path().join("started").exists()
+                })
+        };
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while !started() {
+            assert!(Instant::now() < deadline, "the run did not start in 20 s");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        unsafe { libc::kill(libc::getpid(), libc::SIGTERM) };
+        let stopped = tokio::time::timeout(Duration::from_secs(10), server).await;
+        assert!(
+            stopped.is_ok(),
+            "the server did not stop 10 s after SIGTERM"
+        );
+        let mut response = String::new();
+        stream.read_to_string(&mut response).await.unwrap();
+        let ended =
+            response.contains(r#""stage":"run""#) && response.contains(r#""timedOut":false"#);
+        assert!(ended, "{response}");
     }
 
     #[cfg(target_os = "linux")]
