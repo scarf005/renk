@@ -3,6 +3,8 @@
 //! nightly emits without spans or source locations so only meaning is compared. Crates come from
 //! `cargo vendor`, which checks them against crates.io checksums, rather than git submodules, so
 //! nothing large is checked in.
+//! MIR text changes between nightlies, so the nightly is pinned to `NIGHTLY`; keep it equal to the
+//! toolchain that `.github/workflows/real-crates.yml` installs.
 //! Downloads on first run: `cargo test -p renk --test real_crates -- --ignored`.
 
 use std::{
@@ -13,6 +15,8 @@ use std::{
 
 use ra_ap_rustc_lexer::{FrontmatterAllowed, TokenKind, tokenize};
 use renk::{SourceSyntax, rust_to_renk, to_rust};
+
+const NIGHTLY: &str = "nightly-2026-04-10";
 
 const CRATES: &[(&str, &str)] = &[
     ("anyhow", "1.0.104"),
@@ -289,7 +293,7 @@ fn mir(crate_dir: &Path, target: &Path, args: &[&str]) -> Result<String, String>
     let file = target.join("out.mir");
     let output = Command::new("cargo")
         .args([
-            "+nightly",
+            &format!("+{NIGHTLY}"),
             "rustc",
             "--lib",
             "--quiet",
