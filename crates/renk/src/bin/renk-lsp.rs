@@ -3339,6 +3339,72 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn outlines_each_item_with_its_body_and_its_name() {
+        let (service, _socket) = LspService::new(Backend::new);
+        let backend = service.inner();
+        let uri = module_uri("src/outline.rk");
+        let source = "pub struct 사용자:\n    pub 이름: String\n\nimpl Named for 사용자:\n    fn name(&self) -> &str:\n        &self.이름\n\npub fn destructure():\n    println!(\"{}\", 1)\n";
+        backend
+            .documents
+            .write()
+            .await
+            .insert(uri.clone(), source.to_string());
+        let params = DocumentSymbolParams {
+            text_document: TextDocumentIdentifier::new(uri),
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+        };
+        let Some(DocumentSymbolResponse::Nested(symbols)) =
+            backend.document_symbol(params).await.unwrap()
+        else {
+            panic!("no nested symbols");
+        };
+        fn outline(symbols: &[DocumentSymbol]) -> Vec<(String, [u32; 4], [u32; 4], Vec<String>)> {
+            let span = |range: Range| {
+                [
+                    range.start.line,
+                    range.start.character,
+                    range.end.line,
+                    range.end.character,
+                ]
+            };
+            symbols
+                .iter()
+                .flat_map(|symbol| {
+                    let children = symbol.children.as_deref().unwrap_or_default();
+                    let names = children.iter().map(|child| child.name.clone()).collect();
+                    std::iter::once((
+                        symbol.name.clone(),
+                        span(symbol.range),
+                        span(symbol.selection_range),
+                        names,
+                    ))
+                    .chain(outline(children))
+                })
+                .collect()
+        }
+        let item = |name: &str, range, selection, children: &[&str]| {
+            let children = children.iter().map(|child| child.to_string()).collect();
+            (name.to_string(), range, selection, children)
+        };
+        assert_eq!(
+            outline(&symbols),
+            [
+                item("사용자", [0, 0, 1, 18], [0, 11, 0, 14], &["이름"]),
+                item("이름", [1, 4, 1, 18], [1, 8, 1, 10], &[]),
+                item(
+                    "impl Named for 사용자",
+                    [3, 0, 5, 16],
+                    [3, 0, 3, 18],
+                    &["name"]
+                ),
+                item("name", [4, 4, 5, 16], [4, 7, 4, 11], &[]),
+                item("destructure", [7, 0, 8, 21], [7, 7, 7, 18], &[]),
+            ]
+        );
+    }
+
     #[test]
     fn cancelled_diagnostic_pulls_retrigger_unless_rust_analyzer_says_not_to() {
         let error = |error| serde_json::json!({"jsonrpc": "2.0", "id": 1, "error": error});
