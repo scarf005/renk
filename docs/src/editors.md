@@ -11,15 +11,15 @@
 - from `rust-analyzer` on the generated Rust, when `rust-analyzer` is on `PATH`: its
   diagnostics, including type errors from its `cargo check` on save; hover with types; go to
   definition into other files and crates; and completion of methods and names in scope.
-  Signature help, highlights of a name, find references, rename, code actions, and inlay hints
-  need it.
+  Signature help, highlights of a name, semantic tokens, find references, rename, code actions,
+  and inlay hints need it.
 
 Positions map back to the `.rk` file. A rename fails when it would change Renk text that
 differs from the generated Rust. The error names the `.rk` file and line to rename by hand. It
-also fails, naming the file, when a `.rk` file it edits does not transpile. A highlight is left
-out where the `.rk` text differs from the Rust, as at some names in format strings. A code
-action is left out when its edit does not map to the `.rk` lines. A resolution error at an
-`a.b` dot carries the same hint as `renk check` (see [Limits](limits.md)).
+also fails, naming the file, when a `.rk` file it edits does not transpile. A highlight or a
+semantic token is left out where the `.rk` text differs from the Rust, as at some names in
+format strings. A code action is left out when its edit does not map to the `.rk` lines. A
+resolution error at an `a.b` dot carries the same hint as `renk check` (see [Limits](limits.md)).
 
 A script, which is a `.rk` file with a `#!` line or frontmatter or outside a Cargo package,
 transpiles as `renk script` does. It gets a `rust-analyzer` of its own over its generated
