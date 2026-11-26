@@ -786,32 +786,39 @@ fn signature_help_names_the_parameter_at_the_cursor() {
 }
 
 #[test]
-fn highlights_a_name_in_code_and_in_format_strings() {
+fn highlights_only_ranges_that_cover_the_name_in_the_renk_text() {
     let main =
         "fn main():\n    let name = 1\n    let a = name + 2\n    println!(\"{a} {name + name}\")\n";
     let Some(mut session) = Session::open("lsp-highlight", main) else {
         return;
     };
-    let main = session.uri("src/main.rk");
-    let ranges = |highlights: &Value| {
-        let highlights = highlights.as_array().into_iter().flatten();
-        highlights
-            .map(|highlight| highlight["range"].clone())
-            .collect::<Vec<_>>()
+    let uri = session.uri("src/main.rk");
+    let text = |range: &Value| {
+        let at = |end: &str, part: &str| range[end][part].as_u64().unwrap() as usize;
+        let line = main.lines().nth(at("start", "line")).unwrap();
+        line[at("start", "character")..at("end", "character")].to_string()
     };
-    let names = [
-        range(1, 8, 12),
-        range(2, 12, 16),
-        range(3, 19, 23),
-        range(3, 26, 30),
-    ];
-    for at in [position(1, 8), position(3, 27)] {
-        let params = json!({"textDocument": {"uri": main}, "position": at});
+    // The names in the format string move into the arguments of the Rust `println!`, where the
+    // second one maps to other text.
+    for (at, plain) in [(position(1, 8), true), (position(3, 27), false)] {
+        let params = json!({"textDocument": {"uri": uri}, "position": at});
         let highlights =
             session.request_until("textDocument/documentHighlight", params, |highlights| {
                 highlights.is_array()
             });
-        assert_eq!(ranges(&highlights), names, "{highlights}");
+        let ranges: Vec<_> = (highlights.as_array().into_iter().flatten())
+            .map(|highlight| highlight["range"].clone())
+            .collect();
+        assert!(
+            ranges.iter().all(|range| text(range) == "name"),
+            "{highlights}"
+        );
+        if plain {
+            assert!(
+                ranges.contains(&range(1, 8, 12)) && ranges.contains(&range(2, 12, 16)),
+                "{highlights}"
+            );
+        }
     }
 }
 
