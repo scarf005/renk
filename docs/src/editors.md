@@ -13,13 +13,14 @@
   references, rename, code actions, and inlay hints need it.
 
 Positions map back to the `.rk` file. A rename fails when it would change Renk text that
-differs from the generated Rust, and a code action is left out when its edit does not map to
-the `.rk` lines. A resolution error at an `a.b` dot carries the same hint as `renk check` (see
-[Limits](limits.md)).
+differs from the generated Rust. The error names the `.rk` file and line to rename by hand. A
+code action is left out when its edit does not map to the `.rk` lines. A resolution error at
+an `a.b` dot carries the same hint as `renk check` (see [Limits](limits.md)).
 
 A script, which is a `.rk` file with a `#!` line or frontmatter or outside a Cargo package,
 transpiles as `renk script` does. It gets a `rust-analyzer` of its own over its generated
-cargo-script file in `$XDG_CACHE_HOME/renk/lsp/`, so its frontmatter dependencies resolve.
+cargo-script file in `$XDG_CACHE_HOME/renk/lsp/`, so its frontmatter dependencies resolve. A
+relative dependency `path` starts at the script's folder.
 
 ## Zed
 
