@@ -102,9 +102,11 @@ impl Session {
             .map(|root| json!({"uri": session.uri(root), "name": root}))
             .collect::<Vec<_>>();
         let root = (folders.len() == 1).then(|| folders[0]["uri"].clone());
+        let watching =
+            json!({"workspace": {"didChangeWatchedFiles": {"dynamicRegistration": true}}});
         session.request(
             "initialize",
-            json!({"processId": null, "rootUri": root, "workspaceFolders": folders, "capabilities": {}}),
+            json!({"processId": null, "rootUri": root, "workspaceFolders": folders, "capabilities": watching}),
         );
         session.notify("initialized", json!({}));
         let (uri, text) = (
@@ -321,6 +323,35 @@ fn cargo_check_on_save_reads_modules_changed_outside_the_editor() {
     let errors = session.check_errors(&main, &util);
     assert_eq!(errors.len(), 1, "{errors:?}");
     assert_eq!(errors[0]["range"]["start"]["line"], 0, "{errors:?}");
+}
+
+#[test]
+fn cargo_check_errors_of_a_module_go_away_when_the_editor_reports_its_deletion() {
+    let Some(mut session) = Session::open("lsp-deleted", MAIN) else {
+        return;
+    };
+    let registration = loop {
+        let message = session.messages.recv_timeout(Duration::from_secs(30));
+        let message = message.expect("no watcher was registered");
+        if message["method"] == "client/registerCapability" {
+            break message;
+        }
+    };
+    let watcher = &registration["params"]["registrations"][0];
+    assert_eq!(watcher["method"], "workspace/didChangeWatchedFiles");
+    let pattern = &watcher["registerOptions"]["watchers"][0]["globPattern"];
+    assert_eq!(pattern, "**/*.rk", "{registration}");
+
+    let (main, util) = (session.uri("src/main.rk"), session.uri("src/util.rk"));
+    let util_path = session.dir.join("src/util.rk");
+    fs::write(&util_path, "pub fn helper() -> i32 = \"text\"\n").unwrap();
+    session.check_errors(&main, &util);
+    fs::remove_file(util_path).unwrap();
+    session.notify(
+        "workspace/didChangeWatchedFiles",
+        json!({"changes": [{"uri": util, "type": 3}]}),
+    );
+    session.diagnostics_until(&util, <[Value]>::is_empty);
 }
 
 #[test]
