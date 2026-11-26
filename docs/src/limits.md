@@ -8,6 +8,9 @@ Renk is a syntax front end. It reads text, not types, so:
   ``renk read `String.nope` as the path `String::nope`; write `(String).nope` for a value``.
 - `[...]` after an expression is indexing unless it is `name[...](` or a CamelCase
   `Name[...]` before `::` or `.name`. Any other generic application uses Rust `::<...>`.
+  When a `let`, parameter, or pattern binds a lowercase `name` (the rule for `a.b`), Renk reads
+  `name[...](` as an index and a call, as in `table[0](1)` after `let table = [f, g]`. For a
+  field, write `(self.table[i])(x)`. `self.table[i](x)` is a generic method call.
 - Macro and attribute token trees are opaque Rust tokens. Only the std format and expression
   macros listed in [Macros](syntax/macros.md) are rewritten.
 - Proc-macro DSLs are not parsed, except the multi-line `{` blocks of Leptos `view!`.

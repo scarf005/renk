@@ -7281,8 +7281,9 @@ fn replace_square_generics(text: &str, mode: GenericMode) -> String {
 }
 
 /// The closing `]` of generic arguments after the identifier `chars[start..name_end]`, and
-/// whether a `.` follows them. `name[...](` is a generic call and an uppercase `Name[...]` before
-/// `::` or `.name` is a generic path; `(xs[i])(` and `(NAME)[i].name` force indexing.
+/// whether a `.` follows them. `name[...](` is a generic call unless a local value, as a `let` or
+/// parameter, binds `name`. An uppercase `Name[...]` before `::` or `.name` is a generic path.
+/// `(xs[i])(` and `(NAME)[i].name` force indexing.
 fn generic_brackets(chars: &[char], start: usize, name_end: usize) -> Option<(usize, bool)> {
     if chars.get(name_end) != Some(&'[') {
         return None;
@@ -7297,14 +7298,16 @@ fn generic_brackets(chars: &[char], start: usize, name_end: usize) -> Option<(us
             || chars[start - 1] != '.'
             || (is_camel_case(&name) && {
                 let mut segments = dotted_segments_before(chars, start);
-                segments.push(name);
+                segments.push(name.clone());
                 should_convert_path(&segments, PathMode::Expr, None)
             }));
     let dot_path = path_head
         && after.first() == Some(&'.')
         && after.get(1).copied().is_some_and(is_ident_start);
     let colon_path = path_head && after.starts_with(&[':', ':']);
-    (after.first() == Some(&'(') || dot_path || colon_path).then_some((close, dot_path))
+    let call = after.first() == Some(&'(')
+        && !((start == 0 || chars[start - 1] != '.') && is_local_value(&name));
+    (call || dot_path || colon_path).then_some((close, dot_path))
 }
 
 /// The `a.b.` identifiers right before `index`, in order.
@@ -7847,8 +7850,12 @@ fn with_value_scopes<T>(convert: impl FnOnce() -> T) -> T {
     result
 }
 
-fn is_value_bound(name: &str) -> bool {
+fn is_local_value(name: &str) -> bool {
     VALUE_SCOPES.with_borrow(|scopes| scopes.iter().flatten().any(|bound| bound == name))
+}
+
+fn is_value_bound(name: &str) -> bool {
+    is_local_value(name)
         || MODULE_VALUES.with_borrow(|functions| functions.iter().any(|function| function == name))
 }
 

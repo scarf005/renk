@@ -7,7 +7,10 @@ Renk는 문법 프런트엔드다. 타입이 아니라 텍스트를 읽으므로
   점에서 이름을 찾지 못하면 ``renk read `String.nope` as the path `String::nope`; write
   `(String).nope` for a value``처럼 다른 표기를 알려 주는 help 줄이 붙는다.
 - 표현식 뒤의 `[...]`는 `name[...](`이거나 `::`나 `.name` 앞의 CamelCase `Name[...]`가 아니면
-  인덱싱이다. 그 밖의 제네릭 적용은 Rust의 `::<...>`를 쓴다.
+  인덱싱이다. 그 밖의 제네릭 적용은 Rust의 `::<...>`를 쓴다. `a.b`와 같은 규칙으로 `let`,
+  매개변수, 패턴이 소문자 `name`을 바인딩하면 `name[...](`는 인덱싱 후 호출로 읽는다.
+  `let table = [f, g]` 뒤의 `table[0](1)`이 그렇다. 필드는 `(self.table[i])(x)`로 쓴다.
+  `self.table[i](x)`는 제네릭 메서드 호출이다.
 - 매크로와 속성의 토큰 트리는 해석하지 않는 Rust 토큰이다. [매크로](syntax/macros.md)에 나열한
   std 포맷 매크로와 표현식 매크로만 다시 쓴다.
 - proc-macro DSL은 Leptos `view!`의 여러 줄 `{` 블록을 빼고는 파싱하지 않는다.
