@@ -290,8 +290,17 @@ fn run_fmt(args: Fmt) -> CliResult<i32> {
             fs::write(path, formatted).map_err(|error| format!("{name}: {error}"))?;
             continue;
         }
+        let bare = source.strip_prefix('\u{feff}');
+        if bare.is_some() {
+            println!("{name}: byte order mark");
+        }
         if source.contains("\r\n") {
             println!("{name}: CRLF line endings");
+        }
+        // A file that differs only by its byte order mark has no visible diff.
+        if bare == Some(formatted.as_str()) {
+            code = 1;
+            continue;
         }
         print!(
             "{}",
