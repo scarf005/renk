@@ -1498,4 +1498,39 @@ mod tests {
         );
         let _ = fs::remove_dir_all(dist);
     }
+
+    /// The first request times out after 100 ms while its program sleeps until the 1 s run
+    /// timeout. The second request must not start a run before the first program is gone.
+    #[tokio::test]
+    async fn runs_keep_their_permit_after_the_request_is_gone() {
+        let dist = temp_dir("permit");
+        let mut state = state(&dist, 10);
+        state.run_deps = dist.clone();
+        state.config.request_timeout = Duration::from_millis(100);
+        let app = router(state);
+        // rustc reads an `--extern` crate only when the code uses it, so an empty file is enough.
+        fs::write(dist.join("libtrpl-0.rlib"), "").unwrap();
+        let sleep = json!({ "rust": "fn main() { std::thread::sleep(std::time::Duration::from_secs(60)) }" })
+            .to_string();
+
+        let (status, _, _) = send(&app, run(sleep.clone())).await;
+        assert_eq!(status, StatusCode::REQUEST_TIMEOUT);
+        let (status, _, body) = send(&app, run(sleep)).await;
+        assert_eq!(
+            (
+                status,
+                serde_json::from_slice::<Value>(&body).unwrap()["error"].clone()
+            ),
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                json!("too many active runs")
+            )
+        );
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while ACTIVE_RUNS.load(Ordering::Acquire) > 0 {
+            assert!(Instant::now() < deadline, "the run kept its permit");
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let _ = fs::remove_dir_all(dist);
+    }
 }
