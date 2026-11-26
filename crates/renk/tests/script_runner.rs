@@ -608,6 +608,49 @@ fn script_diagnostics_show_script_columns_and_source() {
 }
 
 #[test]
+fn script_diagnostics_point_inside_a_one_line_function() {
+    // Renk writes the body after `=` on a Rust line of its own.
+    let dir = temp_dir("script-one-line");
+    let script = dir.join("inline.rk");
+    fs::write(
+        &script,
+        "fn f() -> i32 = \"a\"\n\nfn g(x: i32) -> i32 = x + nope\n\nfn main():\n    println!(\"{}\", f() + g(1))\n",
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_renk"))
+        .arg("script")
+        .arg(&script)
+        .env("XDG_CACHE_HOME", dir.join("cache"))
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_ne!(output.status.code(), Some(0), "{stderr}");
+    let lines = stderr.lines().collect::<Vec<_>>();
+    for (line, code, word) in [
+        (3, "fn g(x: i32) -> i32 = x + nope", "nope"),
+        (1, "fn f() -> i32 = \"a\"", "\"a\""),
+    ] {
+        let column = code.find(word).unwrap();
+        assert!(
+            stderr.contains(&format!("--> {}:{line}:{}\n", script.display(), column + 1)),
+            "{stderr}"
+        );
+        let snippet = lines
+            .iter()
+            .position(|text| text.ends_with(&format!("{line} | {code}")))
+            .unwrap_or_else(|| panic!("no script line {line}\n{stderr}"));
+        let caret = lines[snippet + 1];
+        let start = lines[snippet].len() - code.len() + column;
+        assert_eq!(caret.find('^'), Some(start), "{stderr}");
+        assert!(
+            caret[start..].starts_with(&"^".repeat(word.len())),
+            "{stderr}"
+        );
+    }
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
 fn script_panics_point_at_the_script_and_signals_set_the_exit_code() {
     let dir = temp_dir("script-panic");
     let script = dir.join("panics.rk");
