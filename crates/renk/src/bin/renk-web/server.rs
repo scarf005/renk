@@ -1133,6 +1133,29 @@ mod tests {
         }
     }
 
+    /// A server with namespaces on. Its `trpl` is an empty file in the target directory.
+    fn namespace_state(run_timeout: Duration) -> AppState {
+        let exe = env::current_exe().unwrap();
+        let deps = exe.ancestors().nth(2).unwrap().join("renk-web-namespaces");
+        fs::create_dir_all(&deps).unwrap();
+        fs::write(deps.join("libtrpl-0.rlib"), "").unwrap();
+        let mut state = state(&deps, usize::MAX);
+        state.run_deps = deps;
+        state.config.sandbox = Sandbox::Namespaces;
+        state.config.run_timeout = run_timeout;
+        state.config.request_timeout = run_timeout * 3;
+        state
+    }
+
+    /// Sends `rust` to `/api/run` of a server with namespaces on and a run timeout of 2 s.
+    async fn run_in_namespaces(rust: &str) -> Value {
+        let app = router(namespace_state(Duration::from_secs(2)));
+        let (status, _, body) = send(&app, run(json!({ "rust": rust }).to_string())).await;
+        let body = serde_json::from_slice::<Value>(&body).unwrap();
+        assert_eq!(status, StatusCode::OK, "{body}");
+        body
+    }
+
     async fn send(app: &Router, request: Request<Body>) -> (StatusCode, HeaderMap, Vec<u8>) {
         let response = app.clone().oneshot(request).await.unwrap();
         let status = response.status();
@@ -1367,6 +1390,14 @@ mod tests {
         let unsandboxed = readlink(Sandbox::Unsandboxed);
         assert_eq!(unsandboxed.stdout.trim(), server.to_str().unwrap());
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    #[ignore = "needs unprivileged user namespaces"]
+    async fn runs_a_program_in_namespaces() {
+        let body = run_in_namespaces(r#"fn main() { println!("hello") }"#).await;
+        let result = (&body["ok"], &body["stdout"]);
+        assert_eq!(result, (&json!(true), &json!("hello\n")), "{body}");
     }
 
     #[cfg(target_os = "linux")]

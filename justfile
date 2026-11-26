@@ -5,6 +5,10 @@ default:
 test:
     cargo test -p renk --no-fail-fast
 
+# Run the renk-web tests that need unprivileged user namespaces.
+test-web-namespaces:
+    cargo test -p renk --bin renk-web -- --ignored
+
 # Start the Renk web demo from the repository root.
 web:
     cd web && deno task dev
