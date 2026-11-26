@@ -1019,6 +1019,28 @@ mod tests {
         let _ = fs::remove_dir_all(dir);
     }
 
+    /// `cargo test` sets `CARGO_*` variables in this process. The child must not see them.
+    #[test]
+    fn commands_get_only_the_toolchain_environment() {
+        let dir = temp_dir("env");
+        let result = run_command("env", &[], &dir, Duration::from_secs(5));
+        let variables = result
+            .stdout
+            .lines()
+            .filter_map(|line| line.split_once('='))
+            .collect::<Vec<_>>();
+        let names = variables.iter().map(|(name, _)| *name).collect::<Vec<_>>();
+        assert!(
+            names.iter().all(|name| {
+                ["PATH", "RUSTUP_HOME", "RUSTUP_TOOLCHAIN", "LANG", "TMPDIR"].contains(name)
+            }),
+            "{names:?}"
+        );
+        assert!(names.contains(&"PATH"), "{names:?}");
+        assert!(variables.contains(&("TMPDIR", dir.to_str().unwrap())));
+        let _ = fs::remove_dir_all(dir);
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn commands_are_killed_with_their_process_group_on_timeout() {
