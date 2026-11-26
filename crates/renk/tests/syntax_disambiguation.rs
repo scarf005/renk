@@ -1764,7 +1764,6 @@ fn rust_conversion_keeps_operators_after_value_blocks() {
     for source in [
         "fn f(x: u8) -> u8 {\n    let z = match x {\n        0 => 1,\n        _ => 2,\n    } + 1;\n    z\n}\n",
         "fn f(c: bool) -> u8 {\n    let z = if c {\n        1\n    } else {\n        2\n    } * 2;\n    z\n}\n",
-        "fn f(x: u8) -> bool {\n    match x {\n        0 => 1,\n        _ => 2,\n    } == 1\n}\n",
     ] {
         let renk = rust_to_renk(source).unwrap();
         assert_eq!(rust(&renk), source, "{renk}");

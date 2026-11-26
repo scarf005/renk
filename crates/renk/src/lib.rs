@@ -635,7 +635,35 @@ pub fn rust_to_renk_aggressive(source: &str) -> Result<String, TranspileError> {
 }
 
 fn convert_rust_to_renk(source: &str, aggressive: bool) -> Result<String, TranspileError> {
-    on_large_stack(|| with_value_scopes(|| convert_rust_lines(without_bom(source), aggressive)))
+    let source = without_bom(source);
+    on_large_stack(|| match rust_syntax_error(source) {
+        Some(error) => Err(error),
+        None => with_value_scopes(|| convert_rust_lines(source, aggressive)),
+    })
+}
+
+/// The first error that the lexer or parser of rust-analyzer finds in `source`.
+fn rust_syntax_error(source: &str) -> Option<TranspileError> {
+    use ra_ap_parser::{Edition, LexedStr, StrStep, TopEntryPoint};
+    let lexed = LexedStr::new(Edition::Edition2021, source);
+    let output = TopEntryPoint::SourceFile.parse(&lexed.to_input(Edition::Edition2021));
+    let mut errors = lexed
+        .errors()
+        .map(|(token, message)| (lexed.text_start(token), message.to_string()))
+        .collect::<Vec<_>>();
+    lexed.intersperse_trivia(&output, &mut |step| {
+        if let StrStep::Error { msg, pos } = step {
+            errors.push((pos, msg.to_string()));
+        }
+    });
+    let (at, message) = errors.into_iter().min_by_key(|(at, _)| *at)?;
+    // The parser reports the whitespace before the token it stops at.
+    let before = &source[..source.len() - source[at..].trim_start().len()];
+    Some(TranspileError {
+        line: before.matches('\n').count() + 1,
+        column: before.chars().rev().take_while(|&c| c != '\n').count() + 1,
+        message,
+    })
 }
 
 fn convert_rust_lines(source: &str, aggressive: bool) -> Result<String, TranspileError> {
