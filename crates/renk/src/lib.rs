@@ -2341,10 +2341,10 @@ fn source_lines(source: &str) -> Result<Vec<SourceLine>, TranspileError> {
 }
 
 /// Whether the logical line `text` continues on the `next` physical line: inside a literal or
-/// block comment, after a trailing `=`, or in a group opened by a line ending with `(`/`[` (or a
-/// struct literal or `use` tree `{`). A group lasts until its outer delimiter closes, so blocks
-/// inside it stay Rust syntax, and then extends over following `.method` / `?` lines at the same
-/// `indent`; any other line ending with `{` or `:` owns an indented block.
+/// block comment, after a trailing `=` or binary operator, or in a group opened by a line ending
+/// with `(`/`[` (or a struct literal or `use` tree `{`). A group lasts until its outer delimiter
+/// closes, so blocks inside it stay Rust syntax, and then extends over following `.method` / `?`
+/// lines at the same `indent`; any other line ending with `{` or `:` owns an indented block.
 fn joins_next_line(
     text: &str,
     next: Option<&str>,
@@ -2411,6 +2411,7 @@ fn joins_next_line(
             && !["==", "!=", "<=", ">="]
                 .iter()
                 .any(|operator| trimmed.ends_with(operator)))
+            || ends_with_binary_operator(trimmed)
             || next.is_some_and(|next| continues_where_clause(text, next, indent)))
 }
 
@@ -2445,13 +2446,33 @@ fn continues_with_operator<'a>(
         })
 }
 
+const BINARY_OPERATORS: [&str; 17] = [
+    "+ ", "- ", "* ", "/ ", "% ", "&& ", "|| ", "& ", "^ ", "<< ", ">> ", "== ", "!= ", "<= ",
+    ">= ", "< ", "> ",
+];
+
 /// Whether `line` continues an expression with a binary operator, as in `+ if a {` or `&& b`.
 fn starts_with_binary_operator(line: &str) -> bool {
-    const OPERATORS: [&str; 17] = [
-        "+ ", "- ", "* ", "/ ", "% ", "&& ", "|| ", "& ", "^ ", "<< ", ">> ", "== ", "!= ", "<= ",
-        ">= ", "< ", "> ",
-    ];
-    OPERATORS.iter().any(|operator| line.starts_with(operator))
+    BINARY_OPERATORS
+        .iter()
+        .any(|operator| line.starts_with(operator))
+}
+
+/// Whether `code` ends with a spaced binary operator that the next line continues, as `a +` or
+/// the `"_" |` of an or-pattern. The bars of a closure such as `move ||` do not count, nor `<`
+/// and `>`, which may end a tag.
+fn ends_with_binary_operator(code: &str) -> bool {
+    let chars = code.chars().collect::<Vec<_>>();
+    BINARY_OPERATORS[..15]
+        .iter()
+        .chain(&["| "])
+        .any(|operator| {
+            let operator = operator.trim_end();
+            code.strip_suffix(operator)
+                .is_some_and(|head| head.ends_with(' '))
+                && !(operator.ends_with('|')
+                    && is_closure_start(&chars, chars.len() - operator.len()))
+        })
 }
 
 /// Whether `text` leaves a macro invocation's delimiter open, as in `quote_spanned! {span=>` or
