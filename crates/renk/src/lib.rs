@@ -2918,8 +2918,9 @@ fn without_trailing_line_comment(text: &str) -> &str {
     text
 }
 
-/// A trailing `{` after an uppercase path opens a struct literal, which stays Rust syntax like a
-/// `(`/`[` group; item, control, and return-type headers own blocks instead.
+/// A trailing `{` after an uppercase path, or after a path of several segments such as
+/// `c.sockaddr_in`, opens a struct literal, which stays Rust syntax like a `(`/`[` group; item,
+/// control, and return-type headers own blocks instead.
 fn opens_struct_literal(text: &str) -> bool {
     let Some(head) = text.trim_end().strip_suffix('{') else {
         return false;
@@ -2929,11 +2930,15 @@ fn opens_struct_literal(text: &str) -> bool {
     let head = strip_trailing_turbofish(head);
     let path_start = head
         .char_indices()
-        .rfind(|&(_, character)| !is_ident_continue(character) && character != ':')
+        .rfind(|&(_, character)| !is_ident_continue(character) && !matches!(character, ':' | '.'))
         .map_or(0, |(at, character)| at + character.len_utf8());
-    let name = head[path_start..].rsplit("::").next().unwrap_or_default();
+    let path = &head[path_start..];
+    let name = path.rsplit([':', '.']).next().unwrap_or_default();
     let header = without_visibility(text.lines().next().unwrap_or_default().trim_start());
-    name.starts_with(|character: char| character.is_ascii_uppercase())
+    (name.starts_with(|character: char| character.is_ascii_uppercase())
+        || (name.len() < path.len()
+            && path.starts_with(is_ident_start)
+            && name.starts_with(is_ident_start)))
         && !head[..path_start].trim_end().ends_with("->")
         && !ends_in_condition(&head[..path_start])
         && ![
