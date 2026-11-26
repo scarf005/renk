@@ -45,26 +45,31 @@ as `Point {`, `match` arm lists, and element bodies of other `view!` macros, suc
 `div(class="x") {`.
 
 ```rk,ignore
-view! {
-    <button on:click=move |_| {
-        set_count.update(|n| *n += 1)
-        log::info!("clicked")
-    }>
-        {count}
-    </button>
-}
+pub fn counter():
+    let (count, set_count) = signal(0)
+    view! {
+        <button on:click=move |_| {
+            set_count.update(|n| *n += 1)
+            log::info!("clicked")
+        }>
+            {count}
+        </button>
+    }
 ```
 
 becomes
 
 ```rust
-view! {
-    <button on:click=move |_| {
-        set_count.update(|n| *n += 1);
-        log::info!("clicked")
-    }>
-        {count}
-    </button>
+pub fn counter() {
+    let (count, set_count) = signal(0);
+    view! {
+        <button on:click=move |_| {
+            set_count.update(|n| *n += 1);
+            log::info!("clicked")
+        }>
+            {count}
+        </button>
+    }
 }
 ```
 

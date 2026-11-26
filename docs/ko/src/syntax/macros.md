@@ -43,26 +43,31 @@ Leptos `view!` 본문에서 여러 줄에 걸친 `{` 블록은 Renk 문장을 �
 `div(class="x") {` 같은 다른 `view!` 매크로의 요소 본문이 그렇다.
 
 ```rk,ignore
-view! {
-    <button on:click=move |_| {
-        set_count.update(|n| *n += 1)
-        log::info!("clicked")
-    }>
-        {count}
-    </button>
-}
+pub fn counter():
+    let (count, set_count) = signal(0)
+    view! {
+        <button on:click=move |_| {
+            set_count.update(|n| *n += 1)
+            log::info!("clicked")
+        }>
+            {count}
+        </button>
+    }
 ```
 
 는 다음이 된다.
 
 ```rust
-view! {
-    <button on:click=move |_| {
-        set_count.update(|n| *n += 1);
-        log::info!("clicked")
-    }>
-        {count}
-    </button>
+pub fn counter() {
+    let (count, set_count) = signal(0);
+    view! {
+        <button on:click=move |_| {
+            set_count.update(|n| *n += 1);
+            log::info!("clicked")
+        }>
+            {count}
+        </button>
+    }
 }
 ```
 
