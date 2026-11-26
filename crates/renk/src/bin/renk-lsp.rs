@@ -2453,7 +2453,8 @@ fn symbol_from_node(
             (node.generated_start_line..=node.generated_end_line).contains(&entry.generated_line)
         })
         .map(|entry| entry.source_line)
-        .fold(node.source_line, usize::max);
+        .fold(node.source_line, usize::max)
+        .saturating_sub(1);
     Some(DocumentSymbol {
         detail: Some(node.kind.clone()),
         kind,
@@ -2462,8 +2463,8 @@ fn symbol_from_node(
         range: Range::new(
             Position::new(line, start),
             Position::new(
-                last_line as u32 - 1,
-                lines.get(last_line - 1).map_or(0, |line| utf16_len(line)),
+                last_line as u32,
+                lines.get(last_line).map_or(0, |line| utf16_len(line)),
             ),
         ),
         selection_range: Range::new(
