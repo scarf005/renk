@@ -63,3 +63,96 @@ pub fn conditions(ports: Ports) -> u16 {
     }
     total + open
 }
+
+#[allow(non_camel_case_types)]
+pub struct timeval {
+    pub tv_sec: i64,
+    pub tv_usec: i64,
+}
+
+#[allow(non_camel_case_types)]
+pub union word {
+    pub signed: i64,
+    pub unsigned: u64,
+}
+
+impl timeval {
+    pub fn zero() -> timeval {
+        timeval {
+            tv_sec: 0,
+            tv_usec: 0,
+        }
+    }
+}
+
+macro_rules! seconds {
+    ($value:expr) => {
+        timeval {
+            tv_sec: $value,
+            tv_usec: 0,
+        }
+    };
+}
+
+pub fn single_names(port: u16) -> i64 {
+    // timeval {
+    let text = "timeval {";
+    let made = Some(timeval {
+        tv_sec: 1,
+        tv_usec: 2,
+    });
+    let boxed = Box::new(timeval {
+        tv_sec: 3,
+        tv_usec: text.len() as i64,
+    });
+    let plain = timeval {
+        tv_sec: 5,
+        tv_usec: 6,
+    };
+    let short = timeval { tv_sec: 7, tv_usec: 8 };
+    let nested = vec![(timeval {
+        tv_sec: seconds!(9).tv_sec,
+        tv_usec: timeval::zero().tv_usec,
+    })];
+    let bits = unsafe {
+        word { signed: -1 }.unsigned as i64
+    };
+    let looped = loop {
+        break {
+            let sec = plain.tv_sec;
+            sec
+        };
+    };
+    let labeled = 'outer: {
+        break 'outer short.tv_usec;
+    };
+    let constant = const {
+        1 + 1
+    };
+    let future = async move {
+        boxed.tv_usec
+    };
+    drop(future);
+    let Some(value) = made else {
+        return 0;
+    };
+    let mut total = value.tv_sec + nested[0].tv_sec + bits + looped + labeled + constant;
+    if port > 0 {
+        total += 1;
+    } else {
+        total -= 1;
+    }
+    while total < 0 {
+        total += 1;
+    }
+    match port {
+        _ => total += 1,
+    }
+    for second in [plain.tv_sec] {
+        total += second;
+    }
+    return {
+        let rest = total;
+        rest
+    };
+}
