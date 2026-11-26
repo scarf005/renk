@@ -30,3 +30,25 @@ pub fn keywords_inside_chains(v: &[u32]) -> usize {
     }
     n
 }
+
+pub fn cfg_tail_blocks(n: u8) -> u8 {
+    #[cfg(unix)]
+    {
+        u8::max(
+            n,
+            1,
+        )
+    }
+    #[cfg(not(unix))]
+    {
+        let doubled = n * 2;
+        doubled
+    }
+}
+
+pub fn cfg_tail_mixed(n: u8) -> u8 {
+    #[cfg(unix)]
+    { n }
+    #[cfg(not(unix))]
+    { n + 1 }
+}
