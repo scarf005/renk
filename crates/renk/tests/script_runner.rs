@@ -174,6 +174,66 @@ fn script_reports_transpile_errors_with_the_script_path_and_line() {
 }
 
 #[test]
+fn script_reports_an_invalid_frontmatter_manifest_at_its_script_line() {
+    let dir = temp_dir("script-manifest-error");
+    let script = dir.join("manifest.rk");
+    fs::write(
+        &script,
+        "#!/usr/bin/env -S renk script\n---\n[package]\nedition = 2024 x\n---\nprintln!()\n",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_renk"))
+        .args(["script", script.to_str().unwrap()])
+        .env("XDG_CACHE_HOME", dir.join("cache"))
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.starts_with(&format!("renk: {}:4: ", script.display())),
+        "{stderr}"
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn script_path_dependencies_resolve_against_the_script_directory() {
+    let dir = temp_dir("script-path-dependency");
+    for (path, text) in [
+        (
+            "helper/Cargo.toml",
+            "[package]\nname = \"helper\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        ),
+        ("helper/src/lib.rs", "pub fn answer() -> i32 {\n    42\n}\n"),
+        (
+            "tools/answer.rk",
+            "#!/usr/bin/env -S renk script\n---\n[dependencies]\nhelper = { path = \"../helper\" }\n---\nprintln!(\"{}\", helper::answer())\n",
+        ),
+    ] {
+        let path = dir.join(path);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, text).unwrap();
+    }
+
+    let output = Command::new(env!("CARGO_BIN_EXE_renk"))
+        .args(["script", "tools/answer.rk"])
+        .current_dir(&dir)
+        .env("XDG_CACHE_HOME", dir.join("cache"))
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "42\n",
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
 fn script_failure_summary_names_the_script_not_the_generated_package() {
     let dir = temp_dir("script-summary");
     let script = dir.join("tool.rk");
