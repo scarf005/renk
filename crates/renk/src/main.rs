@@ -304,7 +304,7 @@ fn run_fmt(args: Fmt) -> CliResult<i32> {
         }
         print!(
             "{}",
-            similar::TextDiff::from_lines(&source, &formatted)
+            similar::TextDiff::from_lines(bare.unwrap_or(&source), &formatted)
                 .unified_diff()
                 .header(&name, &name)
         );
