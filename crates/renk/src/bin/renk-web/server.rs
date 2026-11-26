@@ -13,6 +13,8 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+#[cfg(target_os = "linux")]
+use std::ffi::{CStr, CString};
 #[cfg(unix)]
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 
@@ -95,7 +97,9 @@ struct ServerConfig {
 /// How a compile or run step is kept apart from the server.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Sandbox {
-    /// New user, network, IPC and UTS namespaces. The step fails when one of them cannot be made.
+    /// New user, mount, PID, network, IPC and UTS namespaces. The step sees its own run directory
+    /// and no other in the temporary directory, and only its own processes in `/proc`. The step
+    /// fails when one of them cannot be made.
     Namespaces,
     /// No namespaces. `RENK_WEB_UNSANDBOXED=1` selects this.
     Unsandboxed,
@@ -621,7 +625,7 @@ fn run_command(command: &str, args: &[&str], cwd: &Path, options: ChildOptions) 
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout_file))
         .stderr(Stdio::from(stderr_file));
-    configure_child_process(&mut command, options);
+    configure_child_process(&mut command, cwd, options);
     let child = {
         // Keep the lock until the new step is in the list, or `kill_orphans` can kill it.
         let mut active = ACTIVE_CHILDREN
@@ -737,12 +741,19 @@ fn read_limited_utf8(path: &Path, limit: usize) -> (String, bool) {
 }
 
 #[cfg(target_os = "linux")]
-fn configure_child_process(command: &mut Command, options: ChildOptions) {
+fn configure_child_process(command: &mut Command, cwd: &Path, options: ChildOptions) {
     let cpu_seconds = options.timeout.as_secs().saturating_add(1).max(1);
-    // Format the ID maps here: the code between `fork` and `exec` must not allocate.
-    let id_maps = (options.sandbox == Sandbox::Namespaces).then(|| {
+    // Make the strings here: the code between `fork` and `exec` must not allocate.
+    let setup = (options.sandbox == Sandbox::Namespaces).then(|| {
         let (uid, gid) = unsafe { (libc::getuid(), libc::getgid()) };
-        (format!("{uid} {uid} 1"), format!("{gid} {gid} 1"))
+        let path =
+            |path: &Path| CString::new(path.as_os_str().as_encoded_bytes()).unwrap_or_default();
+        NamespaceSetup {
+            uid_map: format!("{uid} {uid} 1"),
+            gid_map: format!("{gid} {gid} 1"),
+            run_dir: path(cwd),
+            temp_dir: path(cwd.parent().unwrap_or(cwd)),
+        }
     });
     unsafe {
         command.pre_exec(move || {
@@ -753,8 +764,8 @@ fn configure_child_process(command: &mut Command, options: ChildOptions) {
             )?;
             // Set the limits before `enter_namespaces` forks, so both processes get them.
             apply_child_limits(cpu_seconds, options.max_file_bytes)?;
-            match &id_maps {
-                Some((uid_map, gid_map)) => enter_namespaces(uid_map, gid_map),
+            match &setup {
+                Some(setup) => enter_namespaces(setup),
                 None => Ok(()),
             }
         });
@@ -762,7 +773,7 @@ fn configure_child_process(command: &mut Command, options: ChildOptions) {
 }
 
 #[cfg(not(target_os = "linux"))]
-fn configure_child_process(_command: &mut Command, _options: ChildOptions) {}
+fn configure_child_process(_command: &mut Command, _cwd: &Path, _options: ChildOptions) {}
 
 #[cfg(unix)]
 fn create_child_process_group() -> std::io::Result<()> {
@@ -773,19 +784,70 @@ fn create_child_process_group() -> std::io::Result<()> {
     }
 }
 
+#[cfg(target_os = "linux")]
+struct NamespaceSetup {
+    uid_map: String,
+    gid_map: String,
+    /// The working directory of the step.
+    run_dir: CString,
+    /// The directory that holds the run directories, usually `/tmp`.
+    temp_dir: CString,
+}
+
 /// Runs between `fork` and `exec`, so it makes only async-signal-safe calls.
 #[cfg(target_os = "linux")]
-fn enter_namespaces(uid_map: &str, gid_map: &str) -> std::io::Result<()> {
+fn enter_namespaces(setup: &NamespaceSetup) -> std::io::Result<()> {
     let flags = libc::CLONE_NEWUSER
+        | libc::CLONE_NEWNS
         | libc::CLONE_NEWNET
         | libc::CLONE_NEWIPC
         | libc::CLONE_NEWUTS
         | libc::CLONE_NEWPID;
     sandbox_step("unshare", unsafe { libc::unshare(flags) } == 0)?;
     write_proc_file("setgroups", c"/proc/self/setgroups", b"deny")?;
-    write_proc_file("uid_map", c"/proc/self/uid_map", uid_map.as_bytes())?;
-    write_proc_file("gid_map", c"/proc/self/gid_map", gid_map.as_bytes())?;
+    write_proc_file("uid_map", c"/proc/self/uid_map", setup.uid_map.as_bytes())?;
+    write_proc_file("gid_map", c"/proc/self/gid_map", setup.gid_map.as_bytes())?;
+    hide_other_run_dirs(setup)?;
     fork_pid_one()
+}
+
+/// Mounts a new tmpfs over the directory of the run directories and binds the run directory of
+/// this step back. The working directory is the run directory, so `.` still reaches it below
+/// the tmpfs. `/` turns private first, so the mounts stay in this namespace.
+#[cfg(target_os = "linux")]
+fn hide_other_run_dirs(setup: &NamespaceSetup) -> std::io::Result<()> {
+    let (run_dir, temp_dir) = (&setup.run_dir, &setup.temp_dir);
+    let flags = libc::MS_NOSUID | libc::MS_NODEV;
+    let private = libc::MS_REC | libc::MS_PRIVATE;
+    mount_step("make / private", None, c"/", None, private)?;
+    mount_step(
+        "mount tmpfs",
+        Some(c"tmpfs"),
+        temp_dir,
+        Some(c"tmpfs"),
+        flags,
+    )?;
+    let mkdir = unsafe { libc::mkdir(run_dir.as_ptr(), 0o700) };
+    sandbox_step("make run directory", mkdir == 0)?;
+    let bind = libc::MS_BIND | libc::MS_REC;
+    mount_step("bind run directory", Some(c"."), run_dir, None, bind)?;
+    let read_only = libc::MS_REMOUNT | libc::MS_BIND | libc::MS_RDONLY | flags;
+    mount_step("make tmpfs read-only", None, temp_dir, None, read_only)?;
+    sandbox_step("chdir", unsafe { libc::chdir(run_dir.as_ptr()) } == 0)
+}
+
+#[cfg(target_os = "linux")]
+fn mount_step(
+    step: &str,
+    source: Option<&CStr>,
+    target: &CStr,
+    fstype: Option<&CStr>,
+    flags: libc::c_ulong,
+) -> std::io::Result<()> {
+    let pointer = |text: Option<&CStr>| text.map_or(std::ptr::null(), CStr::as_ptr);
+    let (source, fstype, data) = (pointer(source), pointer(fstype), std::ptr::null());
+    let mounted = unsafe { libc::mount(source, target.as_ptr(), fstype, flags, data) };
+    sandbox_step(step, mounted == 0)
 }
 
 /// Forks PID 1 of the new PID namespace, which goes on to `exec` the step. This process stays
@@ -811,7 +873,9 @@ fn fork_pid_one() -> std::io::Result<()> {
             unsafe { libc::_exit(1) };
         }
         unsafe { libc::close(parent) };
-        return Ok(());
+        // A new `proc` shows the processes of the new PID namespace only.
+        let flags = libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOEXEC;
+        return mount_step("mount /proc", Some(c"proc"), c"/proc", Some(c"proc"), flags);
     }
     // `spawn` waits until every copy of its `exec` error pipe is closed. Only PID 1 calls
     // `exec`, so close the copy of this process.
@@ -832,7 +896,7 @@ fn fork_pid_one() -> std::io::Result<()> {
 }
 
 #[cfg(target_os = "linux")]
-fn write_proc_file(step: &str, path: &std::ffi::CStr, contents: &[u8]) -> std::io::Result<()> {
+fn write_proc_file(step: &str, path: &CStr, contents: &[u8]) -> std::io::Result<()> {
     let fd = unsafe { libc::open(path.as_ptr(), libc::O_WRONLY | libc::O_CLOEXEC) };
     sandbox_step(step, fd >= 0)?;
     let written = unsafe { libc::write(fd, contents.as_ptr().cast(), contents.len()) };
