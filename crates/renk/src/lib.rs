@@ -3757,8 +3757,10 @@ fn emit_scoped_sequence(
             })
     };
     // A cfg-selected tail that is not a block-like expression, as in `#[cfg(unix)]` / `v.len()`.
+    // A bare block such as `{` / `    v.len()` is one already.
     let is_cfg_expression = |index: usize| {
         let (head, _) = strip_block_marker(nodes[index].text.trim());
+        let is_block = head.starts_with(['{', '#']);
         let head = strip_open_brace(head);
         tail_is_value
             && context == Context::Block
@@ -3773,7 +3775,7 @@ fn emit_scoped_sequence(
             && !is_comment(head)
             && !is_control(head)
             && !is_match(head)
-            && !head.starts_with(['{', '#'])
+            && !is_block
             && !nodes[index + 1..]
                 .iter()
                 .find(|next| !is_comment(next.text.trim()))
