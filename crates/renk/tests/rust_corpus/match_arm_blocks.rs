@@ -58,3 +58,21 @@ pub fn guarded(value: Option<(u8, u8)>, limit: u8) -> u8 {
         _ => 0,
     }
 }
+
+pub struct Span {
+    pub start: u8,
+    pub end: u8,
+}
+
+pub fn spans(span: Span) -> u8 {
+    match span {
+        Span { start, .. }
+            if start > 1 =>
+        {
+            start
+        }
+        Span { end, .. }
+            if end > 1 => end,
+        _ => 0,
+    }
+}
