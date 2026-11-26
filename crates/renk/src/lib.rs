@@ -2327,8 +2327,9 @@ fn joins_next_line(
     let Some(open) = open.update(text) else {
         return true;
     };
-    // The line that decides is the last non-blank one, so a blank line after `= // note` waits too.
-    let last = text.lines().rev().find(|line| !line.trim().is_empty());
+    // The line that decides is the last one with code, so a blank or comment line after `=` waits
+    // too.
+    let last = text.lines().rev().find(|line| code_len(line) > 0);
     let code = without_trailing_line_comment(last.unwrap_or_default());
     if *group == Some('<') {
         // Generic parameters over several lines, closed by a `>` line at the head's indent.
@@ -2355,7 +2356,8 @@ fn joins_next_line(
     if code.trim_end().ends_with(['(', '['])
         || opens_struct_literal(code)
         || (open.last() == Some(&'{') && (is_use_or_extern_crate(code) || starts_raw_item(code)))
-        || (code.trim_end().ends_with(',') && matches!(open.first(), Some('(' | '[')))
+        // A `,`, closure bars or `||` inside brackets, as in `.map(|v|` or `(a ||`.
+        || (code.trim_end().ends_with([',', '|']) && matches!(open.first(), Some('(' | '[')))
         // A block inside brackets, as in `data: [u64; if Self::COMPRESS {`, or an operand block,
         // as in `+ if c {` or `if (a || {`, rather than a closure body or an element value, as
         // in `[match a {`, whose lines are Renk.
