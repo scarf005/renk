@@ -276,3 +276,59 @@ fn long_view_bodies_of_closures_starting_with_literals_convert_in_linear_time() 
     // Four times the tags take about four times as long, not sixteen.
     assert!(long < short * 8, "{short:?} {long:?}");
 }
+
+/// The time `transpile` takes over `head`, `count` copies of `line`, and `tail`.
+fn transpile_repeated(head: &str, line: &str, tail: &str, count: usize) -> std::time::Duration {
+    let renk = format!("{head}{}{tail}", line.repeat(count));
+    let start = std::time::Instant::now();
+    transpile(&renk).unwrap();
+    start.elapsed()
+}
+
+#[test]
+fn long_comment_blocks_transpile_in_linear_time() {
+    let _serial = SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let convert = |lines| transpile_repeated("fn main():\n", "    // a\n", "    f()\n", lines);
+    let (short, long) = (fastest(|| convert(5_000)), fastest(|| convert(20_000)));
+    // Four times the lines take about four times as long, not sixteen.
+    assert!(long < short * 8, "{short:?} {long:?}");
+}
+
+#[test]
+fn comment_lines_inside_a_continued_line_transpile_in_linear_time() {
+    let _serial = SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let convert = |lines| {
+        transpile_repeated(
+            "fn main():\n    let a = 1\n",
+            "    // a\n",
+            "    + 2\n",
+            lines,
+        ) + transpile_repeated(
+            "fn main():\n    let a =\n",
+            "        // a\n",
+            "        2\n",
+            lines,
+        )
+    };
+    let (short, long) = (fastest(|| convert(2_000)), fastest(|| convert(8_000)));
+    // Four times the lines take about four times as long, not sixteen.
+    assert!(long < short * 8, "{short:?} {long:?}");
+}
+
+#[test]
+fn closure_parameters_over_many_lines_transpile_in_linear_time() {
+    let _serial = SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let convert = |lines| {
+        let head = "fn main():\n    let f = |a: u8,\n";
+        transpile_repeated(head, "        a: u8,\n", "        z: u8| z\n", lines)
+    };
+    let (short, long) = (fastest(|| convert(2_000)), fastest(|| convert(8_000)));
+    // Four times the lines take about four times as long, not sixteen.
+    assert!(long < short * 8, "{short:?} {long:?}");
+}
