@@ -119,6 +119,10 @@ const RENK_CORPUS: &[(&str, &str)] = &[
         include_str!("renk_corpus/view_tag_ends.rk"),
     ),
     ("visibility", include_str!("renk_corpus/visibility.rk")),
+    (
+        "one_line_matches",
+        include_str!("renk_corpus/one_line_matches.rk"),
+    ),
 ];
 
 #[test]

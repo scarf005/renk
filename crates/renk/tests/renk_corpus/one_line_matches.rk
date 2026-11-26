@@ -1,0 +1,25 @@
+pub enum Void {}
+
+pub enum Kind:
+    A
+    B
+
+pub struct Holder:
+    void: Void
+    kind: Kind
+
+impl Holder:
+    pub fn never(self) -> !:
+        match self.void {}
+
+    pub fn never_bound(self) -> !:
+        let held = self
+        match (held.void) {}
+
+    pub fn rank(&self) -> i32:
+        match self.kind { Kind.A => 1, Kind.B => 2 }
+
+    pub fn ranks(&self) -> i32:
+        let first = match self.kind { Kind.A => 1, _ => 2 }
+        // match self.kind {}
+        first + match &self.kind { Kind.B => "match self.kind {}".len() as i32, _ => 0 }
