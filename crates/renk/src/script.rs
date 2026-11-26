@@ -240,15 +240,17 @@ pub fn cache_root() -> Option<PathBuf> {
 
 /// The generated Rust file of the script at `source_path` under `cache_root`.
 pub fn script_cache_path(cache_root: &Path, source_path: &Path) -> PathBuf {
-    use std::hash::{DefaultHasher, Hash, Hasher};
-
-    let mut hasher = DefaultHasher::new();
-    source_path.hash(&mut hasher);
+    // FNV-1a, since the standard hasher may change between Rust releases and move every cache.
+    let hash = source_path
+        .as_os_str()
+        .as_encoded_bytes()
+        .iter()
+        .fold(0xcbf2_9ce4_8422_2325_u64, |hash, &byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
+        });
     let mut file_name = source_path.file_stem().unwrap_or_default().to_owned();
     file_name.push(".rs");
-    cache_root
-        .join(format!("{:016x}", hasher.finish()))
-        .join(file_name)
+    cache_root.join(format!("{hash:016x}")).join(file_name)
 }
 
 /// The column of `script` that the character at `column` of `rust` came from: the same character
@@ -605,9 +607,7 @@ mod tests {
         let second = script_cache_path(root, Path::new("/b/tool.rk"));
 
         assert_ne!(first, second);
-        // FNV-1a of the path bytes, which stays the same across Rust releases.
         assert_eq!(first, Path::new("/cache/ed765c00339e0889/tool.rs"));
-        assert!(first.starts_with("/cache"));
         assert_eq!(first, script_cache_path(root, Path::new("/a/tool.rk")));
         let dotted = script_cache_path(root, Path::new("/a/setup-itch.io.rk"));
         assert_eq!(dotted.file_name().unwrap(), "setup-itch.io.rs");
