@@ -143,7 +143,7 @@ struct RunResponse {
 }
 
 #[tokio::main]
-async fn main() -> std::io::Result<()> {
+pub async fn main() -> std::io::Result<()> {
     let addr = env::var("RENK_WEB_ADDR").unwrap_or_else(|_| DEFAULT_ADDR.to_string());
     let run_deps = run_dependency_dir();
     require_dependency_rlib(&run_deps, "trpl")?;
@@ -1531,7 +1531,7 @@ mod tests {
 
     #[test]
     fn default_run_deps_match_the_image() {
-        let containerfile = include_str!("../../../../Containerfile");
+        let containerfile = include_str!("../../../../../Containerfile");
         let line = format!("RENK_RUN_DEPS={DEFAULT_RUN_DEPS} ");
         assert!(
             containerfile.contains(&line),
