@@ -14,3 +14,21 @@ pub fn score(message: Message) -> i32 {
         Message::Quit => 0,
     }
 }
+
+pub fn is_keyword(word: &str, flags: u8) -> bool {
+    let mask = flags |
+        1;
+    let pick = |bit: u8| bit & mask == bit;
+    let either = pick(1) ||
+        pick(2);
+    match word {
+        "_" |
+        // Reserved words.
+        "as" | "break" |
+
+        "const" | "continue" => either,
+        "fn" |
+        "if" => pick(4),
+        _ => false,
+    }
+}
