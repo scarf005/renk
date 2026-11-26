@@ -29,6 +29,7 @@ use axum::{
     routing::post,
 };
 use serde_json::{Value, json};
+use tokio::signal::unix::{SignalKind, signal};
 
 const BYTES_PER_KIB: usize = 1024;
 const BYTES_PER_MIB: u64 = 1024 * 1024;
@@ -182,11 +183,12 @@ async fn main() -> std::io::Result<()> {
         run_rates: &RUN_RATES,
     };
     become_child_subreaper();
+    remove_stale_run_dirs(&env::temp_dir(), state.config.run_timeout);
     log_namespace_support(state.config.sandbox)?;
     eprintln!("renk-web listening on http://{addr}");
     let app = router(state).into_make_service_with_connect_info::<SocketAddr>();
     axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
+        .with_graceful_shutdown(shutdown_signal()?)
         .await
         .map_err(std::io::Error::other)
 }
@@ -229,8 +231,40 @@ fn router(state: AppState) -> Router {
         .with_state(state)
 }
 
-async fn shutdown_signal() {
-    let _ = tokio::signal::ctrl_c().await;
+/// Ends on ctrl-c or SIGTERM. SIGTERM counts from the call on, before the server polls the
+/// future.
+fn shutdown_signal() -> std::io::Result<impl Future<Output = ()>> {
+    let mut terminate = signal(SignalKind::terminate())?;
+    Ok(async move {
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {}
+            _ = terminate.recv() => {}
+        }
+    })
+}
+
+/// Removes the run directories that a server left when it died during a run. A step creates its
+/// output files in the directory when it starts, so a directory of a live run was modified
+/// within the run timeout.
+fn remove_stale_run_dirs(dir: &Path, max_age: Duration) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let run_dir = entry
+            .file_name()
+            .to_str()
+            .is_some_and(|name| name.starts_with("renk-run-"))
+            && entry.file_type().is_ok_and(|kind| kind.is_dir());
+        let age = entry
+            .metadata()
+            .and_then(|metadata| metadata.modified())
+            .ok()
+            .and_then(|modified| modified.elapsed().ok());
+        if run_dir && age.is_some_and(|age| age > max_age) {
+            let _ = fs::remove_dir_all(entry.path());
+        }
+    }
 }
 
 fn read_u64_env(name: &str, default: u64) -> u64 {
