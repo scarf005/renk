@@ -40,8 +40,14 @@ An `Origin` header must have the same host. Behind a reverse proxy:
 
 ### Sandbox
 
-Each compile and run step gets new user, mount, PID, network, IPC and UTS namespaces. The step sees only its own run directory in the temporary directory, and only its own processes in `/proc`. The run step gets at most 1 GiB of address space and 32 processes and threads.
+Each compile and run step gets new user, mount, PID, network, IPC and UTS namespaces. The step sees only its own run directory in the temporary directory, and its own `/proc` with only its own processes. The rest of the file system stays visible with the rights of the server user, so the server user must own no private files. The compose file runs the server as uid 10001 with a read-only root. The run step gets at most 1 GiB of address space and 32 processes and threads.
 
-The server needs unprivileged user namespaces for this. At start it logs `renk-web: namespaces work` or `renk-web: namespaces do not work (<error>)`. Without namespaces, every run fails.
+When a container masks paths below `/proc` (podman and docker do), the kernel refuses the new `/proc`. The program then runs without `/proc`. The compile step sees the `/proc` of the server, and `include_bytes!` with a literal path can read from it, so the environment of the server must hold no secret.
+
+The server needs unprivileged user namespaces for this. At start it logs one of these lines:
+
+- `renk-web: namespaces work`
+- `renk-web: namespaces work, /proc is hidden (<error>)`, when the container masks `/proc`
+- `renk-web: namespaces do not work (<error>)`. Every run then fails.
 
 Set `RENK_WEB_UNSANDBOXED=1` to run programs without namespaces. A submitted program can then read the files of the server user, use the network of the server and see other runs. Use it only when a container or a VM isolates the server.
