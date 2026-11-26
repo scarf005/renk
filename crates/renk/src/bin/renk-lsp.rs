@@ -2315,16 +2315,55 @@ impl Origins {
         }
     }
 
-    /// rust-analyzer's edit renaming `name` as an edit of the editor's files, or why it does not
-    /// map.
+    /// rust-analyzer's edit renaming `name` as an edit of the editor's files, or a message naming
+    /// the Renk file and line of the first edit that does not replace exactly `name` there.
     fn rename_edit(
         &mut self,
         edit: WorkspaceEdit,
-        _name: &str,
+        name: &str,
     ) -> std::result::Result<WorkspaceEdit, String> {
-        (self.workspace_edit(edit, false)).ok_or_else(|| {
-            "the rename changes Renk text that differs from its generated Rust".into()
-        })
+        let document_edits = match &edit.document_changes {
+            Some(DocumentChanges::Edits(edits)) => edits.iter().collect(),
+            Some(DocumentChanges::Operations(operations)) => (operations.iter())
+                .filter_map(|operation| match operation {
+                    DocumentChangeOperation::Edit(edit) => Some(edit),
+                    DocumentChangeOperation::Op(_) => None,
+                })
+                .collect(),
+            None => Vec::new(),
+        };
+        let edits = (edit.changes.iter().flatten())
+            .flat_map(|(uri, edits)| edits.iter().map(move |edit| (uri, edit)))
+            .chain(document_edits.into_iter().flat_map(|document| {
+                document.edits.iter().map(|edit| match edit {
+                    OneOf::Left(edit) => (&document.text_document.uri, edit),
+                    OneOf::Right(annotated) => (&document.text_document.uri, &annotated.text_edit),
+                })
+            }));
+        for (rust_uri, edit) in edits {
+            if let Some(Origin::Renk {
+                uri,
+                text,
+                generated,
+                ..
+            }) = self.origin(rust_uri)
+            {
+                let range = rust_range_to_source_range(generated, text, edit.range);
+                if range_text(text, range) != name
+                    || range_text(&generated.rust, edit.range) != name
+                {
+                    let path = uri.to_file_path().unwrap_or_else(|_| uri.path().into());
+                    let line = range.start.line + 1;
+                    return Err(format!(
+                        "cannot rename `{name}` at {}:{line}. Rename it there by hand.",
+                        path.display()
+                    ));
+                }
+            }
+        }
+        // Every Renk edit replaces `name` in both texts, so each one maps.
+        self.workspace_edit(edit, false)
+            .ok_or_else(|| format!("cannot rename `{name}`"))
     }
 
     /// A workspace edit of rust-analyzer's files as one of the editor's, or `None` when any of
