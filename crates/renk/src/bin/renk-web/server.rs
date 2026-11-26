@@ -50,8 +50,8 @@ const DEFAULT_MAX_REQUESTS: usize = 64;
 const DEFAULT_MAX_CONCURRENT_RUNS: usize = 2;
 const DEFAULT_RUN_RATE_LIMIT_PER_MINUTE: usize = 10;
 const RATE_LIMIT_WINDOW: Duration = Duration::from_secs(60);
-/// When the rate table holds this many clients with a run in the last minute, a new client
-/// gets 429.
+/// The rate table holds at most this many clients. A new client then replaces the client used
+/// longest ago.
 const MAX_RATE_LIMITED_CLIENTS: usize = 4096;
 /// rustc writes the program, about 5.5 MB for the trpl example.
 const COMPILE_FILE_SIZE_MIB: u64 = 64;
@@ -89,8 +89,17 @@ struct AppState {
 struct RunRates {
     /// The most clients that `clients` holds.
     capacity: usize,
-    /// The start of the current one-minute window and the runs in it, per client.
-    clients: Mutex<BTreeMap<IpAddr, (Instant, usize)>>,
+    clients: Mutex<BTreeMap<IpAddr, ClientRuns>>,
+}
+
+#[derive(Debug)]
+struct ClientRuns {
+    /// The start of the current one-minute window.
+    started: Instant,
+    /// The runs in the current window.
+    runs: usize,
+    /// The last request of the client.
+    used: Instant,
 }
 
 impl RunRates {
@@ -469,20 +478,25 @@ fn try_run_rate_limit(rates: &RunRates, client: IpAddr, max: usize) -> bool {
     let now = Instant::now();
     let capacity = rates.capacity;
     let mut rates = rates.clients.lock().unwrap_or_else(PoisonError::into_inner);
-    if rates.len() >= capacity && !rates.contains_key(&client) {
-        rates.retain(|_, (started, _)| now.duration_since(*started) < RATE_LIMIT_WINDOW);
-        if rates.len() >= capacity {
-            return false;
-        }
+    if rates.len() >= capacity
+        && !rates.contains_key(&client)
+        && let Some((&oldest, _)) = rates.iter().min_by_key(|(_, runs)| runs.used)
+    {
+        rates.remove(&oldest);
     }
-    let (started, runs) = rates.entry(client).or_insert((now, 0));
-    if now.duration_since(*started) >= RATE_LIMIT_WINDOW {
-        (*started, *runs) = (now, 0);
+    let client = rates.entry(client).or_insert(ClientRuns {
+        started: now,
+        runs: 0,
+        used: now,
+    });
+    client.used = now;
+    if now.duration_since(client.started) >= RATE_LIMIT_WINDOW {
+        (client.started, client.runs) = (now, 0);
     }
-    if *runs >= max {
+    if client.runs >= max {
         return false;
     }
-    *runs += 1;
+    client.runs += 1;
     true
 }
 
@@ -1962,23 +1976,6 @@ mod tests {
         let (status, _, _) = send(&app, from(2, valid)).await;
         assert_ne!(status, StatusCode::TOO_MANY_REQUESTS);
         let _ = fs::remove_dir_all(dist);
-    }
-
-    /// Fills the table with clients that ran in this minute. A new client gets no run until the
-    /// minute of the others is over, and the table then forgets them.
-    #[test]
-    fn run_rate_table_stays_bounded() {
-        let rates = RunRates::new(MAX_RATE_LIMITED_CLIENTS);
-        for client in 0..MAX_RATE_LIMITED_CLIENTS as u32 {
-            assert!(try_run_rate_limit(&rates, client.to_be_bytes().into(), 1));
-        }
-        let new = IpAddr::from([255; 4]);
-        assert!(!try_run_rate_limit(&rates, new, 1));
-        for (started, _) in rates.clients.lock().unwrap().values_mut() {
-            *started = started.checked_sub(RATE_LIMIT_WINDOW).unwrap();
-        }
-        assert!(try_run_rate_limit(&rates, new, 1));
-        assert_eq!(rates.clients.lock().unwrap().len(), 1);
     }
 
     /// Stores at most 2 clients, and each client gets 2 runs. Client 1 runs, client 2 runs and
