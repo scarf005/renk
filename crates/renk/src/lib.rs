@@ -200,6 +200,8 @@ fn transpile_source(source: &str) -> Result<TranspileOutput, TranspileError> {
 thread_local! {
     /// How often [`transpile_file`] ran on this thread.
     static FILE_TRANSPILES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Whether [`idiomatic_renk`] checks each rewrite against the whole file.
+    static WHOLE_FILE_CHECKS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// Transpiles the Renk `lines` of a whole file, which [`idiomatic_renk`] checks rewrites against.
@@ -871,28 +873,203 @@ fn idiomatic_renk(lines: Vec<String>, aggressive: bool) -> Vec<String> {
         |lines| line_rewrites(lines, |line| view_blocks_as_renk(line, false)),
         |lines| line_rewrites(lines, |line| view_blocks_as_renk(line, true)),
     ];
-    passes
-        .into_iter()
-        .enumerate()
-        .fold(lines, |lines, (index, pass)| {
-            let rewrites = pass(&lines);
-            let (mut accepted, rejected) = equivalent_rewrites(&lines, rewrites, &expected);
-            // Inlining rejoins wrapped format invocations, so that pass is also checked by tokens.
-            if (aggressive || index == 1) && expected_tokens.is_some() {
-                for rewrite in rejected {
-                    let mut trial = accepted.clone();
-                    let at = trial.partition_point(|kept| kept.start < rewrite.start);
-                    trial.insert(at, rewrite);
-                    let rust = transpile_file(&apply_rewrites(&lines, &trial).0);
-                    if rust.is_ok_and(|output| {
-                        rust_tokens(&canonical_format_macros(&output.rust)) == expected_tokens
-                    }) {
-                        accepted = trial;
+    let rewrite = |by_items: bool| {
+        passes
+            .iter()
+            .enumerate()
+            .fold(lines.clone(), |lines, (index, pass)| {
+                let rewrites = pass(&lines);
+                let mut items = Items::new(&lines, &rewrites, by_items);
+                let (mut accepted, rejected) =
+                    equivalent_rewrites(&lines, rewrites, &expected, &mut items);
+                // Inlining rejoins wrapped format invocations, so that pass is also checked by
+                // tokens.
+                if (aggressive || index == 1) && expected_tokens.is_some() {
+                    for rewrite in rejected {
+                        if items.keeps_tokens(&lines, &accepted, &rewrite, &expected_tokens) {
+                            let at = accepted.partition_point(|kept| kept.start < rewrite.start);
+                            accepted.insert(at, rewrite);
+                        }
                     }
                 }
+                apply_rewrites(&lines, &accepted).0
+            })
+    };
+    #[cfg(test)]
+    if WHOLE_FILE_CHECKS.get() {
+        return rewrite(false);
+    }
+    // Items were checked alone, so the whole file is checked once more.
+    let renk = rewrite(true);
+    let same = transpile_file(&renk).is_ok_and(|output| {
+        let rust = canonical_format_macros(&output.rust);
+        rust == expected || expected_tokens.is_some() && rust_tokens(&rust) == expected_tokens
+    });
+    if same { renk } else { rewrite(false) }
+}
+
+/// The Rust lines and source tree of an item text, `None` when it does not transpile.
+type ItemRust = std::rc::Rc<Option<(Vec<String>, Vec<SourceMapNode>)>>;
+
+/// The top-level items of Renk lines, which [`equivalent_rewrites`] transpiles one at a time.
+struct Items {
+    /// The lines of each item. An item starts after a blank line, at a line that starts with a
+    /// letter or `#[` and is not `else`, where no rewrite crosses. The whole file is one item
+    /// when the items do not transpile to the Rust of the whole file.
+    ranges: Vec<std::ops::Range<usize>>,
+    rust: std::collections::HashMap<String, ItemRust>,
+}
+
+/// An item with rewrites applied.
+struct Candidate {
+    rust: ItemRust,
+    /// For each line up to the last rewrite, the rewrite that produced it with the line's offset
+    /// in that rewrite.
+    origins: Vec<Option<(usize, usize)>>,
+    /// The count of its physical lines.
+    source_lines: usize,
+    /// The Rust line at which the item matched the expected Rust when it was last compared.
+    clean_at: Option<usize>,
+}
+
+impl Items {
+    fn new(lines: &[String], rewrites: &[Rewrite], by_items: bool) -> Self {
+        let mut starts = vec![0];
+        let mut rewrites = rewrites.iter().peekable();
+        for at in (1..lines.len()).filter(|_| by_items) {
+            while rewrites.next_if(|rewrite| rewrite.end <= at).is_some() {}
+            if lines[at].trim().is_empty()
+                && !lines[at - 1].trim().is_empty()
+                && rewrites.peek().is_none_or(|rewrite| rewrite.start >= at)
+                && lines[at..]
+                    .iter()
+                    .find(|line| !line.trim().is_empty())
+                    .is_some_and(|line| {
+                        (line.starts_with(|c: char| c.is_ascii_alphabetic())
+                            || line.starts_with("#["))
+                            && line.split(|c: char| !is_ident_continue(c)).next() != Some("else")
+                    })
+            {
+                starts.push(at);
             }
-            apply_rewrites(&lines, &accepted).0
-        })
+        }
+        let ends = starts.iter().skip(1).copied().chain([lines.len()]);
+        Items {
+            ranges: starts
+                .iter()
+                .zip(ends)
+                .map(|(&start, end)| start..end)
+                .collect(),
+            rust: Default::default(),
+        }
+    }
+
+    fn candidate<'a>(
+        &mut self,
+        lines: &[String],
+        range: std::ops::Range<usize>,
+        rewrites: impl Iterator<Item = &'a Rewrite>,
+    ) -> Candidate {
+        let rewrites = rewrites
+            .map(|rewrite| Rewrite {
+                start: rewrite.start - range.start,
+                end: rewrite.end - range.start,
+                text: rewrite.text.clone(),
+            })
+            .collect::<Vec<_>>();
+        let (candidate, origins) = apply_rewrites(&lines[range], &rewrites);
+        let whole = self.ranges.len() == 1;
+        let text = candidate.join("\n");
+        let source_lines = text.split('\n').count();
+        let rust = self.rust.entry(text).or_insert_with_key(|text| {
+            let output = if whole {
+                transpile_file(&candidate)
+            } else {
+                transpile_source(text)
+            };
+            std::rc::Rc::new(output.ok().map(|output| {
+                let rust = canonical_format_macros(&output.rust);
+                (rust.lines().map(String::from).collect(), output.source_tree)
+            }))
+        });
+        Candidate {
+            rust: rust.clone(),
+            origins,
+            source_lines,
+            clean_at: None,
+        }
+    }
+
+    /// Whether `rewrite`, added to the sorted `accepted`, keeps the Rust tokens of its item, or
+    /// `expected` when the whole file is one item.
+    fn keeps_tokens(
+        &mut self,
+        lines: &[String],
+        accepted: &[Rewrite],
+        rewrite: &Rewrite,
+        expected: &Option<String>,
+    ) -> bool {
+        let range = self.ranges[self
+            .ranges
+            .partition_point(|range| range.end <= rewrite.start)]
+        .clone();
+        let within = &accepted[accepted.partition_point(|kept| kept.start < range.start)
+            ..accepted.partition_point(|kept| kept.start < range.end)];
+        let at = within.partition_point(|kept| kept.start < rewrite.start);
+        let tokens = |candidate: Candidate| {
+            Option::as_ref(&candidate.rust).and_then(|(rust, _)| rust_tokens(&rust.join("\n")))
+        };
+        let kept = match self.ranges.len() {
+            1 => expected.clone(),
+            _ => tokens(self.candidate(lines, range.clone(), within.iter())),
+        };
+        let trial = within[..at].iter().chain([rewrite]).chain(&within[at..]);
+        kept.is_some() && tokens(self.candidate(lines, range, trial)) == kept
+    }
+}
+
+/// Where the Rust of each candidate starts and whether a blank line comes before it, as the
+/// transpiler writes one before an item after a line of Rust, with the end of the last; `None`
+/// when a candidate does not transpile.
+fn item_starts(candidates: &[Candidate]) -> Option<(Vec<(bool, usize)>, usize)> {
+    let mut starts = Vec::new();
+    let mut end = 0;
+    let mut last_blank = None;
+    for candidate in candidates {
+        let (rust, _) = Option::as_ref(&candidate.rust)?;
+        let blank = !starts.is_empty() && last_blank == Some(false);
+        end += usize::from(blank);
+        starts.push((blank, end));
+        end += rust.len();
+        if let Some(line) = rust.last().or(blank.then_some(&String::new())) {
+            last_blank = Some(line.trim().is_empty());
+        }
+    }
+    Some((starts, end))
+}
+
+/// The Rust of the whole file and its source tree joined from the candidates of its items.
+fn joined_items(candidates: &[Candidate]) -> Option<(String, Vec<SourceMapNode>)> {
+    fn shifted(nodes: &[SourceMapNode], generated: usize, source: usize) -> Vec<SourceMapNode> {
+        let shift = |node: &SourceMapNode| SourceMapNode {
+            source_line: node.source_line + source,
+            generated_start_line: node.generated_start_line + generated,
+            generated_end_line: node.generated_end_line + generated,
+            children: shifted(&node.children, generated, source),
+            ..node.clone()
+        };
+        nodes.iter().map(shift).collect()
+    }
+    let (starts, _) = item_starts(candidates)?;
+    let (mut rust, mut tree, mut source) = (Vec::new(), Vec::new(), 0);
+    for (candidate, (blank, start)) in candidates.iter().zip(starts) {
+        let (lines, nodes) = Option::as_ref(&candidate.rust)?;
+        rust.extend(blank.then_some(""));
+        rust.extend(lines.iter().map(String::as_str));
+        tree.extend(shifted(nodes, start, source));
+        source += candidate.source_lines;
+    }
+    Some((ensure_trailing_newline(&rust.join("\n")), tree))
 }
 
 /// `lines` with each lowercase receiver that Renk reads as a path, as an unbound `items` in
@@ -1082,17 +1259,44 @@ fn equivalent_rewrites(
     lines: &[String],
     rewrites: Vec<Rewrite>,
     expected: &str,
+    items: &mut Items,
 ) -> (Vec<Rewrite>, Vec<Rewrite>) {
-    let mut rejected = Vec::new();
     // Each rewrite with the text it asks for, which a rejected rewrite keeps.
-    let mut trials = rewrites
+    let trials = rewrites
         .into_iter()
         .map(|rewrite| {
             let wanted = rewrite.text.clone();
             (rewrite, wanted)
         })
         .collect::<Vec<_>>();
-    let reject = |(rewrite, text): (Rewrite, String)| Rewrite { text, ..rewrite };
+    let (trials, rejected) = if items.ranges.len() > 1 && !trials.is_empty() {
+        match item_rounds(lines, trials, expected, items) {
+            Ok(checked) => return checked,
+            Err(state) => {
+                items.ranges = vec![0..lines.len()];
+                state
+            }
+        }
+    } else {
+        (trials, Vec::new())
+    };
+    whole_file_rounds(lines, trials, rejected, expected)
+}
+
+type Trial = (Rewrite, String);
+
+/// The rewrite of a trial with the text it asks for.
+fn wanted((rewrite, text): Trial) -> Rewrite {
+    Rewrite { text, ..rewrite }
+}
+
+/// The rounds of [`equivalent_rewrites`], each of which transpiles the whole file.
+fn whole_file_rounds(
+    lines: &[String],
+    mut trials: Vec<Trial>,
+    mut rejected: Vec<Rewrite>,
+    expected: &str,
+) -> (Vec<Rewrite>, Vec<Rewrite>) {
     while !trials.is_empty() {
         let rewrites = trials
             .iter()
@@ -1117,38 +1321,19 @@ fn equivalent_rewrites(
             }
         }
         if failed.iter().all(Vec::is_empty) {
-            rejected.extend(trials.drain(..).map(reject));
+            rejected.extend(trials.drain(..).map(wanted));
             break;
         }
         let mut kept = Vec::new();
-        for ((mut rewrite, wanted), failed) in trials.into_iter().zip(failed) {
+        for ((mut rewrite, text), failed) in trials.into_iter().zip(failed) {
             if failed.is_empty() {
-                kept.push((rewrite, wanted));
-                continue;
+                kept.push((rewrite, text));
+            } else if let Some(reverted) = reverted(lines, &rewrite, &failed) {
+                rewrite.text = reverted;
+                kept.push((rewrite, text));
+            } else {
+                rejected.push(wanted((rewrite, text)));
             }
-            let original = lines[rewrite.start..rewrite.end].join("\n");
-            let original = original.split('\n').collect::<Vec<_>>();
-            let mut text = rewrite
-                .text
-                .split('\n')
-                .map(str::to_string)
-                .collect::<Vec<_>>();
-            let placed = (0..text.len())
-                .filter(|&at| {
-                    text.len() == original.len()
-                        && text[at] != original[at]
-                        && failed.contains(&(at, true))
-                })
-                .collect::<Vec<_>>();
-            for &at in &placed {
-                text[at] = original[at].to_string();
-            }
-            if placed.is_empty() || text == original {
-                rejected.push(reject((rewrite, wanted)));
-                continue;
-            }
-            rewrite.text = text.join("\n");
-            kept.push((rewrite, wanted));
         }
         trials = kept;
     }
@@ -1157,9 +1342,153 @@ fn equivalent_rewrites(
     (accepted, rejected)
 }
 
-/// Source lines whose generated Rust differs from `expected`, each with whether it is exact: a
-/// node without children that keeps its line count maps line for line, and any other node gives
-/// its first line. After a line count change only the first difference is aligned.
+/// [`whole_file_rounds`] that transpiles only the changed items after the first round. It gives
+/// back the trials and the rejected rewrites when the items do not transpile to the Rust of the
+/// whole file, before the rounds or after an item stops transpiling.
+fn item_rounds(
+    lines: &[String],
+    trials: Vec<Trial>,
+    expected: &str,
+    items: &mut Items,
+) -> Result<(Vec<Rewrite>, Vec<Rewrite>), (Vec<Trial>, Vec<Rewrite>)> {
+    let rewrites = trials
+        .iter()
+        .map(|(rewrite, _)| rewrite.clone())
+        .collect::<Vec<_>>();
+    let Ok(output) = transpile_file(&apply_rewrites(lines, &rewrites).0) else {
+        return Err((trials, Vec::new()));
+    };
+    if canonical_format_macros(&output.rust) == expected {
+        return Ok((rewrites, Vec::new()));
+    }
+    let ranges = items.ranges.clone();
+    let mut trials = trials.into_iter().peekable();
+    let mut groups = ranges
+        .iter()
+        .map(|range| {
+            std::iter::from_fn(|| trials.next_if(|(rewrite, _)| rewrite.start < range.end))
+                .collect()
+        })
+        .collect::<Vec<Vec<Trial>>>();
+    let candidate = |items: &mut Items, index: usize, group: &[Trial]| {
+        let rewrites = group.iter().map(|(rewrite, _)| rewrite);
+        items.candidate(lines, ranges[index].clone(), rewrites)
+    };
+    let base = (0..ranges.len())
+        .map(|index| candidate(items, index, &[]))
+        .collect::<Vec<_>>();
+    let mut candidates = (0..ranges.len())
+        .map(|index| candidate(items, index, &groups[index]))
+        .collect::<Vec<_>>();
+    let joins = |candidates: &[Candidate], output: &TranspileOutput| {
+        joined_items(candidates).is_some_and(|(rust, tree)| {
+            rust == canonical_format_macros(&output.rust) && tree == output.source_tree
+        })
+    };
+    if !joins(&candidates, &output)
+        || !transpile_file(lines).is_ok_and(|output| joins(&base, &output))
+    {
+        return Err((groups.concat(), Vec::new()));
+    }
+    let expected = expected.lines().collect::<Vec<_>>();
+    let mut rejected = Vec::new();
+    while groups.iter().any(|group| !group.is_empty()) {
+        let Some((starts, end)) = item_starts(&candidates) else {
+            return Err((groups.concat(), rejected));
+        };
+        // As in `differing_source_lines`, only the first difference counts after a line count
+        // change, and an item that matched at the same line is skipped.
+        let aligned = end == expected.len();
+        let (mut differs, mut failed) = (false, std::collections::BTreeMap::new());
+        'items: for (index, (candidate, (blank, start))) in
+            candidates.iter_mut().zip(starts).enumerate()
+        {
+            if blank && expected.get(start - 1) != Some(&"") {
+                differs = true;
+                if !aligned {
+                    break;
+                }
+            }
+            let Some((rust, tree)) = Option::as_ref(&candidate.rust) else {
+                unreachable!("item_starts checks each candidate");
+            };
+            if candidate.clean_at == Some(start) {
+                continue;
+            }
+            let mut clean = true;
+            for (offset, line) in rust.iter().enumerate() {
+                if expected.get(start + offset) == Some(&line.as_str()) {
+                    continue;
+                }
+                (differs, clean) = (true, false);
+                if let Some((line, exact)) = differing_source_line(tree, offset + 1)
+                    && let Some(&Some((trial, at))) = line
+                        .checked_sub(1)
+                        .and_then(|line| candidate.origins.get(line))
+                {
+                    let failed = failed.entry((index, trial)).or_insert_with(Vec::new);
+                    failed.push((at, exact));
+                }
+                if !aligned {
+                    break 'items;
+                }
+            }
+            if clean {
+                candidate.clean_at = Some(start);
+            }
+        }
+        if !differs && aligned {
+            break;
+        }
+        if failed.is_empty() {
+            rejected.extend(
+                groups
+                    .iter_mut()
+                    .flat_map(|group| group.drain(..))
+                    .map(wanted),
+            );
+            break;
+        }
+        // From the last, so that a removed trial leaves the indices before it.
+        let mut changed = Vec::new();
+        for ((index, trial), failed) in failed.into_iter().rev() {
+            let (rewrite, _) = &mut groups[index][trial];
+            match reverted(lines, rewrite, &failed) {
+                Some(text) => rewrite.text = text,
+                None => rejected.push(wanted(groups[index].remove(trial))),
+            }
+            changed.push(index);
+        }
+        changed.dedup();
+        for index in changed {
+            candidates[index] = candidate(items, index, &groups[index]);
+        }
+    }
+    rejected.sort_by_key(|rewrite| rewrite.start);
+    let accepted = groups.into_iter().flatten().map(|(rewrite, _)| rewrite);
+    Ok((accepted.collect(), rejected))
+}
+
+/// The text of `rewrite` with each changed line reverted that `failed` places exactly, which
+/// needs a rewrite that keeps the count of the lines it replaces; `None` when no line or every
+/// line reverts.
+fn reverted(lines: &[String], rewrite: &Rewrite, failed: &[(usize, bool)]) -> Option<String> {
+    let original = lines[rewrite.start..rewrite.end].join("\n");
+    let original = original.split('\n').collect::<Vec<_>>();
+    let mut text = rewrite.text.split('\n').collect::<Vec<_>>();
+    let placed = (0..text.len())
+        .filter(|&at| {
+            text.len() == original.len() && text[at] != original[at] && failed.contains(&(at, true))
+        })
+        .collect::<Vec<_>>();
+    for &at in &placed {
+        text[at] = original[at];
+    }
+    (!placed.is_empty() && text != original).then(|| text.join("\n"))
+}
+
+/// Source lines whose generated Rust differs from `expected`, each with whether it is exact.
+/// After a line count change only the first difference is aligned.
 fn differing_source_lines(
     output: &TranspileOutput,
     actual: &str,
@@ -1175,19 +1504,23 @@ fn differing_source_lines(
             1
         });
     differing
-        .filter_map(|index| {
-            let node = deepest_source_node(&output.source_tree, index + 1)?;
-            let span = node.generated_end_line + 1 - node.generated_start_line;
-            let exact = node.children.is_empty() && span == node.source_text.split('\n').count();
-            Some(match exact {
-                true => (
-                    node.source_line + index + 1 - node.generated_start_line,
-                    true,
-                ),
-                false => (node.source_line, false),
-            })
-        })
+        .filter_map(|index| differing_source_line(&output.source_tree, index + 1))
         .collect()
+}
+
+/// The source line of a generated line, with whether it is exact: a node without children that
+/// keeps its line count maps line for line, and any other node gives its first line.
+fn differing_source_line(tree: &[SourceMapNode], generated_line: usize) -> Option<(usize, bool)> {
+    let node = deepest_source_node(tree, generated_line)?;
+    let span = node.generated_end_line + 1 - node.generated_start_line;
+    let exact = node.children.is_empty() && span == node.source_text.split('\n').count();
+    Some(match exact {
+        true => (
+            node.source_line + generated_line - node.generated_start_line,
+            true,
+        ),
+        false => (node.source_line, false),
+    })
 }
 
 fn deepest_source_node(nodes: &[SourceMapNode], generated_line: usize) -> Option<&SourceMapNode> {
@@ -8440,6 +8773,43 @@ mod tests {
                 checks(40, aggressive),
                 "{aggressive}"
             );
+        }
+    }
+
+    #[test]
+    fn item_checks_give_the_renk_of_whole_file_checks() {
+        // Each item wraps an `assert!`, so its check takes more than one round. The items read a
+        // function of another item as a value, hold a string with a blank line and a line that
+        // starts with `fn`, and have comments, attributes, a macro and a module between them.
+        let wrapped = "    assert!(\n        a > 1,\n        \"{}\",\n        a,\n    );\n";
+        let neighbours = format!(
+            "fn parse_args(a: usize) -> usize {{\n{wrapped}    a\n}}\n\n\
+             fn run(a: usize) -> usize {{\n{wrapped}    parse_args.call((a,))\n}}\n\n\
+             // A comment.\n\n#[inline]\nfn help(a: usize) -> &'static str {{\n{wrapped}    \"a\n\n\
+             fn b\n\n#[c]\"\n}}\n\n\
+             macro_rules! check {{\n    ($a:expr) => {{\n{wrapped}    }};\n}}\n\n\
+             mod inner {{\n    fn f(a: usize) {{\n    {wrapped}    }}\n\n    fn g() {{}}\n}}\n"
+        );
+        let corpus = std::fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/rust_corpus"))
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| path.extension().is_some_and(|extension| extension == "rs"))
+            .map(|path| {
+                (
+                    path.display().to_string(),
+                    std::fs::read_to_string(path).unwrap(),
+                )
+            });
+        for (name, rust) in corpus.chain([("neighbours".to_string(), neighbours)]) {
+            for aggressive in [false, true] {
+                let convert = |whole_file| {
+                    on_large_stack(|| {
+                        WHOLE_FILE_CHECKS.set(whole_file);
+                        with_value_scopes(|| convert_rust_lines(&rust, aggressive))
+                    })
+                };
+                assert_eq!(convert(false), convert(true), "{name} {aggressive}");
+            }
         }
     }
 
