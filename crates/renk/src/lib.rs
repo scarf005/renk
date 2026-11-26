@@ -2257,7 +2257,7 @@ fn source_lines(source: &str) -> Result<Vec<SourceLine>, TranspileError> {
             &mut open,
         ) || header_end.is_some()
             || in_matcher(&text)
-            || continues_with_operator(raw_lines.clone(), raw_indent(without_comment))
+            || continues_line(raw_lines.clone(), raw_indent(without_comment))
         {
             let Some((index, next)) = raw_lines.next() else {
                 return Err(TranspileError {
@@ -2428,21 +2428,22 @@ fn opens_operand_block(code: &str, in_parentheses: bool) -> bool {
     (starts_with_binary_operator(line) && opens_directly) || (in_parentheses && after_operator)
 }
 
-/// Whether the next line with code continues the expression at `indent` with a binary operator,
-/// as `+ b` or `== b`, after any blank or comment lines. `|| f()` is a closure and `> Type` closes
+/// Whether the next line with code, after any blank or comment lines, continues the line at
+/// `indent`: with a binary operator at that indent, as `+ b` or `== b`, or with a match arm's
+/// guard on a more indented line, as `if a => b`. `|| f()` is a closure and `> Type` closes
 /// generic parameters instead.
-fn continues_with_operator<'a>(
-    mut lines: impl Iterator<Item = (usize, &'a str)>,
-    indent: usize,
-) -> bool {
+fn continues_line<'a>(mut lines: impl Iterator<Item = (usize, &'a str)>, indent: usize) -> bool {
     lines
         .find(|(_, line)| code_len(line.trim_start()) > 0)
         .is_some_and(|(_, line)| {
-            let operator = line.trim_start();
-            raw_indent(line) == indent
-                && starts_with_binary_operator(operator)
-                && !operator.starts_with("|| ")
-                && !operator.starts_with("> ")
+            let code = line.trim_start();
+            (raw_indent(line) == indent
+                && starts_with_binary_operator(code)
+                && !code.starts_with("|| ")
+                && !code.starts_with("> "))
+                || (raw_indent(line) > indent
+                    && code.starts_with("if ")
+                    && find_top_level_keyword(&code[..code_len(code)], "=>").is_some())
         })
 }
 
