@@ -911,6 +911,84 @@ fn workspace_lists_each_package_directory_once() {
     let _ = fs::remove_dir_all(dir);
 }
 
+/// The directories of the workspace members that `cargo metadata` reports for the workspace in `dir`.
+fn cargo_members(dir: &Path) -> Vec<PathBuf> {
+    let output = Command::new("cargo")
+        .args([
+            "metadata",
+            "--no-deps",
+            "--offline",
+            "--format-version",
+            "1",
+        ])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", text(&output.stderr));
+    let metadata: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let mut members = metadata["packages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|package| {
+            metadata["workspace_members"]
+                .as_array()
+                .unwrap()
+                .contains(&package["id"])
+        })
+        .map(|package| {
+            let manifest = fs::canonicalize(package["manifest_path"].as_str().unwrap());
+            manifest.unwrap().parent().unwrap().to_path_buf()
+        })
+        .collect::<Vec<_>>();
+    members.sort();
+    members
+}
+
+#[cfg(unix)]
+#[test]
+fn workspace_members_match_the_members_cargo_reports() {
+    let cases: [(&str, &str, &[&str]); 5] = [
+        ("class", "crates/[ab]", &["a", "b", "c"]),
+        ("range", "crates/[a-b]", &["a", "b", "c"]),
+        ("negation", "crates/[!a]", &["a", "b", "c"]),
+        ("hidden", "crates/*", &[".hidden", "a"]),
+        ("symlink", "crates/*", &["a", "link"]),
+    ];
+    for (name, pattern, packages) in cases {
+        let dir = temp_dir(&format!("cargo-members-{name}"));
+        write_files(
+            &dir,
+            &[(
+                "Cargo.toml",
+                &format!("[workspace]\nmembers = [\"{pattern}\"]\nresolver = \"3\"\n"),
+            )],
+        );
+        for package in packages {
+            let real = if *package == "link" {
+                "pkgs/b"
+            } else {
+                &format!("crates/{package}")
+            };
+            let id = package.trim_start_matches('.');
+            write_files(
+                &dir,
+                &[
+                    (&format!("{real}/Cargo.toml"), &manifest(id, "")),
+                    (&format!("{real}/src/lib.rs"), ""),
+                ],
+            );
+        }
+        if packages.contains(&"link") {
+            std::os::unix::fs::symlink("../pkgs/b", dir.join("crates/link")).unwrap();
+        }
+        let mut found = renk::project::workspace(&dir).unwrap().packages;
+        found.sort();
+        assert_eq!(found, cargo_members(&dir), "{name}");
+        let _ = fs::remove_dir_all(dir);
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn walks_do_not_follow_symlinks_to_directories() {
