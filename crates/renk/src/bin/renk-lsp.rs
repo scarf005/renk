@@ -2846,6 +2846,21 @@ mod tests {
     }
 
     #[test]
+    fn positions_at_the_end_of_a_line_go_before_the_semicolon_renk_wrote() {
+        let source = "fn main():\n    let 사용자 = 1\n    let z = \"😀\".len() + 사용자.na\n";
+        let generated = generated(&module_uri("src/end.rk"), source).unwrap();
+        let line = "    let z = \"😀\".len() + 사용자.na";
+        let rust =
+            source_position_to_rust_position(&generated, source, Position::new(2, utf16_len(line)))
+                .unwrap();
+        assert_eq!(
+            generated.rust.lines().nth(rust.line as usize),
+            Some(format!("{line};").as_str())
+        );
+        assert_eq!(rust.character, utf16_len(line));
+    }
+
+    #[test]
     fn script_diagnostics_point_at_script_lines() {
         let uri =
             Url::from_file_path(std::env::temp_dir().join("renk-lsp-diagnostics/tool.rk")).unwrap();

@@ -601,6 +601,22 @@ mod tests {
     }
 
     #[test]
+    fn script_column_puts_the_end_of_a_line_before_the_text_only_the_other_line_has() {
+        let renk = "    let z = 사용자.na";
+        let rust = "    let z = 사용자.na;";
+        let end = renk.chars().count();
+        // The end of the Renk line, and any column past it, goes before the `;` that renk wrote.
+        assert_eq!(script_column(rust, renk, end), end);
+        assert_eq!(script_column(rust, renk, end + 3), end);
+        assert_eq!(
+            script_column("fn f() -> i32 { x }", "fn f() -> i32 = x", 17),
+            17
+        );
+        assert_eq!(script_column(renk, rust, end + 1), end);
+        assert_eq!(script_column("}", "", 0), 0);
+    }
+
+    #[test]
     fn script_cache_is_per_source_path_and_keeps_the_stem() {
         let root = Path::new("/cache");
         let first = script_cache_path(root, Path::new("/a/tool.rk"));
