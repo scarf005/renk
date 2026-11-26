@@ -70,6 +70,22 @@ struct ServerConfig {
     max_requests: usize,
     max_concurrent_runs: usize,
     run_rate_limit_per_minute: usize,
+    sandbox: Sandbox,
+}
+
+/// How a compile or run step is kept apart from the server.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Sandbox {
+    /// New user, network, IPC and UTS namespaces. The step fails when one of them cannot be made.
+    Namespaces,
+    /// No namespaces. `RENK_WEB_UNSANDBOXED=1` selects this.
+    Unsandboxed,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ChildOptions {
+    timeout: Duration,
+    sandbox: Sandbox,
 }
 
 #[derive(Debug)]
@@ -127,6 +143,11 @@ async fn main() -> std::io::Result<()> {
                 "RENK_RUN_RATE_LIMIT_PER_MINUTE",
                 DEFAULT_RUN_RATE_LIMIT_PER_MINUTE,
             ),
+            sandbox: if env::var_os("RENK_WEB_UNSANDBOXED").is_some_and(|value| value == "1") {
+                Sandbox::Unsandboxed
+            } else {
+                Sandbox::Namespaces
+            },
         },
         dist: PathBuf::from(env::var("RENK_WEB_DIST").unwrap_or_else(|_| DEFAULT_DIST.to_string())),
         run_deps,
@@ -135,11 +156,36 @@ async fn main() -> std::io::Result<()> {
             &env::var("RENK_WEB_HOSTS").unwrap_or_default(),
         ),
     };
+    log_namespace_support(state.config.sandbox)?;
     eprintln!("renk-web listening on http://{addr}");
     axum::serve(listener, router(state))
         .with_graceful_shutdown(shutdown_signal())
         .await
         .map_err(std::io::Error::other)
+}
+
+fn log_namespace_support(sandbox: Sandbox) -> std::io::Result<()> {
+    let dir = temp_run_dir();
+    fs::create_dir_all(&dir)?;
+    let options = ChildOptions {
+        timeout: Duration::from_secs(5),
+        sandbox: Sandbox::Namespaces,
+    };
+    let probe = run_command("rustc", &["--version"], &dir, options);
+    let _ = fs::remove_dir_all(dir);
+    let mode = match sandbox {
+        Sandbox::Namespaces => "runs need them",
+        Sandbox::Unsandboxed => "RENK_WEB_UNSANDBOXED=1 runs code without them",
+    };
+    if probe.status == Some(0) {
+        eprintln!("renk-web: namespaces work, {mode}");
+    } else {
+        eprintln!(
+            "renk-web: namespaces do not work ({}), {mode}",
+            probe.stderr.trim()
+        );
+    }
+    Ok(())
 }
 
 fn router(state: AppState) -> Router {
@@ -291,9 +337,12 @@ async fn handle_run_request(
     }
 
     let rust = rust.to_string();
-    let timeout = state.config.run_timeout;
+    let options = ChildOptions {
+        timeout: state.config.run_timeout,
+        sandbox: state.config.sandbox,
+    };
     let run_deps = state.run_deps.clone();
-    match tokio::task::spawn_blocking(move || compile_and_run_rust(&rust, timeout, &run_deps)).await
+    match tokio::task::spawn_blocking(move || compile_and_run_rust(&rust, options, &run_deps)).await
     {
         Ok(Ok(response)) => json_response(StatusCode::OK, run_response_json(response)),
         Ok(Err(error)) => json_response(
@@ -340,7 +389,7 @@ fn now_millis() -> u64 {
 
 fn compile_and_run_rust(
     rust: &str,
-    timeout: Duration,
+    options: ChildOptions,
     run_deps: &Path,
 ) -> std::io::Result<RunResponse> {
     let dir = temp_run_dir();
@@ -367,7 +416,7 @@ fn compile_and_run_rust(
         compile_args.extend(["-L".to_string(), format!("native={}", native.display())]);
     }
     let compile_args = compile_args.iter().map(String::as_str).collect::<Vec<_>>();
-    let compile = run_command("rustc", &compile_args, &dir, timeout);
+    let compile = run_command("rustc", &compile_args, &dir, options);
     if compile.status != Some(0) || compile.timed_out {
         let total_ms = elapsed_ms(started);
         let compile_ms = compile.elapsed_ms;
@@ -382,7 +431,7 @@ fn compile_and_run_rust(
         });
     }
 
-    let run = run_command(binary_path.to_str().unwrap(), &[], &dir, timeout);
+    let run = run_command(binary_path.to_str().unwrap(), &[], &dir, options);
     let total_ms = elapsed_ms(started);
     let compile_ms = compile.elapsed_ms;
     let run_ms = run.elapsed_ms;
@@ -461,7 +510,8 @@ fn temp_run_dir() -> PathBuf {
     env::temp_dir().join(format!("renk-run-{}-{nanos}", std::process::id()))
 }
 
-fn run_command(command: &str, args: &[&str], cwd: &Path, timeout: Duration) -> CommandResult {
+fn run_command(command: &str, args: &[&str], cwd: &Path, options: ChildOptions) -> CommandResult {
+    let timeout = options.timeout;
     let started = Instant::now();
     let stdout_path = temp_output_path(cwd, "stdout");
     let stderr_path = temp_output_path(cwd, "stderr");
@@ -493,15 +543,17 @@ fn run_command(command: &str, args: &[&str], cwd: &Path, timeout: Duration) -> C
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout_file))
         .stderr(Stdio::from(stderr_file));
-    configure_child_process(&mut command, timeout);
+    configure_child_process(&mut command, options);
     let child = command.spawn();
     let Ok(mut child) = child else {
+        // A failed sandbox step writes its name to the stderr file before `spawn` fails.
+        let (step, _) = read_limited_utf8(&stderr_path, MAX_OUTPUT_BYTES);
         let _ = fs::remove_file(stdout_path);
         let _ = fs::remove_file(stderr_path);
         return CommandResult {
             status: None,
             stdout: String::new(),
-            stderr: child.unwrap_err().to_string(),
+            stderr: format!("{step}{}", child.unwrap_err()),
             timed_out: false,
             stdout_truncated: false,
             stderr_truncated: false,
@@ -591,20 +643,31 @@ fn read_limited_utf8(path: &Path, limit: usize) -> (String, bool) {
     (String::from_utf8_lossy(&buffer).to_string(), truncated)
 }
 
-#[cfg(unix)]
-fn configure_child_process(command: &mut Command, timeout: Duration) {
-    let cpu_seconds = timeout.as_secs().saturating_add(1).max(1);
+#[cfg(target_os = "linux")]
+fn configure_child_process(command: &mut Command, options: ChildOptions) {
+    let cpu_seconds = options.timeout.as_secs().saturating_add(1).max(1);
+    // Format the ID maps here: the code between `fork` and `exec` must not allocate.
+    let id_maps = (options.sandbox == Sandbox::Namespaces).then(|| {
+        let (uid, gid) = unsafe { (libc::getuid(), libc::getgid()) };
+        (format!("{uid} {uid} 1"), format!("{gid} {gid} 1"))
+    });
     unsafe {
         command.pre_exec(move || {
             create_child_process_group()?;
-            apply_child_sandbox();
+            sandbox_step(
+                "no_new_privs",
+                libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) == 0,
+            )?;
+            if let Some((uid_map, gid_map)) = &id_maps {
+                enter_namespaces(uid_map, gid_map)?;
+            }
             apply_child_limits(cpu_seconds)
         });
     }
 }
 
-#[cfg(not(unix))]
-fn configure_child_process(_command: &mut Command, _timeout: Duration) {}
+#[cfg(not(target_os = "linux"))]
+fn configure_child_process(_command: &mut Command, _options: ChildOptions) {}
 
 #[cfg(unix)]
 fn create_child_process_group() -> std::io::Result<()> {
@@ -615,12 +678,38 @@ fn create_child_process_group() -> std::io::Result<()> {
     }
 }
 
-#[cfg(unix)]
-fn apply_child_sandbox() {
-    let _ = unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) };
-    let _ = unsafe { libc::unshare(libc::CLONE_NEWNET) };
-    let _ = unsafe { libc::unshare(libc::CLONE_NEWIPC) };
-    let _ = unsafe { libc::unshare(libc::CLONE_NEWUTS) };
+/// Runs between `fork` and `exec`, so it makes only async-signal-safe calls.
+#[cfg(target_os = "linux")]
+fn enter_namespaces(uid_map: &str, gid_map: &str) -> std::io::Result<()> {
+    let flags = libc::CLONE_NEWUSER | libc::CLONE_NEWNET | libc::CLONE_NEWIPC | libc::CLONE_NEWUTS;
+    sandbox_step("unshare", unsafe { libc::unshare(flags) } == 0)?;
+    write_proc_file("setgroups", c"/proc/self/setgroups", b"deny")?;
+    write_proc_file("uid_map", c"/proc/self/uid_map", uid_map.as_bytes())?;
+    write_proc_file("gid_map", c"/proc/self/gid_map", gid_map.as_bytes())
+}
+
+#[cfg(target_os = "linux")]
+fn write_proc_file(step: &str, path: &std::ffi::CStr, contents: &[u8]) -> std::io::Result<()> {
+    let fd = unsafe { libc::open(path.as_ptr(), libc::O_WRONLY | libc::O_CLOEXEC) };
+    sandbox_step(step, fd >= 0)?;
+    let written = unsafe { libc::write(fd, contents.as_ptr().cast(), contents.len()) };
+    let result = sandbox_step(step, written == contents.len() as isize);
+    unsafe { libc::close(fd) };
+    result
+}
+
+/// Returns `errno` when a step failed, and writes the step name to stderr for `run_command` to
+/// show. `spawn` returns only the error number.
+#[cfg(target_os = "linux")]
+fn sandbox_step(step: &str, succeeded: bool) -> std::io::Result<()> {
+    if succeeded {
+        return Ok(());
+    }
+    let error = std::io::Error::last_os_error();
+    for part in ["sandbox step `", step, "` failed: "] {
+        unsafe { libc::write(libc::STDERR_FILENO, part.as_ptr().cast(), part.len()) };
+    }
+    Err(error)
 }
 
 #[cfg(unix)]
@@ -838,6 +927,7 @@ mod tests {
                 max_requests: 8,
                 max_concurrent_runs: 1,
                 run_rate_limit_per_minute,
+                sandbox: Sandbox::Unsandboxed,
             },
             dist: dist.to_path_buf(),
             run_deps: dist.join("missing-deps"),
@@ -845,6 +935,13 @@ mod tests {
                 "0.0.0.0:8080".parse().unwrap(),
                 "renk.example.com, Other.example:8443",
             ),
+        }
+    }
+
+    fn unsandboxed(timeout: Duration) -> ChildOptions {
+        ChildOptions {
+            timeout,
+            sandbox: Sandbox::Unsandboxed,
         }
     }
 
@@ -1003,7 +1100,7 @@ mod tests {
             "sh",
             &["-c", "echo out; echo err >&2; exit 3"],
             &dir,
-            Duration::from_secs(5),
+            unsandboxed(Duration::from_secs(5)),
         );
         assert_eq!(result.status, Some(3));
         assert_eq!(
@@ -1016,7 +1113,7 @@ mod tests {
             "/nonexistent/renk-binary",
             &[],
             &dir,
-            Duration::from_secs(5),
+            unsandboxed(Duration::from_secs(5)),
         );
         assert_eq!(result.status, None);
         assert!(!result.stderr.is_empty());
@@ -1032,7 +1129,7 @@ mod tests {
     #[test]
     fn commands_get_only_the_toolchain_environment() {
         let dir = temp_dir("env");
-        let result = run_command("env", &[], &dir, Duration::from_secs(5));
+        let result = run_command("env", &[], &dir, unsandboxed(Duration::from_secs(5)));
         let variables = result
             .stdout
             .lines()
@@ -1090,7 +1187,7 @@ mod tests {
             "sh",
             &["-c", "sleep 30 & echo $! > child.pid; wait"],
             &dir,
-            Duration::from_millis(300),
+            unsandboxed(Duration::from_millis(300)),
         );
         assert!(result.timed_out);
         assert!(
@@ -1122,7 +1219,7 @@ mod tests {
                 &format!("head -c {} /dev/zero | tr '\\\\0' x", MAX_OUTPUT_BYTES + 10),
             ],
             &dir,
-            Duration::from_secs(5),
+            unsandboxed(Duration::from_secs(5)),
         );
         assert_eq!(result.stdout.len(), MAX_OUTPUT_BYTES);
         assert!(result.stdout_truncated && !result.stderr_truncated);
