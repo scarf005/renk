@@ -14,6 +14,7 @@ services:
       RENK_MAX_REQUESTS: "32"
       RENK_MAX_CONCURRENT_RUNS: "2"
       RENK_RUN_RATE_LIMIT_PER_MINUTE: "10"
+      RENK_WEB_HOSTS: ${RENK_WEB_HOSTS:-}
     user: "10001:10001"
     privileged: false
     read_only: true
