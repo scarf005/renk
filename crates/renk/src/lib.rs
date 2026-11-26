@@ -7922,8 +7922,9 @@ fn is_trailing_match(text: &str) -> bool {
         && text.match_indices("match ").any(|(at, _)| {
             let before = text[..at].trim_end();
             !text[..at].ends_with(is_ident_continue)
-                // An operand, as in `= match`, `&mut match`, or `!match`.
+                // An operand, as in `= match`, `&mut match`, `!match`, or `lo..match`.
                 && (before.ends_with(['=', '(', '[', '|', ',', '>', '&', '*', '!', '-', '+'])
+                    || before.ends_with("..")
                     || ["return", "&mut"].iter().any(|keyword| {
                         before
                             .strip_suffix(keyword)
