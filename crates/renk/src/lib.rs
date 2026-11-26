@@ -2419,7 +2419,7 @@ fn joins_next_line(
                 .iter()
                 .any(|operator| trimmed.ends_with(operator)))
             || ends_with_binary_operator(trimmed)
-            || (trimmed.ends_with(',') && ends_in_closure_parameters(trimmed))
+            || (trimmed.ends_with(',') && ends_in_closure_parameters(text))
             || next.is_some_and(|next| continues_where_clause(text, next, indent)))
 }
 
