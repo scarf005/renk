@@ -5,9 +5,11 @@
 
 - diagnostics for Renk syntax errors,
 - document symbols,
+- hover, go to definition, and completion. Without `rust-analyzer` they answer from the
+  declarations, keywords, and builtin types of the open file,
 - from `rust-analyzer` on the generated Rust, when `rust-analyzer` is on `PATH`: its
-  diagnostics, including type errors from its `cargo check` on save; hover; go to definition;
-  completion; find references; rename; code actions; and inlay hints.
+  diagnostics, including type errors from its `cargo check` on save; and richer hover, go to
+  definition, and completion. Find references, rename, code actions, and inlay hints need it.
 
 Positions map back to the `.rk` file. A rename fails when it would change Renk text that
 differs from the generated Rust, and a code action is left out when its edit does not map to
