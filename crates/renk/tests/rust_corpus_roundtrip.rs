@@ -140,6 +140,7 @@ const RENK_CORPUS: &[(&str, &str)] = &[
         "one_line_matches",
         include_str!("renk_corpus/one_line_matches.rk"),
     ),
+    ("index_calls", include_str!("renk_corpus/index_calls.rk")),
 ];
 
 #[test]
