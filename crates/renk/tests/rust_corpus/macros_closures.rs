@@ -27,3 +27,24 @@ pub fn called_closures(A: u8) -> u8 {
         b[0]
     })())
 }
+
+pub fn parameter_lines(limit: u8) -> u8 {
+    let start = |first: u8,
+                 second: u8| {
+        // The bars stay on the parameter lines.
+        first + second
+    };
+    let add = |first: u8,
+               second: u8| first + second;
+    let pair = move |(first, second): (u8, u8),
+                     third: u8| {
+        first * second + third
+    };
+    let text = "|a,";
+    let picked = match limit {
+        0 | 1 => 1,
+        | 2 => 2,
+        _ => 3,
+    };
+    start(add(1, 2), pair((3, 4), picked)) + text.len() as u8
+}
