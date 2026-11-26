@@ -1790,26 +1790,11 @@ fn formatted(uri: &Url, text: &str) -> std::result::Result<String, String> {
     if text.is_empty() {
         return Ok(String::new());
     }
-    std::process::Command::new("rustfmt")
-        .arg("--version")
-        .output()
-        .map_err(|error| {
-            format!("cannot run rustfmt ({error}); install it with `rustup component add rustfmt`")
-        })?;
     let path = uri.to_file_path().ok();
     let dir = (path.as_ref().and_then(|path| path.parent())).filter(|dir| dir.is_dir());
-    let rustfmt = |rust: &str| {
-        let mut command = std::process::Command::new("rustfmt");
-        command.args(["--edition", "2024"]).stdin(Stdio::piped());
-        command.stdout(Stdio::piped()).stderr(Stdio::null());
-        if let Some(dir) = dir {
-            command.current_dir(dir);
-        }
-        let mut child = command.spawn().ok()?;
-        std::io::Write::write_all(&mut child.stdin.take()?, rust.as_bytes()).ok()?;
-        let output = child.wait_with_output().ok()?;
-        (output.status.success()).then(|| String::from_utf8(output.stdout).ok())?
-    };
+    let dir = dir.unwrap_or(Path::new("."));
+    renk::rustfmt("", dir)?;
+    let rustfmt = |rust: &str| renk::rustfmt(rust, dir).ok().flatten();
     format_source_with(text, &rustfmt).map_err(|error| {
         let name = path.map_or_else(|| uri.to_string(), |path| path.display().to_string());
         format!("{name}:{error}")

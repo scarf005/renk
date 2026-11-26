@@ -236,12 +236,10 @@ fn run_fmt(args: Fmt) -> CliResult<i32> {
     if to_stdout && (args.inputs.len() > 1 || args.inputs.iter().any(|path| path.is_dir())) {
         return Err("formatting more than one file needs --check or --write".into());
     }
-    Command::new("rustfmt")
-        .arg("--version")
-        .output()
-        .map_err(|error| {
-            format!("cannot run rustfmt ({error}); install it with `rustup component add rustfmt`")
-        })?;
+    // rustfmt runs in the working directory and reads its `rustfmt.toml`.
+    let here = Path::new(".");
+    renk::rustfmt("", here)?;
+    let rustfmt = |rust: &str| renk::rustfmt(rust, here).ok().flatten();
     let mut paths = Vec::new();
     for input in &args.inputs {
         if input.is_dir() {
@@ -311,26 +309,6 @@ fn run_fmt(args: Fmt) -> CliResult<i32> {
         code = 1;
     }
     Ok(code)
-}
-
-/// `rust` formatted by `rustfmt` for edition 2024, with the `rustfmt.toml` of the working
-/// directory; `None` when rustfmt rejects it.
-fn rustfmt(rust: &str) -> Option<String> {
-    use io::Write;
-    let mut child = Command::new("rustfmt")
-        .args(["--edition", "2024"])
-        .stdin(process::Stdio::piped())
-        .stdout(process::Stdio::piped())
-        .stderr(process::Stdio::null())
-        .spawn()
-        .ok()?;
-    child.stdin.take()?.write_all(rust.as_bytes()).ok()?;
-    let output = child.wait_with_output().ok()?;
-    output
-        .status
-        .success()
-        .then(|| String::from_utf8(output.stdout).ok())
-        .flatten()
 }
 
 /// Refuses an output path that names the input file, so the result cannot replace the source.

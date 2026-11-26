@@ -343,6 +343,30 @@ pub fn format_source_with(
     Ok(lines[..parts.body_start].concat() + &"\n".repeat(gap) + &formatted)
 }
 
+/// `rust` formatted by `rustfmt` for edition 2024, run in `dir` to read the `rustfmt.toml` there;
+/// `Ok(None)` when rustfmt rejects it, and an error that tells how to install rustfmt when it
+/// cannot run.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn rustfmt(rust: &str, dir: &std::path::Path) -> Result<Option<String>, String> {
+    use std::process::{Command, Stdio};
+    let mut child = Command::new("rustfmt")
+        .args(["--edition", "2024"])
+        .current_dir(dir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| {
+            format!("cannot run rustfmt ({error}); install it with `rustup component add rustfmt`")
+        })?;
+    let formatted = || {
+        std::io::Write::write_all(&mut child.stdin.take()?, rust.as_bytes()).ok()?;
+        let output = child.wait_with_output().ok()?;
+        (output.status.success()).then(|| String::from_utf8(output.stdout).ok())?
+    };
+    Ok(formatted())
+}
+
 /// The generated Rust of `source` as `rustfmt` formats it.
 #[cfg(not(target_arch = "wasm32"))]
 fn formatted_rust(source: &str, rustfmt: &dyn Fn(&str) -> Option<String>) -> Option<String> {
