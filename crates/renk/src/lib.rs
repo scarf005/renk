@@ -6485,7 +6485,7 @@ fn map_code(chars: &[char], lower: &dyn Fn(&str) -> String) -> String {
         + &chars[last..].iter().collect::<String>()
 }
 
-/// Replaces the arguments of every std format macro invocation outside literals with
+/// Replaces the arguments of every std format macro invocation outside literals and comments with
 /// `rewrite(arguments, prefix)`, leaving invocations it declines unchanged.
 fn rewrite_format_macros(text: &str, rewrite: fn(&str, usize) -> Option<String>) -> String {
     let mut output = String::with_capacity(text.len());
@@ -6494,10 +6494,26 @@ fn rewrite_format_macros(text: &str, rewrite: fn(&str, usize) -> Option<String>)
         let Some(character) = text[index..].chars().next() else {
             break;
         };
-        if matches!(character, '"' | '\'') {
-            let end = quoted_string_end(text, index);
-            output.push_str(&text[index..=end]);
-            index = end + 1;
+        let rest = &text[index..];
+        let skipped = if let Some(end) = raw_literal_end(text, index) {
+            end - index
+        } else if rest.starts_with("//") {
+            rest.find('\n').unwrap_or(rest.len())
+        } else if rest.starts_with("/*") {
+            rest.find("*/").map_or(rest.len(), |end| end + 2)
+        } else if character == '"' {
+            quoted_string_end(text, index) + 1 - index
+        } else if character == '\'' {
+            // The `'` of a lifetime, as in `&'a str`, opens no literal.
+            let chars = rest.chars().take(12).collect::<Vec<_>>();
+            char_literal_end(&chars, 0)
+                .map_or(1, |end| chars[..=end].iter().map(|c| c.len_utf8()).sum())
+        } else {
+            0
+        };
+        if skipped > 0 {
+            output.push_str(&rest[..skipped]);
+            index += skipped;
             continue;
         }
         if is_ident_start(character) {
@@ -9486,6 +9502,7 @@ pub fn normalized_names(lines: Vec<String>) -> Vec<String> {
             "/* it's */\n",
             "fn g(x: &'static str) {}\n",
             "const Q: char = '\\'';\n",
+            "const R: &str = r#\"a\"b\"#;\n",
         ] {
             let text = format!("{before}{call}");
             assert_eq!(canonical_format_macros(&text), format!("{before}{inlined}"));
