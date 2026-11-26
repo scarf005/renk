@@ -2070,7 +2070,8 @@ fn semantic_tokens(
     rust: &[SemanticToken],
 ) -> Vec<SemanticToken> {
     let index = |names: &str, name: &str| names.split(' ').position(|known| known == name);
-    let modifiers: Vec<_> = (legend.token_modifiers.iter())
+    // A token's bitset is a u32, so it can name only the first 32 modifiers.
+    let modifiers: Vec<_> = (legend.token_modifiers.iter().take(32))
         .map(|modifier| index(TOKEN_MODIFIERS, modifier.as_str()))
         .collect();
     let mut start = Position::new(0, 0);
