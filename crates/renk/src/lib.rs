@@ -45,15 +45,19 @@ impl TranspileOutput {
     }
 
     /// For each 1-based generated line, its source line and whether renk synthesized it, like a
-    /// closing brace.
+    /// closing brace. The other lines come from text on their source line, as the body after `=`
+    /// of a one-line function does.
     pub fn line_origins(&self) -> Vec<(usize, bool)> {
-        (1..=self.rust.lines().count())
-            .map(|line| {
-                let written = self
-                    .source_map
-                    .iter()
-                    .any(|entry| entry.generated_line == line);
-                (self.source_line(line).unwrap_or(line), !written)
+        self.rust
+            .lines()
+            .zip(1..)
+            .map(|(text, line)| {
+                let synthesized = text.trim_start().starts_with('}')
+                    && !self
+                        .source_map
+                        .iter()
+                        .any(|entry| entry.generated_line == line);
+                (self.source_line(line).unwrap_or(line), synthesized)
             })
             .collect()
     }
