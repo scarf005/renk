@@ -23,12 +23,13 @@ use tower_lsp::{
         CodeAction, CodeActionClientCapabilities, CodeActionKind, CodeActionKindLiteralSupport,
         CodeActionLiteralSupport, CodeActionOrCommand, CodeActionParams,
         CodeActionProviderCapability, CodeActionResponse, CompletionItem, CompletionItemKind,
-        CompletionOptions, CompletionParams, CompletionResponse, Diagnostic, DiagnosticSeverity,
-        DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
-        DidSaveTextDocumentParams, DocumentChangeOperation, DocumentChanges, DocumentSymbol,
-        DocumentSymbolParams, DocumentSymbolResponse, GotoDefinitionParams, GotoDefinitionResponse,
-        Hover, HoverContents, HoverParams, InitializeParams, InitializeResult, InitializedParams,
-        InlayHint, InlayHintLabel, InlayHintParams, Location, MarkupContent, MarkupKind,
+        CompletionList, CompletionOptions, CompletionParams, CompletionResponse,
+        CompletionTextEdit, Diagnostic, DiagnosticSeverity, DidChangeTextDocumentParams,
+        DidCloseTextDocumentParams, DidOpenTextDocumentParams, DidSaveTextDocumentParams,
+        DocumentChangeOperation, DocumentChanges, DocumentSymbol, DocumentSymbolParams,
+        DocumentSymbolResponse, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverContents,
+        HoverParams, InitializeParams, InitializeResult, InitializedParams, InlayHint,
+        InlayHintLabel, InlayHintParams, InsertReplaceEdit, Location, MarkupContent, MarkupKind,
         MessageType, NumberOrString, OneOf, Position, PrepareRenameResponse,
         PublishDiagnosticsParams, Range, ReferenceParams, RenameOptions, RenameParams, ResourceOp,
         ServerCapabilities, SymbolKind, TextDocumentContentChangeEvent, TextDocumentEdit,
@@ -368,7 +369,20 @@ impl LanguageServer for Backend {
                 .await
                 .and_then(|value| serde_json::from_value(value).ok())
             {
-                return Ok(Some(completion));
+                let script = is_script(&uri, text);
+                let items = |items: Vec<CompletionItem>| {
+                    items
+                        .into_iter()
+                        .filter_map(|item| completion_item(&generated, text, script, item))
+                        .collect()
+                };
+                return Ok(Some(match completion {
+                    CompletionResponse::Array(array) => CompletionResponse::Array(items(array)),
+                    CompletionResponse::List(list) => CompletionResponse::List(CompletionList {
+                        items: items(list.items),
+                        ..list
+                    }),
+                }));
             }
         }
 
@@ -1324,6 +1338,13 @@ fn rust_initialize_params(mut params: InitializeParams, rust_root_uri: &Url) -> 
     if let Some(inlay_hint) = text_document.inlay_hint.as_mut() {
         inlay_hint.resolve_support = None;
     }
+    // Completions too, with each item's own edits.
+    if let Some(completion) = text_document.completion.as_mut() {
+        completion.completion_list = None;
+        if let Some(item) = completion.completion_item.as_mut() {
+            item.resolve_support = None;
+        }
+    }
     if let Some(experimental) = params
         .capabilities
         .experimental
@@ -1733,6 +1754,57 @@ fn checked_edit(generated: &Generated, text: &str, edit: TextEdit) -> Option<Tex
     let range = rust_range_to_source_range(generated, text, edit.range);
     (range_text(text, range) == range_text(&generated.rust, edit.range))
         .then_some(TextEdit::new(range, edit.new_text))
+}
+
+/// A completion of a document's generated Rust with its edits at the document's positions, or
+/// `None` when an edit does not map. renk-lsp converts the extra edits, such as a new `use` line,
+/// with [`renk_edits`], and drops the item when one of them changes a line that the completion's
+/// own edit changes.
+fn completion_item(
+    generated: &Generated,
+    text: &str,
+    script: bool,
+    item: CompletionItem,
+) -> Option<CompletionItem> {
+    let range = |range| {
+        checked_edit(generated, text, TextEdit::new(range, String::new())).map(|edit| edit.range)
+    };
+    let text_edit = match item.text_edit {
+        Some(CompletionTextEdit::Edit(edit)) => Some(CompletionTextEdit::Edit(TextEdit {
+            range: range(edit.range)?,
+            ..edit
+        })),
+        Some(CompletionTextEdit::InsertAndReplace(edit)) => {
+            Some(CompletionTextEdit::InsertAndReplace(InsertReplaceEdit {
+                insert: range(edit.insert)?,
+                replace: range(edit.replace)?,
+                ..edit
+            }))
+        }
+        None => None,
+    };
+    let edited = match &text_edit {
+        Some(CompletionTextEdit::Edit(edit)) => vec![edit.range],
+        Some(CompletionTextEdit::InsertAndReplace(edit)) => vec![edit.insert, edit.replace],
+        None => Vec::new(),
+    };
+    let overlaps = |edit: &TextEdit| {
+        edited.iter().any(|range| {
+            edit.range.start.line <= range.end.line && range.start.line < edit.range.end.line
+        })
+    };
+    let additional_text_edits = item
+        .additional_text_edits
+        .map(|edits| {
+            let edits = renk_edits(text, &generated.rust, &edits, script)?;
+            (!edits.iter().any(overlaps)).then_some(edits)
+        })
+        .map_or(Some(None), |edits| edits.map(Some))?;
+    Some(CompletionItem {
+        text_edit,
+        additional_text_edits,
+        ..item
+    })
 }
 
 /// Renk edits of `source` that make the change `edits` make to its generated Rust `rust`, or
@@ -2647,7 +2719,6 @@ fn range_for_span(line: u32, start: usize, end: usize) -> Range {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tower_lsp::lsp_types::{CompletionTextEdit, InsertReplaceEdit};
 
     #[test]
     fn hover_reports_function_signature() {
