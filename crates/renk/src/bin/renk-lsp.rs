@@ -4118,6 +4118,26 @@ mod tests {
     }
 
     #[test]
+    fn completions_drop_an_extra_edit_at_the_position_their_own_edit_starts() {
+        let source = "fn helper() -> i32 = 1\nfn main() = helper()\n";
+        let generated = generated(&module_uri("src/complete.rk"), source).unwrap();
+        let line = (generated.rust.lines())
+            .position(|line| line.starts_with("fn main"))
+            .unwrap() as u32;
+        let item = |column: u32| CompletionItem {
+            text_edit: Some(CompletionTextEdit::Edit(TextEdit::new(
+                Range::new(Position::new(line, column), Position::new(line, column + 2)),
+                "pub fn".into(),
+            ))),
+            additional_text_edits: Some(vec![insert(line, "use std::fmt;\n")]),
+            ..CompletionItem::default()
+        };
+        let kept = |column| completion_item(&generated, source, false, item(column)).is_some();
+        assert!(!kept(0));
+        assert!(kept(3));
+    }
+
+    #[test]
     fn same_rust_ignores_spaces_between_tokens_but_not_inside_a_string() {
         assert!(same_rust("f( 1,\n  2 );", "f(1, 2);"));
         assert!(!same_rust("f(\"a b\");", "f(\"a  b\");"));
