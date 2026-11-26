@@ -46,6 +46,8 @@ const RATE_LIMIT_WINDOW_MS: u64 = 60_000;
 const CHILD_FILE_SIZE_MIB: u64 = 64;
 const CHILD_OPEN_FILES: u64 = 64;
 const CHILD_FILE_SIZE_BYTES: u64 = CHILD_FILE_SIZE_MIB * BYTES_PER_MIB;
+/// rustc finds its toolchain through these. The submitted program gets the same variables.
+const CHILD_ENV: [&str; 4] = ["PATH", "RUSTUP_HOME", "RUSTUP_TOOLCHAIN", "LANG"];
 
 static ACTIVE_REQUESTS: AtomicUsize = AtomicUsize::new(0);
 static ACTIVE_RUNS: AtomicUsize = AtomicUsize::new(0);
@@ -479,6 +481,13 @@ fn run_command(command: &str, args: &[&str], cwd: &Path, timeout: Duration) -> C
 
     let mut command = Command::new(command);
     command
+        .env_clear()
+        .envs(
+            CHILD_ENV
+                .iter()
+                .filter_map(|name| Some((name, env::var_os(name)?))),
+        )
+        .env("TMPDIR", cwd)
         .args(args)
         .current_dir(cwd)
         .stdin(Stdio::null())
