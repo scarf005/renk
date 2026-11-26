@@ -244,15 +244,26 @@ fn run_fmt(args: Fmt) -> CliResult<i32> {
     };
     let mut code = 0;
     for input in inputs {
-        let source = read_source(input)?;
-        let formatted = format_source_with(&source, &rustfmt)?;
+        let name = input_name(input.map(PathBuf::as_path));
+        let formatted = read_source(input).and_then(|source| {
+            let formatted =
+                format_source_with(&source, &rustfmt).map_err(|error| located(&name, error))?;
+            Ok((source, formatted))
+        });
+        let (source, formatted) = match formatted {
+            Ok(formatted) => formatted,
+            Err(error) if args.check => {
+                eprintln!("renk: {error}");
+                code = 1;
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
         if !args.check {
             emit(args.output, &formatted)?;
             return Ok(0);
         }
         if formatted != source {
-            let name =
-                input.map_or_else(|| "<stdin>".to_string(), |path| path.display().to_string());
             print!(
                 "{}",
                 similar::TextDiff::from_lines(&source, &formatted)
@@ -305,10 +316,11 @@ fn run_from_rust(args: FromRust) -> CliResult<i32> {
     check_output(&args.io)?;
     let source = read_source(args.io.input.as_ref())?;
     let converted = if args.aggressive {
-        rust_to_renk_aggressive(&source)?
+        rust_to_renk_aggressive(&source)
     } else {
-        rust_to_renk(&source)?
-    };
+        rust_to_renk(&source)
+    }
+    .map_err(|error| located(input_name(args.io.input.as_deref()), error))?;
     emit(args.io.output, &converted)?;
     Ok(0)
 }
@@ -320,6 +332,7 @@ fn run_transpile(args: Transpile) -> CliResult<i32> {
         source_map,
     } = args;
     let source = read_source(input.as_ref())?;
+    let at_input = |error| located(input_name(input.as_deref()), error);
     let syntax = source_syntax(input.as_deref());
     // A script, with a `#!` line or frontmatter, prints the Rust `renk script` builds.
     let is_script = syntax == SourceSyntax::Renk
@@ -337,15 +350,17 @@ fn run_transpile(args: Transpile) -> CliResult<i32> {
             })
             .unwrap_or_else(|| "script".to_string());
         renk::TranspileOutput {
-            rust: script_rust(&source, syntax, &package)?.rust,
+            rust: script_rust(&source, syntax, &package)
+                .map_err(at_input)?
+                .rust,
             source_map: Vec::new(),
             source_tree: Vec::new(),
         }
     } else if syntax == SourceSyntax::Renk {
-        transpile(&source)?
+        transpile(&source).map_err(at_input)?
     } else {
         renk::TranspileOutput {
-            rust: to_rust(&source, syntax)?,
+            rust: to_rust(&source, syntax).map_err(at_input)?,
             source_map: Vec::new(),
             source_tree: Vec::new(),
         }
@@ -548,7 +563,7 @@ fn run_script(
         args,
     }: Script,
 ) -> CliResult<i32> {
-    let source = fs::read_to_string(&script_path)?;
+    let source = read_source(Some(&script_path))?;
     let cache_root = cache_root().ok_or("script requires XDG_CACHE_HOME or HOME")?;
     let source_path = fs::canonicalize(&script_path)?;
     let rust_path = script_cache_path(&cache_root.join("scripts"), &source_path);
@@ -557,7 +572,7 @@ fn run_script(
         source_syntax(Some(&script_path)),
         &script_package(&rust_path),
     )
-    .map_err(|error| format!("{}: {error}", script_path.display()))?;
+    .map_err(|error| located(script_path.display(), error))?;
     write_script_cache(&rust_path, &script.rust)?;
     let build_dir = cache_root.join("build");
     let build_dir = script.named_package.then_some(build_dir.as_path());
@@ -618,10 +633,12 @@ fn run_add(
         args,
     }: Add,
 ) -> CliResult<i32> {
-    let source = fs::read_to_string(&script_path)?;
+    let source = read_source(Some(&script_path))?;
+    let at_script = |error| located(script_path.display(), error);
     // The scratch manifest names an edition, so cargo does not warn about its missing one.
     let mut pinned = false;
-    let frontmatter = edit_manifest(&script_frontmatter(&source)?, |document| {
+    let manifest = script_frontmatter(&source).map_err(at_script)?;
+    let frontmatter = edit_manifest(&manifest, |document| {
         let package = document.entry("package").or_insert(toml_edit::table());
         if let Some(package) = package
             .as_table_like_mut()
@@ -658,7 +675,7 @@ fn run_add(
             }
         });
     }
-    let spliced = splice_frontmatter(&source, &frontmatter)?;
+    let spliced = splice_frontmatter(&source, &frontmatter).map_err(at_script)?;
     if spliced != source {
         fs::write(&script_path, spliced)?;
     }
@@ -1599,8 +1616,14 @@ fn transpile_cargo_sources(workspace: &Workspace) -> CliResult<Vec<Generated>> {
     let mut generated = Vec::new();
     for source_path in sources {
         let rust_path = source_path.with_extension("rs");
-        let source = fs::read_to_string(&source_path)?;
-        let output = transpile(&source)?;
+        let path = source_path
+            .strip_prefix(&workspace.root)
+            .unwrap_or(&source_path)
+            .display()
+            .to_string();
+        let source =
+            fs::read_to_string(&source_path).map_err(|error| format!("{path}: {error}"))?;
+        let output = transpile(&source).map_err(|error| located(&path, error))?;
         let rust = format!("{GENERATED_HEADER}{}", output.rust);
         project::write_generated(&rust_path, &rust)?;
         // The header is the first Rust line.
@@ -1610,11 +1633,7 @@ fn transpile_cargo_sources(workspace: &Workspace) -> CliResult<Vec<Generated>> {
             .collect();
         generated.push(Generated {
             rust_path,
-            path: source_path
-                .strip_prefix(&workspace.root)
-                .unwrap_or(&source_path)
-                .display()
-                .to_string(),
+            path,
             source,
             rust,
             source_lines,
@@ -1624,15 +1643,28 @@ fn transpile_cargo_sources(workspace: &Workspace) -> CliResult<Vec<Generated>> {
     Ok(generated)
 }
 
+/// The text of the file at `path`, or of stdin. A read error names the file.
 fn read_source(path: Option<&PathBuf>) -> Result<String, Box<dyn std::error::Error>> {
     match path {
-        Some(path) => Ok(fs::read_to_string(path)?),
+        Some(path) => {
+            Ok(fs::read_to_string(path).map_err(|error| format!("{}: {error}", path.display()))?)
+        }
         None => {
             let mut source = String::new();
             io::stdin().read_to_string(&mut source)?;
             Ok(source)
         }
     }
+}
+
+/// How errors and diffs name the input at `path`, or stdin.
+fn input_name(path: Option<&Path>) -> String {
+    path.map_or_else(|| "<stdin>".to_string(), |path| path.display().to_string())
+}
+
+/// `error` in the input that `name` shows, as `name:line: message`.
+fn located(name: impl std::fmt::Display, error: TranspileError) -> String {
+    format!("{name}:{}: {}", error.line, error.message)
 }
 
 fn source_syntax(path: Option<&Path>) -> SourceSyntax {
