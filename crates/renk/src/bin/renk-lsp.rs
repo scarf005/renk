@@ -4136,6 +4136,29 @@ mod tests {
     }
 
     #[test]
+    fn symbols_of_a_node_without_a_source_line_cover_the_first_line() {
+        let node = SourceMapNode {
+            kind: "struct".into(),
+            source_line: 0,
+            source_column: 0,
+            source_text: "struct Point".into(),
+            generated_start_line: 0,
+            generated_end_line: 0,
+            children: Vec::new(),
+        };
+        let output = TranspileOutput {
+            rust: String::new(),
+            source_map: Vec::new(),
+            source_tree: Vec::new(),
+        };
+        let symbol = symbol_from_node(&node, &output, &["struct Point"]).unwrap();
+        assert_eq!(
+            symbol.range,
+            Range::new(Position::new(0, 0), Position::new(0, 12))
+        );
+    }
+
+    #[test]
     fn same_rust_ignores_spaces_between_tokens_but_not_inside_a_string() {
         assert!(same_rust("f( 1,\n  2 );", "f(1, 2);"));
         assert!(!same_rust("f(\"a b\");", "f(\"a  b\");"));
