@@ -26,18 +26,19 @@ use tower_lsp::{
         CodeActionProviderCapability, CodeActionResponse, CompletionItem, CompletionItemKind,
         CompletionList, CompletionOptions, CompletionParams, CompletionResponse,
         CompletionTextEdit, Diagnostic, DiagnosticSeverity, DidChangeTextDocumentParams,
+        DidChangeWatchedFilesParams, DidChangeWatchedFilesRegistrationOptions,
         DidCloseTextDocumentParams, DidOpenTextDocumentParams, DidSaveTextDocumentParams,
         DocumentChangeOperation, DocumentChanges, DocumentSymbol, DocumentSymbolParams,
-        DocumentSymbolResponse, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverContents,
-        HoverParams, InitializeParams, InitializeResult, InitializedParams, InlayHint,
-        InlayHintLabel, InlayHintParams, InsertReplaceEdit, Location, MarkupContent, MarkupKind,
-        MessageType, NumberOrString, OneOf, Position, PrepareRenameResponse,
-        PublishDiagnosticsParams, Range, ReferenceParams, RenameOptions, RenameParams, ResourceOp,
-        ServerCapabilities, SymbolKind, TextDocumentContentChangeEvent, TextDocumentEdit,
-        TextDocumentIdentifier, TextDocumentItem, TextDocumentPositionParams,
-        TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions,
-        TextDocumentSyncSaveOptions, TextEdit, Url, VersionedTextDocumentIdentifier, WorkspaceEdit,
-        WorkspaceFolder,
+        DocumentSymbolResponse, FileChangeType, FileEvent, FileSystemWatcher, GlobPattern,
+        GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverContents, HoverParams,
+        InitializeParams, InitializeResult, InitializedParams, InlayHint, InlayHintLabel,
+        InlayHintParams, InsertReplaceEdit, Location, MarkupContent, MarkupKind, MessageType,
+        NumberOrString, OneOf, Position, PrepareRenameResponse, PublishDiagnosticsParams, Range,
+        ReferenceParams, Registration, RenameOptions, RenameParams, ResourceOp, ServerCapabilities,
+        SymbolKind, TextDocumentContentChangeEvent, TextDocumentEdit, TextDocumentIdentifier,
+        TextDocumentItem, TextDocumentPositionParams, TextDocumentSyncCapability,
+        TextDocumentSyncKind, TextDocumentSyncOptions, TextDocumentSyncSaveOptions, TextEdit, Url,
+        VersionedTextDocumentIdentifier, WorkspaceEdit, WorkspaceFolder,
     },
 };
 
@@ -119,6 +120,26 @@ impl LanguageServer for Backend {
     async fn initialized(&self, params: InitializedParams) {
         for rust_analyzer in self.workspaces.read().await.values() {
             rust_analyzer.notify("initialized", params.clone()).await;
+        }
+        let watches = (self.initialize_params.read().await.as_ref()).and_then(|params| {
+            let workspace = params.capabilities.workspace.as_ref()?;
+            workspace.did_change_watched_files?.dynamic_registration
+        }) == Some(true);
+        if watches {
+            let options = DidChangeWatchedFilesRegistrationOptions {
+                watchers: vec![FileSystemWatcher {
+                    glob_pattern: GlobPattern::String("**/*.rk".to_string()),
+                    kind: None,
+                }],
+            };
+            let registration = Registration {
+                id: "renk-files".to_string(),
+                method: "workspace/didChangeWatchedFiles".to_string(),
+                register_options: serde_json::to_value(options).ok(),
+            };
+            let client = self.client.clone();
+            // The editor may answer only after this notification is handled, so do not wait here.
+            tokio::spawn(async move { client.register_capability(vec![registration]).await });
         }
         self.client
             .log_message(MessageType::INFO, "renk language server initialized")
@@ -230,6 +251,40 @@ impl LanguageServer for Backend {
                 .notify(
                     "rust-analyzer/runFlycheck",
                     serde_json::json!({"textDocument": null}),
+                )
+                .await;
+        }
+    }
+
+    /// Brings the mirror up to date with Renk files that changed outside the editor, and takes
+    /// back the diagnostics of each deleted one that is not open.
+    async fn did_change_watched_files(&self, params: DidChangeWatchedFilesParams) {
+        let _sync = self.sync.lock().await;
+        let mut changed = HashMap::<PathBuf, Vec<FileEvent>>::new();
+        for change in params.changes {
+            let open = self.documents.read().await.contains_key(&change.uri);
+            if change.typ == FileChangeType::DELETED && !open {
+                self.rust_diagnostics.write().await.remove(&change.uri);
+                (self.client)
+                    .publish_diagnostics(change.uri.clone(), Vec::new(), None)
+                    .await;
+            }
+            if let Some((workspace, copy)) = mirrored_file(&change.uri)
+                && let Ok(uri) = Url::from_file_path(copy)
+            {
+                let events = changed.entry(workspace.root).or_default();
+                events.push(FileEvent::new(uri, change.typ));
+            }
+        }
+        for (root, changes) in changed {
+            let Some(rust_analyzer) = self.workspaces.read().await.get(&root).cloned() else {
+                continue;
+            };
+            self.refresh_mirror(&root).await;
+            rust_analyzer
+                .notify(
+                    "workspace/didChangeWatchedFiles",
+                    DidChangeWatchedFilesParams { changes },
                 )
                 .await;
         }
