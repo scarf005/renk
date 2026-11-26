@@ -131,6 +131,30 @@ fn macro_rules_bodies_use_rust_tokens() {
 }
 
 #[test]
+fn rust_attributes_keep_rust_tokens_in_renk() {
+    // Renk passes attribute text through, so `clone::<Self>()` must not become `clone[Self]()`.
+    let source = "#![cfg_attr(docs, doc = make::<u8>())]\n\n#[component(clone_behavior = clone::<Self>())]\npub struct A;\n\npub struct B {\n    #[arg(\n        value_parser = parse::<u8>(),\n        default = Vec::<u8>::new(),\n    )]\n    x: Vec<u8>,\n}\n\n#[inline] #[route(get = Path::<u8>::new())] pub fn f<T>(x: Vec<T>) -> usize {\n    let text = \"#[a(b = c::<d>())]\";\n    #[allow(unused)]\n    let made = Vec::<u8>::new();\n    x.len() + text.len() + made.len()\n}\n";
+    let renk = rust_to_renk(source).unwrap();
+    for attribute in [
+        "#![cfg_attr(docs, doc = make::<u8>())]",
+        "#[component(clone_behavior = clone::<Self>())]",
+        "value_parser = parse::<u8>(),",
+        "default = Vec::<u8>::new(),",
+        "#[inline] #[route(get = Path::<u8>::new())] pub fn f[T](x: Vec[T]) -> usize:",
+        "let text = \"#[a(b = c::<d>())]\"",
+        "let made = Vec[u8].new()",
+    ] {
+        assert!(renk.contains(attribute), "{attribute}\n{renk}");
+    }
+    let output = rust(&renk);
+    assert!(
+        output.contains("#[component(clone_behavior = clone::<Self>())]"),
+        "{output}"
+    );
+    assert!(output.contains("let made = Vec::<u8>::new();"), "{output}");
+}
+
+#[test]
 fn type_lowering_reenters_expression_context_for_consts() {
     let output = rust(
         "fn bytes() -> [u8; (TABLE)[N].len()] = todo!()\nfn array() -> Array[u8, { size_of[T]() }] = todo!()\n",
