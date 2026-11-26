@@ -943,8 +943,8 @@ fn hovers_come_from_rust_analyzer_without_a_workspace_folder() {
 
 #[test]
 fn shows_renk_syntax_errors_in_a_file_outside_every_package_without_a_workspace_folder() {
-    // A tab on line 1 is a Renk syntax error.
-    let files = [("loose.rk", "fn main():\n\tprintln!(\"hi\")\n")];
+    // A tab on line 1 is a Renk syntax error, and the error starts at the tab.
+    let files = [("loose.rk", "fn main():\n  \tprintln!(\"hi\")\n")];
     let Some(mut session) = Session::start("lsp-loose", &files, &[]) else {
         return;
     };
@@ -953,5 +953,5 @@ fn shows_renk_syntax_errors_in_a_file_outside_every_package_without_a_workspace_
         diagnostics.iter().any(|d| d["source"] == "renk")
     });
     let error = found.iter().find(|d| d["source"] == "renk");
-    assert_eq!(error.unwrap()["range"]["start"]["line"], 1, "{found:?}");
+    assert_eq!(error.unwrap()["range"], range(1, 2, 17), "{found:?}");
 }
