@@ -217,10 +217,12 @@ const languageExtension = (language: CodeLanguage): Extension => {
 
 const extensions = ({
   language,
+  label,
   editable,
   onChange,
 }: {
   language: CodeLanguage
+  label: string
   editable: boolean
   onChange?: (value: string) => void
 }): Extension[] => [
@@ -243,6 +245,7 @@ const extensions = ({
   languageExtension(language),
   EditorState.readOnly.of(!editable),
   EditorView.editable.of(editable),
+  EditorView.contentAttributes.of({ "aria-label": label }),
   EditorView.lineWrapping,
   EditorView.theme({
     "&": {
@@ -292,6 +295,7 @@ const setRef = <T,>(ref: Ref<T> | undefined, value: T | null) => {
 }
 
 interface CodeMirrorProps {
+  label: string
   value: string
   language: CodeLanguage
   editable: boolean
@@ -317,6 +321,7 @@ class CodeMirror extends Component<CodeMirrorProps> {
 
     if (
       previous.language !== this.props.language ||
+      previous.label !== this.props.label ||
       previous.editable !== this.props.editable
     ) {
       this.destroyView()
@@ -340,6 +345,7 @@ class CodeMirror extends Component<CodeMirrorProps> {
         doc: this.props.value,
         extensions: extensions({
           language: this.props.language,
+          label: this.props.label,
           editable: this.props.editable,
           onChange: (next) => this.props.onChange?.(next),
         }),
@@ -376,6 +382,7 @@ class CodeMirror extends Component<CodeMirrorProps> {
 }
 
 interface InputEditorProps {
+  label: string
   value: string
   language?: "renk" | "rust"
   onChange: (value: string) => void
@@ -384,6 +391,7 @@ interface InputEditorProps {
 }
 
 export const InputEditor = ({
+  label,
   value,
   language = "renk",
   onChange,
@@ -391,6 +399,7 @@ export const InputEditor = ({
   editorRef,
 }: InputEditorProps) => (
   <CodeMirror
+    label={label}
     value={value}
     language={language}
     editable
@@ -401,32 +410,48 @@ export const InputEditor = ({
 )
 
 interface OutputDisplayProps {
+  label: string
   value: string
   language: "renk" | "rust" | "json" | "text"
-  error?: string
   onScroll?: () => void
   outputRef?: Ref<HTMLElement>
 }
 
 export const OutputDisplay = ({
+  label,
   value,
   language,
-  error,
   onScroll,
   outputRef,
 }: OutputDisplayProps) => (
-  <div class={`relative w-full h-full ${error ? "bg-red-50" : "bg-gray-50"}`}>
-    {error && (
-      <div class="absolute inset-x-0 top-0 z-10 border-b-2 border-black bg-black text-white px-4 py-2 text-xs font-bold uppercase">
-        Transpile error: {error}
-      </div>
-    )}
+  <div class="relative w-full h-full bg-gray-50">
     <CodeMirror
+      label={label}
       value={value}
       language={language}
       editable={false}
       onScroll={onScroll}
       scrollRef={outputRef}
     />
+  </div>
+)
+
+export const ErrorBanner = ({ error }: { error: string }) => (
+  <div
+    role="alert"
+    class="flex-none border-b-2 border-black bg-black text-white px-4 py-2 text-xs font-bold uppercase"
+  >
+    Transpile error: {error}
+  </div>
+)
+
+export const Notice = (
+  { text, error }: { text: string; error?: boolean },
+) => (
+  <div
+    role={error ? "alert" : "status"}
+    class={`h-full p-4 text-sm font-bold ${error ? "bg-red-50" : "bg-gray-50"}`}
+  >
+    {text}
   </div>
 )

@@ -1,13 +1,8 @@
 import { useEffect, useRef } from "preact/hooks"
 import { computed, signal, useSignal } from "@preact/signals"
 import { useLocation } from "wouter-preact"
-import {
-  convert_rust_to_renk,
-  format_renk,
-  transpile_syntax_tree_json,
-  transpile_to_rust,
-} from "./wasm/renk.js"
-import { InputEditor, OutputDisplay } from "./Editor.tsx"
+import { createEngine } from "./engine.ts"
+import { ErrorBanner, InputEditor, Notice, OutputDisplay } from "./Editor.tsx"
 import { Header, Layout, Main, Panel } from "./Layout.tsx"
 import {
   DEFAULT_EXAMPLE_NAME,
@@ -29,6 +24,7 @@ type RunResponse = {
   stdout: string
   stderr: string
   timedOut: boolean
+  outputLimited?: boolean
   stdoutTruncated: boolean
   stderrTruncated: boolean
   compileMs: number
@@ -47,70 +43,74 @@ const RUN_SOURCE_LIMIT_LABEL = `${RUN_SOURCE_LIMIT_KIB} KiB`
 const AUTO_RUN_STORAGE_KEY = "renk:auto-run"
 const AUTO_RUN_DELAY_MS = 1_000
 
+const engine = createEngine(
+  new Worker(new URL("./wasm.worker.ts", import.meta.url), { type: "module" }),
+)
+
 const editSide = signal<EditSide>("source")
 const selectedExample = signal<ExampleName>(DEFAULT_EXAMPLE_NAME)
 const sourceCode = signal<string>(exampleSource(DEFAULT_EXAMPLE_NAME))
-const rustCode = signal<string>(transpile_to_rust(sourceCode.value))
+const rustCode = signal("")
+const syntaxTree = signal("")
+const transpileError = signal("")
+const outputMs = signal(0)
+const computing = signal(true)
+const wasmStatus = signal<"loading" | "ready" | "failed">("loading")
+const wasmError = signal("")
 const outputMode = signal<OutputMode>("rust")
 const runOutput = signal("")
 const runResult = signal<RunResponse | null>(null)
 const runState = signal<RunState>("idle")
 
-const converted = computed(() => {
-  const started = performance.now()
-  try {
-    const rustStarted = performance.now()
-    const rust = editSide.value === "rust"
-      ? rustCode.value
-      : transpile_to_rust(sourceCode.value)
-    const rustMs = performance.now() - rustStarted
-
-    const renkStarted = performance.now()
-    const renk = editSide.value === "rust"
-      ? convert_rust_to_renk(rust)
-      : sourceCode.value
-    const renkMs = performance.now() - renkStarted
-
-    const syntaxTreeStarted = performance.now()
-    const syntaxTree = transpile_syntax_tree_json(renk)
-    const syntaxTreeMs = performance.now() - syntaxTreeStarted
-    return {
-      rust,
-      renk,
-      syntaxTree,
-      rustMs,
-      renkMs,
-      syntaxTreeMs,
-      error: "",
-    }
-  } catch (error) {
-    const elapsedMs = performance.now() - started
-    return {
-      rust: "",
-      renk: "",
-      syntaxTree: "",
-      rustMs: elapsedMs,
-      renkMs: elapsedMs,
-      syntaxTreeMs: elapsedMs,
-      error: stringifyError(error),
-    }
-  }
-})
-
-const sourcePanelText = computed(() => sourceCode.value)
-const rustPanelText = computed(() =>
-  editSide.value === "rust" ? rustCode.value : converted.value.rust
+engine.ready.then(
+  () => wasmStatus.value = "ready",
+  (error) => {
+    wasmError.value = stringifyError(error)
+    wasmStatus.value = "failed"
+  },
 )
+
+let latestRefresh = 0
+
+// Recompute every output from the text the user last edited. A newer edit
+// makes the older answers stale, so only the latest refresh publishes.
+const refresh = async () => {
+  const ticket = ++latestRefresh
+  const started = performance.now()
+  computing.value = true
+  const fromRust = editSide.value === "rust"
+  let error = ""
+  let renk = sourceCode.value
+  let rust = rustCode.value
+  let tree = ""
+  try {
+    if (fromRust) renk = await engine.call("convert_rust_to_renk", rust)
+    else rust = await engine.call("transpile_to_rust", renk)
+    if (outputMode.value === "syntax-tree") {
+      tree = await engine.call("transpile_syntax_tree_json", renk)
+    }
+  } catch (cause) {
+    error = stringifyError(cause)
+    if (!fromRust) rust = ""
+  }
+  if (ticket !== latestRefresh) return
+  if (!error) sourceCode.value = renk
+  rustCode.value = rust
+  syntaxTree.value = tree
+  transpileError.value = error
+  outputMs.value = performance.now() - started
+  computing.value = false
+}
+
+void refresh()
+
 const outputText = computed(() =>
-  outputMode.value === "rust" ? rustPanelText.value : converted.value.syntaxTree
+  outputMode.value === "rust" ? rustCode.value : syntaxTree.value
 )
 
 const stats = computed(() => ({
-  sourceLines: countLines(sourcePanelText.value),
+  sourceLines: countLines(sourceCode.value),
   outputLines: countLines(outputText.value),
-  outputMs: outputMode.value === "rust"
-    ? converted.value.rustMs
-    : converted.value.syntaxTreeMs,
 }))
 
 export function App() {
@@ -121,7 +121,6 @@ export function App() {
   const sourceRef = useRef<HTMLElement>(null)
   const outputRef = useRef<HTMLElement>(null)
   const isScrollingRef = useRef(false)
-  const exampleWheelDeltaRef = useRef(0)
   const lastRunSourceRef = useRef("")
 
   const clearRun = () => {
@@ -134,11 +133,13 @@ export function App() {
     editSide.value = "source"
     sourceCode.value = value
     clearRun()
+    void refresh()
   }
 
   useEffect(() => {
     try {
-      autoRun.value = globalThis.localStorage.getItem(AUTO_RUN_STORAGE_KEY) === "1"
+      autoRun.value =
+        globalThis.localStorage.getItem(AUTO_RUN_STORAGE_KEY) === "1"
     } catch (_) {
       // Storage can be unavailable in hardened/private browser contexts.
     }
@@ -156,20 +157,16 @@ export function App() {
   const setRustCode = (value: string) => {
     editSide.value = "rust"
     rustCode.value = value
-    try {
-      sourceCode.value = convert_rust_to_renk(value)
-    } catch (_) {
-      // Keep the last source panel text while the Rust panel is invalid.
-    }
     clearRun()
+    void refresh()
   }
 
   const showExample = (name: ExampleName) => {
     editSide.value = "source"
     selectedExample.value = name
     sourceCode.value = exampleSource(name)
-    rustCode.value = transpile_to_rust(sourceCode.value)
     clearRun()
+    void refresh()
     sourceRef.current?.scrollTo({ top: 0 })
     outputRef.current?.scrollTo({ top: 0 })
   }
@@ -225,32 +222,29 @@ export function App() {
     if (location !== path) navigate(path)
   }
 
-  const cycleExample = (direction: -1 | 1) => {
-    const index = EXAMPLE_NAMES.indexOf(selectedExample.value)
-    const next = (index + direction + EXAMPLE_NAMES.length) % EXAMPLE_NAMES.length
-    loadExample(EXAMPLE_NAMES[next])
-  }
-
-  const handleExampleWheel = (deltaY: number) => {
-    if (deltaY === 0) return
-    exampleWheelDeltaRef.current += deltaY
-    if (Math.abs(exampleWheelDeltaRef.current) < 40) return
-    const direction = exampleWheelDeltaRef.current > 0 ? 1 : -1
-    exampleWheelDeltaRef.current = 0
-    cycleExample(direction)
-  }
-
   const copyOutput = async () => {
     await navigator.clipboard.writeText(outputText.value)
     copied.value = true
     setTimeout(() => copied.value = false, 900)
   }
 
-  const formatInput = () => setSourceCode(format_renk(sourceCode.value))
+  const formatInput = async () => {
+    const source = sourceCode.value
+    try {
+      const formatted = await engine.call("format_renk", source)
+      if (sourceCode.value === source) setSourceCode(formatted)
+    } catch (error) {
+      transpileError.value = stringifyError(error)
+    }
+  }
 
   const runRust = async () => {
-    if (converted.value.error || runState.value === "running") return
-    const rust = converted.value.rust
+    if (
+      transpileError.value || computing.value || runState.value === "running"
+    ) {
+      return
+    }
+    const rust = rustCode.value
     if (
       new TextEncoder().encode(rust).length > RUN_SOURCE_LIMIT_BYTES
     ) {
@@ -283,9 +277,9 @@ export function App() {
   }
 
   useEffect(() => {
-    if (!canRunRust || !autoRun.value || converted.value.error) return
-    if (runState.value === "running") return
-    const rust = converted.value.rust
+    if (!canRunRust || !autoRun.value || transpileError.value) return
+    if (runState.value === "running" || computing.value) return
+    const rust = rustCode.value
     if (rust === lastRunSourceRef.current) return
     const timer = globalThis.setTimeout(() => {
       if (rust !== lastRunSourceRef.current) void runRust()
@@ -293,9 +287,9 @@ export function App() {
     return () => globalThis.clearTimeout(timer)
   }, [
     autoRun.value,
-    sourceCode.value,
     rustCode.value,
-    editSide.value,
+    transpileError.value,
+    computing.value,
     runState.value,
   ])
 
@@ -313,7 +307,10 @@ export function App() {
             <button
               type="button"
               key={mode}
-              onClick={() => outputMode.value = mode}
+              onClick={() => {
+                outputMode.value = mode
+                void refresh()
+              }}
               class={`flex-none px-4 md:px-6 py-3 font-bold text-xs md:text-sm uppercase transition-none border-r-2 border-black focus:outline-none whitespace-nowrap ${
                 outputMode.value === mode
                   ? "bg-black text-white"
@@ -349,19 +346,14 @@ export function App() {
               </div>
             )}
           </div>
-          <div
-            class="flex-1 lg:flex-none relative border-r-2 border-black"
-            onWheel={(event) => {
-              event.preventDefault()
-              handleExampleWheel(event.deltaY)
-            }}
-          >
+          <div class="flex-1 lg:flex-none relative border-r-2 border-black">
             <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
               <span class="text-[10px] md:text-xs font-bold uppercase mr-2 opacity-50">
                 EXPL:
               </span>
             </div>
             <select
+              aria-label="Example"
               value={selectedExample.value}
               onChange={(event) =>
                 loadExample(event.currentTarget.value as ExampleName)}
@@ -399,7 +391,8 @@ export function App() {
         >
           <InputEditor
             editorRef={sourceRef}
-            value={sourcePanelText.value}
+            label="Renk source"
+            value={sourceCode.value}
             language="renk"
             onChange={setSourceCode}
             onScroll={() => handleScroll("source")}
@@ -410,9 +403,7 @@ export function App() {
           <Panel
             title={`${
               outputMode.value === "rust" ? "Rust" : "Syntax Tree"
-            } (${stats.value.outputLines} lines, ${
-              formatMs(stats.value.outputMs)
-            })`}
+            } (${stats.value.outputLines} lines, ${formatMs(outputMs.value)})`}
             class="w-full h-1/2"
             border="border-b-2 border-black"
             action={
@@ -422,7 +413,7 @@ export function App() {
                     type="button"
                     onClick={runRust}
                     disabled={runState.value === "running" ||
-                      !!converted.value.error}
+                      computing.value || !!transpileError.value}
                     class="text-xs uppercase font-bold px-3 py-1 border-2 border-black bg-white hover:bg-black hover:text-white disabled:opacity-50 disabled:hover:bg-white disabled:hover:text-black"
                   >
                     {runState.value === "running" ? "Running" : "▶ Run"}
@@ -438,23 +429,42 @@ export function App() {
               </div>
             }
           >
-            {outputMode.value === "rust"
+            {wasmStatus.value === "ready"
               ? (
-                <InputEditor
-                  editorRef={outputRef}
-                  value={rustPanelText.value}
-                  language="rust"
-                  onChange={setRustCode}
-                  onScroll={() => handleScroll("output")}
-                />
+                <div class="flex flex-col h-full">
+                  {transpileError.value && (
+                    <ErrorBanner error={transpileError.value} />
+                  )}
+                  <div class="flex-1 relative min-h-0">
+                    {outputMode.value === "rust"
+                      ? (
+                        <InputEditor
+                          editorRef={outputRef}
+                          label="Rust"
+                          value={rustCode.value}
+                          language="rust"
+                          onChange={setRustCode}
+                          onScroll={() => handleScroll("output")}
+                        />
+                      )
+                      : (
+                        <OutputDisplay
+                          outputRef={outputRef}
+                          label="Syntax tree"
+                          value={syntaxTree.value}
+                          language="json"
+                          onScroll={() => handleScroll("output")}
+                        />
+                      )}
+                  </div>
+                </div>
               )
+              : wasmStatus.value === "loading"
+              ? <Notice text="Loading..." />
               : (
-                <OutputDisplay
-                  outputRef={outputRef}
-                  value={outputText.value}
-                  language="json"
-                  error={converted.value.error}
-                  onScroll={() => handleScroll("output")}
+                <Notice
+                  text={`Could not load WebAssembly: ${wasmError.value}`}
+                  error
                 />
               )}
           </Panel>
@@ -466,7 +476,11 @@ export function App() {
             class="w-full h-1/2"
             border="border-b-0 border-black"
           >
-            <OutputDisplay value={runOutput.value} language="text" />
+            <OutputDisplay
+              label="Run output"
+              value={runOutput.value}
+              language="text"
+            />
           </Panel>
         </div>
       </Main>
@@ -490,6 +504,8 @@ function formatRunOutput(result: RunResponse): string {
   const output = `${result.stdout}${result.stderr}${truncated}`.trimEnd()
   const status = result.timedOut
     ? `${result.stage} timed out`
+    : result.outputLimited
+    ? `${result.stage} stopped: output limit reached`
     : `${result.stage} exit ${result.status ?? "unknown"}`
   const timing = `compile ${formatMs(result.compileMs)}, run ${
     formatMs(result.runMs)

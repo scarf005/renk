@@ -16,6 +16,7 @@ dist-ssr
 /src/wasm/renk.d.ts
 /src/wasm/renk.internal.js
 /src/wasm/renk.js
+/src/wasm/renk.wasm
 
 # Editor directories and files
 .vscode/*

@@ -24,8 +24,6 @@ const WASMBUILD_ARGS = [
   "renk",
   "--out",
   "web/src/wasm",
-  "--inline",
-  "--skip-opt",
 ]
 
 const isExampleRoute = (url?: string) =>
