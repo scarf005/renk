@@ -4,7 +4,7 @@ use std::{
     path::{Path, PathBuf},
     process::Stdio,
     sync::{
-        Arc, Weak,
+        Arc, LazyLock, PoisonError, Weak,
         atomic::{AtomicU64, Ordering},
     },
     time::{Duration, Instant},
@@ -256,6 +256,10 @@ impl LanguageServer for Backend {
             .await
             .remove(&params.text_document.uri);
         self.close_rust_document(&params.text_document.uri).await;
+        GENERATED
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&params.text_document.uri);
         self.client
             .publish_diagnostics(params.text_document.uri, Vec::new(), None)
             .await;
@@ -1664,6 +1668,7 @@ fn is_rust(uri: &Url) -> bool {
 /// A document's generated Rust, as written to the file rust-analyzer and cargo read, and, for
 /// each 1-based Rust line, the document line it came from and whether renk synthesized it, like
 /// a closing brace or a module's generated header.
+#[derive(Clone)]
 struct Generated {
     rust: String,
     source_lines: Vec<(usize, bool)>,
@@ -1675,10 +1680,31 @@ thread_local! {
     static TRANSPILES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-fn generated(uri: &Url, text: &str) -> std::result::Result<Generated, TranspileError> {
+type Transpiled = std::result::Result<Generated, TranspileError>;
+
+/// Each document's last text, whether it was a script, and what it transpiled to.
+static GENERATED: LazyLock<std::sync::Mutex<HashMap<Url, (String, bool, Transpiled)>>> =
+    LazyLock::new(Default::default);
+
+/// [`transpile_document`] of a document, transpiling each of its versions once.
+fn generated(uri: &Url, text: &str) -> Transpiled {
+    let script = is_script(uri, text);
+    let cache = || GENERATED.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some((cached, was_script, generated)) = cache().get(uri)
+        && cached == text
+        && *was_script == script
+    {
+        return generated.clone();
+    }
+    let generated = transpile_document(uri, text, script);
+    cache().insert(uri.clone(), (text.to_string(), script, generated.clone()));
+    generated
+}
+
+fn transpile_document(uri: &Url, text: &str, script: bool) -> Transpiled {
     #[cfg(test)]
     TRANSPILES.with(|transpiles| transpiles.set(transpiles.get() + 1));
-    if is_script(uri, text) {
+    if script {
         let package = script_rust_path(uri)
             .map_or_else(|| "script".to_string(), |path| script_package(&path));
         let script = script_rust(text, SourceSyntax::Renk, &package)?;
@@ -2211,7 +2237,9 @@ impl Origins {
                     let renk = renk_edits(text, &generated.rust, &edits, *script)?;
                     // The converted text must give back the Rust that rust-analyzer's edits make,
                     // up to whitespace.
-                    let rust = crate::generated(uri, &edited(text, &renk)).ok()?.rust;
+                    let rust = transpile_document(uri, &edited(text, &renk), *script)
+                        .ok()?
+                        .rust;
                     let expected = edited(&generated.rust, &edits);
                     rust.split_whitespace()
                         .eq(expected.split_whitespace())
