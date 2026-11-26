@@ -85,6 +85,10 @@ const CORPUS: &[(&str, &str)] = &[
         "line_end_continuations",
         include_str!("rust_corpus/line_end_continuations.rs"),
     ),
+    (
+        "lowercase_struct_literals",
+        include_str!("rust_corpus/lowercase_struct_literals.rs"),
+    ),
 ];
 
 const RENK_CORPUS: &[(&str, &str)] = &[
