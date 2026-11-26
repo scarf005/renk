@@ -476,6 +476,22 @@ mod tests {
     }
 
     #[test]
+    fn script_functions_skip_a_byte_order_mark() {
+        for source in [
+            "#!/usr/bin/env -S renk script\nprintln!(\"hi\")\n",
+            "---\n[package]\nedition = \"2024\"\n---\nprintln!(\"hi\")\n",
+            "println!(\"hi\")\n",
+        ] {
+            let marked = format!("\u{feff}{source}");
+            assert_eq!(script_parts(&marked), script_parts(source), "{source}");
+            assert_eq!(script_body(&marked), script_body(source), "{source}");
+            let rust = |source| script_rust(source, SourceSyntax::Renk, "tool").unwrap();
+            assert_eq!(rust(&marked).rust, rust(source).rust, "{source}");
+            assert_eq!(rust(&marked).source_lines, rust(source).source_lines);
+        }
+    }
+
+    #[test]
     fn script_rust_keeps_frontmatter_first_and_drops_the_shebang() {
         let source = "#!/usr/bin/env -S renk script\n---\n[dependencies]\nregex = \"1\"\n---\n\nfn main():\n    println!(\"hi\")\n";
 

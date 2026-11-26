@@ -1840,6 +1840,10 @@ mod tests {
             script_frontmatter(&source).unwrap(),
             "---\n[package]\n---\n"
         );
+        assert_eq!(
+            script_frontmatter("\u{feff}---\n[package]\n---\n").unwrap(),
+            "---\n[package]\n---\n"
+        );
     }
 
     #[test]
