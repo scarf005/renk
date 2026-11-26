@@ -97,6 +97,7 @@ const CORPUS: &[(&str, &str)] = &[
         "qualified_turbofish",
         include_str!("rust_corpus/qualified_turbofish.rs"),
     ),
+    ("pipe_arms", include_str!("rust_corpus/pipe_arms.rs")),
 ];
 
 const RENK_CORPUS: &[(&str, &str)] = &[
