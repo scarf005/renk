@@ -101,3 +101,20 @@ pub fn patterns_over_header_lines(flags: Flags, X: u8) -> u8 {
     }
     c
 }
+
+pub fn range_ends(lo: usize, text: &str) -> std::ops::Range<usize> {
+    let label = "lo..match text {";
+    let upto = 0..=match text.len() {
+        0 => 1,
+        n => n,
+    };
+    let short = lo..match lo { 0 => 1, _ => 2 };
+    let plain = lo..text.len();
+    if upto.contains(&short.end) && plain.contains(&label.len()) {
+        return short;
+    }
+    lo..match text.char_indices().nth(2) {
+        Some((offset, _)) => lo + offset,
+        None => text.len(),
+    }
+}
