@@ -78,6 +78,7 @@ impl Session {
 
         let mut server = Command::new(env!("CARGO_BIN_EXE_renk-lsp"))
             .env("XDG_CACHE_HOME", dir.join("cache"))
+            .env_remove("CARGO_TARGET_DIR")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
