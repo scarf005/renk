@@ -4345,6 +4345,9 @@ mod tests {
         fs::write(temp.join("src/util.rk"), "pub fn helper() -> i32 = 1\n").unwrap();
         fs::write(temp.join("src/extra.rs"), "pub const EXTRA: i32 = 2;\n").unwrap();
         fs::write(temp.join("src/swapped.rs"), "pub fn hand() {}\n").unwrap();
+        // A hand-written file beside a module wins.
+        fs::write(temp.join("src/both.rk"), "pub fn module() = ()\n").unwrap();
+        fs::write(temp.join("src/both.rs"), "pub fn hand() {}\n").unwrap();
         fs::write(temp.join("src/node_modules/z.rk"), "pub fn z() = ()\n").unwrap();
         fs::write(temp.join("notes/n.rk"), "pub fn n() = ()\n").unwrap();
         std::os::unix::fs::symlink(temp.join("src"), temp.join("src/cycle")).unwrap();
@@ -4354,6 +4357,13 @@ mod tests {
         let mirrored = |path: &str| fs::read_to_string(rust_root.join(path)).unwrap_or_default();
         assert!(mirrored("src/util.rs").contains("fn helper()"));
         assert!(mirrored("src/extra.rs").contains("EXTRA"));
+        let both = || {
+            fs::metadata(rust_root.join("src/both.rs"))
+                .unwrap()
+                .modified()
+                .unwrap()
+        };
+        let written = both();
         let linked = mirror_path(&temp, &member.join("src/lib.rs"));
         assert!(fs::read_to_string(linked).unwrap().contains("fn linked()"));
         let copy = mirror_path(&temp, &member).display().to_string();
@@ -4383,6 +4393,8 @@ mod tests {
         mirror_workspace(&workspace(), &HashMap::from(documents));
         assert!(mirrored("src/util.rs").contains("3"));
         assert!(mirrored("src/fresh.rs").contains("fn fresh()"));
+        assert_eq!(mirrored("src/both.rs"), "pub fn hand() {}\n");
+        assert_eq!(both(), written);
         assert!(!rust_root.join("src/extra.rs").exists());
         assert!(mirrored("src/swapped.rs").contains("fn swapped()"));
         assert!(mirrored("src/open.rs").contains("fn unsaved()"));
