@@ -2257,6 +2257,7 @@ fn source_lines(source: &str) -> Result<Vec<SourceLine>, TranspileError> {
             &mut open,
         ) || header_end.is_some()
             || in_matcher(&text)
+            || continues_with_operator(raw_lines.clone(), raw_indent(without_comment))
         {
             let Some((index, next)) = raw_lines.next() else {
                 return Err(TranspileError {
@@ -2424,6 +2425,24 @@ fn opens_operand_block(code: &str, in_parentheses: bool) -> bool {
     // `&& items.iter().any(|item| match item {` opens a closure body inside its call instead.
     let opens_directly = open_delimiters(line).is_some_and(|open| open == ['{']);
     (starts_with_binary_operator(line) && opens_directly) || (in_parentheses && after_operator)
+}
+
+/// Whether the next line with code continues the expression at `indent` with a binary operator,
+/// as `+ b` or `== b`, after any blank or comment lines. `|| f()` is a closure and `> Type` closes
+/// generic parameters instead.
+fn continues_with_operator<'a>(
+    mut lines: impl Iterator<Item = (usize, &'a str)>,
+    indent: usize,
+) -> bool {
+    lines
+        .find(|(_, line)| code_len(line.trim_start()) > 0)
+        .is_some_and(|(_, line)| {
+            let operator = line.trim_start();
+            raw_indent(line) == indent
+                && starts_with_binary_operator(operator)
+                && !operator.starts_with("|| ")
+                && !operator.starts_with("> ")
+        })
 }
 
 /// Whether `line` continues an expression with a binary operator, as in `+ if a {` or `&& b`.
