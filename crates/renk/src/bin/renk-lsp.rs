@@ -4335,6 +4335,29 @@ mod tests {
     }
 
     #[test]
+    fn renames_fail_naming_an_open_file_that_does_not_transpile() {
+        let uri = module_uri("src/broken.rk");
+        let rust_uri = module_uri("target/renk/src/broken.rs");
+        let mut origins = Origins {
+            documents: HashMap::from([(uri.clone(), "fn main(:\n".to_string())]),
+            sources: HashMap::from([(rust_uri.clone(), uri.clone())]),
+            roots: Vec::new(),
+            cache: HashMap::new(),
+        };
+        let edit = WorkspaceEdit {
+            changes: Some(HashMap::from([(rust_uri, vec![insert(0, "count")])])),
+            ..WorkspaceEdit::default()
+        };
+        assert_eq!(
+            origins.rename_edit(edit),
+            Err(format!(
+                "cannot rename in {}, which does not transpile.",
+                uri.to_file_path().unwrap().display()
+            ))
+        );
+    }
+
+    #[test]
     fn mirror_files_map_to_renk_modules_and_hand_written_files_on_disk() {
         let temp = std::env::temp_dir().join(format!("renk-lsp-mirror-{}", std::process::id()));
         let _ = fs::remove_dir_all(&temp);
