@@ -332,3 +332,26 @@ fn closure_parameters_over_many_lines_transpile_in_linear_time() {
     // Four times the lines take about four times as long, not sixteen.
     assert!(long < short * 8, "{short:?} {long:?}");
 }
+
+#[test]
+fn many_functions_with_wrapped_asserts_convert_in_linear_time() {
+    let _serial = SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let convert = |functions: usize| {
+        let rust = (0..functions)
+            .map(|n| {
+                format!(
+                    "fn check_{n}(value: usize) {{\n    assert!(\n        value > {n},\n        \
+                     \"value {{}} is too small\",\n        value,\n    );\n}}\n\n"
+                )
+            })
+            .collect::<String>();
+        let start = std::time::Instant::now();
+        rust_to_renk(&rust).unwrap();
+        start.elapsed()
+    };
+    let (short, long) = (fastest(|| convert(10)), fastest(|| convert(40)));
+    // Four times the functions take about four times as long, not sixteen.
+    assert!(long < short * 8, "{short:?} {long:?}");
+}
