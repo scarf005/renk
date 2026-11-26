@@ -5,14 +5,23 @@
 `renk fmt` lays out a file the way rustfmt lays out Rust: indentation, line breaks, and spacing.
 It runs `rustfmt --edition 2024` on the generated Rust, so it needs rustfmt
 (`rustup component add rustfmt`) and follows the `rustfmt.toml` of the working directory.
-Comments, blank lines, and string contents stay. A script keeps its `#!` line and frontmatter.
+Comments and blank lines stay. Format arguments move into the string, so
+`println!("result: {}", result)` becomes `println!("result: {result}")`. A script keeps its
+`#!` line and frontmatter.
 An item that cannot be formatted without changing its Rust keeps its lines, with trailing
 whitespace trimmed.
 
 ```sh
 renk fmt src/main.rk -o src/main.rk
 renk fmt --check src/*.rk    # prints a diff and exits with 1 if a file is not formatted
+renk fmt --write src         # rewrites each .rk file under src that is not formatted
 ```
+
+`--check` and `--write` take files and directories. A directory stands for the `.rk` files
+under it, except in `target`, `node_modules`, and hidden directories. Formatting more than one
+file needs one of the two. `--check` also names a file with CRLF line endings. An error starts
+with the file and line, as in `src/main.rk:3: tabs are not supported`, and formatting goes on
+with the next file.
 
 ## Source maps
 

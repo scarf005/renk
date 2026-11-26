@@ -2,6 +2,7 @@
 
 `renk script [--cargo] FILE.rk [ARGS...]`, 줄여서 `renk FILE.rk [ARGS...]`는 단일 파일 스크립트를 트랜스파일하고,
 `cargo +nightly -Zscript`로 빌드한 뒤 `ARGS`를 넘겨 실행한다. nightly 툴체인이 필요하다.
+스크립트 경로 뒤의 인자는 `--`까지 모두 스크립트에 넘어간다.
 
 ```rk
 #!/usr/bin/env -S renk script
@@ -26,8 +27,9 @@ fn main():
 지정하지 않은 스크립트는 `package.edition = "2024"`를 받는다.
 
 `renk add FILE.rk [CARGO_ADD_ARGS...]`는 frontmatter에 `cargo add`를 실행하고 결과를 다시 써
-넣는다. frontmatter가 없으면 `#!` 줄 뒤에 만들고, 스크립트의 나머지는 건드리지 않는다. 상대
-`--path` 의존성은 스크립트가 있는 디렉터리를 기준으로 해석한다.
+넣는다. frontmatter가 없으면 `#!` 줄 뒤에 만들고, 스크립트의 나머지는 건드리지 않는다.
+frontmatter에 적었든 `--path`로 넣었든, 상대 `path` 의존성은 스크립트가 있는 디렉터리를 기준으로
+해석한다.
 
 ```sh
 renk add tool.rk regex
@@ -76,6 +78,8 @@ println!("{n * 2}")
 
 ## 진단
 
+- 스크립트가 트랜스파일되지 않거나 frontmatter가 올바른 매니페스트가 아니면 빌드 전에
+  `tool.rk:LINE: message`를 출력하고 멈춘다.
 - 컴파일러 경고는 스크립트를 컴파일하는 실행에서만 출력된다.
 - 진단은 스크립트의 줄과 열을 가리키고 스크립트 소스를 인용한다. 닫는 중괄호처럼 renk가 만들어 낸
   줄의 span은 그 줄이 닫는 스크립트 줄의 끝을 가리킨다.

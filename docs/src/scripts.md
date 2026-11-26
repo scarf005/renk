@@ -1,7 +1,8 @@
 # Scripts
 
 `renk script [--cargo] FILE.rk [ARGS...]`, or just `renk FILE.rk [ARGS...]`, transpiles a single-file script, builds it with
-`cargo +nightly -Zscript`, and runs it with `ARGS`. It needs a nightly toolchain.
+`cargo +nightly -Zscript`, and runs it with `ARGS`. It needs a nightly toolchain. Every
+argument after the script path goes to the script, `--` included.
 
 ```rk
 #!/usr/bin/env -S renk script
@@ -27,8 +28,8 @@ names no edition gets `package.edition = "2024"`.
 
 `renk add FILE.rk [CARGO_ADD_ARGS...]` runs `cargo add` on the frontmatter and writes the
 result back. It creates the frontmatter after the `#!` line when there is none and leaves the
-rest of the script untouched. Relative `--path` dependencies resolve from the script's
-directory.
+rest of the script untouched. Relative `path` dependencies, in the frontmatter or from
+`--path`, resolve from the script's directory.
 
 ```sh
 renk add tool.rk regex
@@ -77,6 +78,8 @@ instead, so its `bail!` works. A top-level `return` must be `return Ok(())`.
 
 ## Diagnostics
 
+- A script that does not transpile, or whose frontmatter is not a valid manifest, stops before
+  the build with `tool.rk:LINE: message`.
 - Compiler warnings print only on runs that compile the script.
 - Diagnostics point at the script's lines and columns and quote its source. A span on a line
   renk synthesizes, such as a closing brace, points at the end of the script line it closes.

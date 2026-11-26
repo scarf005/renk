@@ -4,14 +4,21 @@
 
 `renk fmt`는 rustfmt가 Rust를 배치하듯 파일의 들여쓰기, 줄바꿈, 공백을 정리한다. 생성한 Rust에
 `rustfmt --edition 2024`를 돌리므로 rustfmt(`rustup component add rustfmt`)가 필요하고, 작업
-디렉터리의 `rustfmt.toml`을 따른다. 주석, 빈 줄, 문자열 내용은 그대로 둔다. 스크립트의 `#!` 줄과
+디렉터리의 `rustfmt.toml`을 따른다. 주석과 빈 줄은 그대로 둔다. 서식 인자는 문자열 안으로 옮기므로
+`println!("result: {}", result)`는 `println!("result: {result}")`가 된다. 스크립트의 `#!` 줄과
 frontmatter도 그대로다. Rust를 바꾸지 않고는 정리할 수 없는 항목은 줄 끝 공백만 지우고 원래 줄을
 유지한다.
 
 ```sh
 renk fmt src/main.rk -o src/main.rk
 renk fmt --check src/*.rk    # 정리되지 않은 파일이 있으면 diff를 출력하고 1로 끝난다
+renk fmt --write src         # src 아래에서 정리되지 않은 .rk 파일을 고쳐 쓴다
 ```
+
+`--check`와 `--write`에는 파일과 디렉터리를 줄 수 있다. 디렉터리를 주면 그 아래의 `.rk` 파일을
+정리하되 `target`, `node_modules`, 숨김 디렉터리는 건너뛴다. 파일을 둘 이상 정리하려면 둘 중
+하나가 필요하다. `--check`는 줄 끝이 CRLF인 파일도 알려 준다. 오류는
+`src/main.rk:3: tabs are not supported`처럼 파일과 줄로 시작하고, 정리는 다음 파일로 넘어간다.
 
 ## 소스 맵
 
