@@ -200,11 +200,10 @@ impl LanguageServer for Backend {
         let root = (self.workspaces.read().await.iter())
             .find(|(_, workspace)| Arc::ptr_eq(workspace, &rust_analyzer))
             .map(|(root, _)| root.clone());
-        let workspace = root.and_then(|root| project::workspace(&root));
-        let in_workspace = workspace.is_some();
+        let in_workspace = root.is_some();
         // Its check reads the mirror, which files changed or added outside the editor miss.
-        if let Some(workspace) = workspace {
-            self.refresh_mirror(&workspace).await;
+        if let Some(root) = root {
+            self.refresh_mirror(&root).await;
         }
         rust_analyzer
             .notify(
@@ -801,7 +800,7 @@ impl Backend {
         let mut params = self.initialize_params.read().await.as_ref().cloned()?;
         if let Some(workspace) = workspace {
             let rust_root_uri = Url::from_directory_path(rust_root(&workspace.root)).ok()?;
-            self.refresh_mirror(workspace).await;
+            self.refresh_mirror(&workspace.root).await;
             params = rust_initialize_params(params, &rust_root_uri);
         } else {
             let rust_path = script_rust_path(uri)?;
@@ -953,9 +952,16 @@ impl Backend {
         }
     }
 
-    /// Brings the mirror of `workspace` up to date with its packages and the open documents.
-    async fn refresh_mirror(&self, workspace: &Workspace) {
-        mirror_workspace(workspace, &*self.documents.read().await);
+    /// Brings the mirror of the workspace at `root` up to date with its packages and the open
+    /// documents. It reads every source file of the workspace, so it runs on a blocking thread.
+    async fn refresh_mirror(&self, root: &Path) {
+        let (root, documents) = (root.to_path_buf(), self.documents.read().await.clone());
+        let _ = tokio::task::spawn_blocking(move || {
+            if let Some(workspace) = project::workspace(&root) {
+                mirror_workspace(&workspace, &documents);
+            }
+        })
+        .await;
     }
 
     /// Publishes a document's Renk syntax error, or while its text transpiles, rust-analyzer's
