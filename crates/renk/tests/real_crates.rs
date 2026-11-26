@@ -285,6 +285,8 @@ fn cargo_check(crate_dir: &Path, root: &Path) -> Result<(), String> {
 
 /// The MIR of a crate's library, built with nightly into `target`.
 fn mir(crate_dir: &Path, target: &Path, args: &[&str]) -> Result<String, String> {
+    // Each `target` holds one build, so its file stays valid when cargo finds the build fresh.
+    let file = target.join("out.mir");
     let output = Command::new("cargo")
         .args([
             "+nightly",
@@ -295,7 +297,8 @@ fn mir(crate_dir: &Path, target: &Path, args: &[&str]) -> Result<String, String>
         ])
         .args(args)
         .arg("--")
-        .args(["--emit=mir", "-Cdebuginfo=0", "-Zlocation-detail=none"])
+        .arg(format!("--emit=mir={}", file.display()))
+        .args(["-Cdebuginfo=0", "-Zlocation-detail=none"])
         .arg("-Zmir-include-spans=off")
         .current_dir(crate_dir)
         .env("CARGO_TARGET_DIR", target)
@@ -306,15 +309,7 @@ fn mir(crate_dir: &Path, target: &Path, args: &[&str]) -> Result<String, String>
     if !output.status.success() {
         return Err(String::from_utf8_lossy(&output.stderr).into_owned());
     }
-    // A build with other flags, which cargo keeps beside this one, writes its MIR under another
-    // hash, and a fresh build writes none.
-    fs::read_dir(target.join("debug/deps"))
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .filter(|path| path.extension().is_some_and(|extension| extension == "mir"))
-        .max_by_key(|path| fs::metadata(path).unwrap().modified().unwrap())
-        .map(|file| fs::read_to_string(file).unwrap())
-        .ok_or_else(|| format!("no .mir file in {}", target.display()))
+    fs::read_to_string(&file).map_err(|error| format!("no MIR in {}: {error}", file.display()))
 }
 
 /// The items of `mir`, each a function with the allocations and promoted constants after it,
