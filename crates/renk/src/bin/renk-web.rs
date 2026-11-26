@@ -1,12 +1,13 @@
 use std::{
+    collections::BTreeMap,
     env, fs,
     io::Read,
-    net::SocketAddr,
+    net::{IpAddr, Ipv6Addr, SocketAddr},
     path::{Component, Path, PathBuf},
     process::{Command, Stdio},
     sync::{
         Mutex, PoisonError,
-        atomic::{AtomicU64, AtomicUsize, Ordering},
+        atomic::{AtomicUsize, Ordering},
     },
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -18,7 +19,7 @@ use std::os::unix::process::CommandExt;
 use axum::{
     Json, Router,
     body::{Body, Bytes},
-    extract::{DefaultBodyLimit, State},
+    extract::{ConnectInfo, DefaultBodyLimit, State},
     http::{
         HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri,
         header::{CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE, HOST, ORIGIN},
@@ -45,7 +46,10 @@ const DEFAULT_REQUEST_TIMEOUT_MS: u64 = 10_000;
 const DEFAULT_MAX_REQUESTS: usize = 64;
 const DEFAULT_MAX_CONCURRENT_RUNS: usize = 2;
 const DEFAULT_RUN_RATE_LIMIT_PER_MINUTE: usize = 10;
-const RATE_LIMIT_WINDOW_MS: u64 = 60_000;
+const RATE_LIMIT_WINDOW: Duration = Duration::from_secs(60);
+/// When the rate table holds this many clients with a run in the last minute, a new client
+/// gets 429.
+const MAX_RATE_LIMITED_CLIENTS: usize = 4096;
 const CHILD_FILE_SIZE_MIB: u64 = 64;
 const CHILD_OPEN_FILES: u64 = 64;
 const CHILD_FILE_SIZE_BYTES: u64 = CHILD_FILE_SIZE_MIB * BYTES_PER_MIB;
@@ -54,8 +58,7 @@ const CHILD_ENV: [&str; 4] = ["PATH", "RUSTUP_HOME", "RUSTUP_TOOLCHAIN", "LANG"]
 
 static ACTIVE_REQUESTS: AtomicUsize = AtomicUsize::new(0);
 static ACTIVE_RUNS: AtomicUsize = AtomicUsize::new(0);
-static RUN_RATE_WINDOW_MS: AtomicU64 = AtomicU64::new(0);
-static RUN_RATE_COUNT: AtomicUsize = AtomicUsize::new(0);
+static RUN_RATES: RunRates = Mutex::new(BTreeMap::new());
 /// Process IDs of the steps that `run_command` runs now. Every other child of the server is a
 /// process that a step left behind.
 static ACTIVE_CHILDREN: Mutex<Vec<u32>> = Mutex::new(Vec::new());
@@ -69,7 +72,11 @@ struct AppState {
     hosts: Vec<String>,
     /// The number of runs in progress. Each test server has its own counter.
     active_runs: &'static AtomicUsize,
+    run_rates: &'static RunRates,
 }
+
+/// The start of the current one-minute window and the runs in it, per client.
+type RunRates = Mutex<BTreeMap<IpAddr, (Instant, usize)>>;
 
 #[derive(Clone, Copy, Debug)]
 struct ServerConfig {
@@ -164,11 +171,13 @@ async fn main() -> std::io::Result<()> {
             &env::var("RENK_WEB_HOSTS").unwrap_or_default(),
         ),
         active_runs: &ACTIVE_RUNS,
+        run_rates: &RUN_RATES,
     };
     become_child_subreaper();
     log_namespace_support(state.config.sandbox)?;
     eprintln!("renk-web listening on http://{addr}");
-    axum::serve(listener, router(state))
+    let app = router(state).into_make_service_with_connect_info::<SocketAddr>();
+    axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await
         .map_err(std::io::Error::other)
@@ -312,24 +321,13 @@ fn allowed_hosts(listen: SocketAddr, extra: &str) -> Vec<String> {
 
 async fn handle_run_request(
     State(state): State<AppState>,
+    ConnectInfo(client): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
     if !is_same_site_json(&headers, &state.hosts) {
         return json_response(StatusCode::FORBIDDEN, json!({ "error": "forbidden" }));
     }
-    if !try_run_rate_limit(state.config.run_rate_limit_per_minute) {
-        return json_response(
-            StatusCode::TOO_MANY_REQUESTS,
-            json!({ "error": "run rate limit exceeded" }),
-        );
-    }
-    let Some(permit) = try_acquire(state.active_runs, state.config.max_concurrent_runs) else {
-        return json_response(
-            StatusCode::SERVICE_UNAVAILABLE,
-            json!({ "error": "too many active runs" }),
-        );
-    };
     let Ok(value) = serde_json::from_slice::<Value>(&body) else {
         return json_response(StatusCode::BAD_REQUEST, json!({ "error": "invalid json" }));
     };
@@ -345,6 +343,19 @@ async fn handle_run_request(
             json!({ "error": format!("rust source exceeds {MAX_RUN_SOURCE_KIB} KiB run limit") }),
         );
     }
+    let max_runs = state.config.run_rate_limit_per_minute;
+    if !try_run_rate_limit(state.run_rates, client.ip(), max_runs) {
+        return json_response(
+            StatusCode::TOO_MANY_REQUESTS,
+            json!({ "error": "run rate limit exceeded" }),
+        );
+    }
+    let Some(permit) = try_acquire(state.active_runs, state.config.max_concurrent_runs) else {
+        return json_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({ "error": "too many active runs" }),
+        );
+    };
 
     let rust = rust.to_string();
     let options = ChildOptions {
@@ -371,35 +382,38 @@ async fn handle_run_request(
     }
 }
 
-fn try_run_rate_limit(max: usize) -> bool {
-    let now = now_millis();
-    loop {
-        let window_started = RUN_RATE_WINDOW_MS.load(Ordering::Acquire);
-        if now.saturating_sub(window_started) < RATE_LIMIT_WINDOW_MS {
-            break;
-        }
-        if RUN_RATE_WINDOW_MS
-            .compare_exchange(window_started, now, Ordering::AcqRel, Ordering::Acquire)
-            .is_ok()
-        {
-            RUN_RATE_COUNT.store(0, Ordering::Release);
-            break;
+fn try_run_rate_limit(rates: &RunRates, client: IpAddr, max: usize) -> bool {
+    let client = rate_limit_client(client);
+    let now = Instant::now();
+    let mut rates = rates.lock().unwrap_or_else(PoisonError::into_inner);
+    if rates.len() >= MAX_RATE_LIMITED_CLIENTS && !rates.contains_key(&client) {
+        rates.retain(|_, (started, _)| now.duration_since(*started) < RATE_LIMIT_WINDOW);
+        if rates.len() >= MAX_RATE_LIMITED_CLIENTS {
+            return false;
         }
     }
-    let previous = RUN_RATE_COUNT.fetch_add(1, Ordering::AcqRel);
-    if previous < max {
-        true
-    } else {
-        RUN_RATE_COUNT.fetch_sub(1, Ordering::AcqRel);
-        false
+    let (started, runs) = rates.entry(client).or_insert((now, 0));
+    if now.duration_since(*started) >= RATE_LIMIT_WINDOW {
+        (*started, *runs) = (now, 0);
     }
+    if *runs >= max {
+        return false;
+    }
+    *runs += 1;
+    true
 }
 
-fn now_millis() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis() as u64)
-        .unwrap_or_default()
+/// One IPv6 client usually gets a whole /64 network, so the rate limit counts the network.
+fn rate_limit_client(address: IpAddr) -> IpAddr {
+    match address {
+        IpAddr::V6(address) => match address.to_ipv4_mapped() {
+            Some(address) => IpAddr::V4(address),
+            None => IpAddr::V6(Ipv6Addr::from_bits(
+                address.to_bits() & !u128::from(u64::MAX),
+            )),
+        },
+        address => address,
+    }
 }
 
 fn compile_and_run_rust(
@@ -1057,6 +1071,7 @@ mod tests {
                 "renk.example.com, Other.example:8443",
             ),
             active_runs: Box::leak(Box::default()),
+            run_rates: Box::leak(Box::default()),
         }
     }
 
@@ -1534,6 +1549,34 @@ mod tests {
         let (status, _, _) = send(&app, from(2, valid)).await;
         assert_ne!(status, StatusCode::TOO_MANY_REQUESTS);
         let _ = fs::remove_dir_all(dist);
+    }
+
+    /// Fills the table with clients that ran in this minute. A new client gets no run until the
+    /// minute of the others is over, and the table then forgets them.
+    #[test]
+    fn run_rate_table_stays_bounded() {
+        let rates = RunRates::default();
+        for client in 0..MAX_RATE_LIMITED_CLIENTS as u32 {
+            assert!(try_run_rate_limit(&rates, client.to_be_bytes().into(), 1));
+        }
+        let new = IpAddr::from([255; 4]);
+        assert!(!try_run_rate_limit(&rates, new, 1));
+        for (started, _) in rates.lock().unwrap().values_mut() {
+            *started = started.checked_sub(RATE_LIMIT_WINDOW).unwrap();
+        }
+        assert!(try_run_rate_limit(&rates, new, 1));
+        assert_eq!(rates.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn run_rate_limit_counts_an_ipv6_network_as_one_client() {
+        let rates = RunRates::default();
+        let address = |text: &str| text.parse::<IpAddr>().unwrap();
+        assert!(try_run_rate_limit(&rates, address("2001:db8::1"), 1));
+        assert!(!try_run_rate_limit(&rates, address("2001:db8::ffff:2"), 1));
+        assert!(try_run_rate_limit(&rates, address("2001:db8:0:1::1"), 1));
+        assert!(try_run_rate_limit(&rates, address("::ffff:192.0.2.1"), 1));
+        assert!(!try_run_rate_limit(&rates, address("192.0.2.1"), 1));
     }
 
     /// The first request times out after 100 ms while its program sleeps until the 1 s run
