@@ -706,6 +706,59 @@ fn leaves_out_code_actions_that_change_nothing_or_do_not_transpile_back() {
     assert_eq!(titles(&actions), ["Rewrite as raw string"], "{actions}");
 }
 
+#[test]
+fn formats_each_file_as_renk_fmt_writes_it() {
+    let files = [
+        ("src/main.rk", "fn main():\n    let a  =  helper( )\n"),
+        (
+            "tool.rk",
+            "#!/usr/bin/env -S renk script\n---\n[package]\nedition = \"2024\"\n---\nlet a  =  1\n",
+        ),
+        ("src/util.rk", "pub fn helper() -> i32 = 1\n"),
+        ("src/broken.rk", "fn main():\n\tlet a = 1\n"),
+        ("Cargo.toml", PACKAGE),
+    ];
+    let Some(mut session) = Session::start("lsp-format", &files, &[""]) else {
+        return;
+    };
+    let mut outcomes = Vec::new();
+    for (index, (path, text)) in files[..4].iter().enumerate() {
+        let uri = session.uri(path);
+        if index > 0 {
+            session.notify(
+                "textDocument/didOpen",
+                json!({"textDocument": {"uri": uri, "languageId": "renk", "version": 1, "text": text}}),
+            );
+        }
+        let edits = session.request(
+            "textDocument/formatting",
+            json!({"textDocument": {"uri": uri}, "options": {"tabSize": 4, "insertSpaces": true}}),
+        );
+        let file = session.dir.join(path);
+        let cli = Command::new(env!("CARGO_BIN_EXE_renk"))
+            .args(["fmt", "--write"])
+            .arg(&file)
+            .output()
+            .unwrap();
+        let formatted = fs::read_to_string(&file).unwrap();
+        let printed = String::from_utf8(cli.stderr).unwrap();
+        let expected = if !cli.status.success() {
+            outcomes.push("error");
+            json!(printed.trim_end().strip_prefix("renk: ").unwrap())
+        } else if formatted == *text {
+            outcomes.push("formatted");
+            Value::Null
+        } else {
+            outcomes.push("edit");
+            let end = position(text.matches('\n').count() as u32, 0);
+            json!([{"range": {"start": position(0, 0), "end": end}, "newText": formatted}])
+        };
+        let edits = edits.get("message").unwrap_or(&edits);
+        assert_eq!(edits, &expected, "{path}");
+    }
+    assert_eq!(outcomes, ["edit", "edit", "formatted", "error"]);
+}
+
 /// Opens `app/src/main.rk` of `WORKSPACE`, or with `outside` of its packages without the
 /// workspace, with the folders `roots`, and hovers `helper` until rust-analyzer names it.
 fn assert_hover_names_helper(name: &str, roots: &[&str], outside: bool) {
