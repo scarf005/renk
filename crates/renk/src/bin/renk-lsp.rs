@@ -2647,6 +2647,7 @@ fn range_for_span(line: u32, start: usize, end: usize) -> Range {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tower_lsp::lsp_types::{CompletionTextEdit, InsertReplaceEdit};
 
     #[test]
     fn hover_reports_function_signature() {
@@ -3111,6 +3112,160 @@ mod tests {
         assert_eq!(pull["params"]["textDocument"]["uri"], rust_uri.as_str());
         assert!(refreshed_sent.try_recv().is_err());
         assert!(other_sent.try_recv().is_err());
+    }
+
+    /// A module document with `text` that is open in a rust-analyzer from
+    /// [`rust_analyzer_client`].
+    async fn open_module(
+        backend: &Backend,
+        uri: &Url,
+        text: &str,
+    ) -> (
+        Arc<RustAnalyzerClient>,
+        mpsc::UnboundedReceiver<serde_json::Value>,
+    ) {
+        let (rust_analyzer, sent) = rust_analyzer_client();
+        backend
+            .documents
+            .write()
+            .await
+            .insert(uri.clone(), text.to_string());
+        backend.opened.write().await.insert(
+            uri.clone(),
+            (rust_analyzer.clone(), module_uri("target/renk/open.rs")),
+        );
+        (rust_analyzer, sent)
+    }
+
+    /// Answers the next request sent to `rust_analyzer` with `result`.
+    async fn answer(
+        rust_analyzer: &RustAnalyzerClient,
+        sent: &mut mpsc::UnboundedReceiver<serde_json::Value>,
+        result: serde_json::Value,
+    ) {
+        let request = sent.recv().await.unwrap();
+        let id = request["id"].as_u64().unwrap();
+        let reply = rust_analyzer
+            .pending
+            .lock()
+            .await
+            .as_mut()
+            .unwrap()
+            .remove(&id);
+        reply
+            .unwrap()
+            .send(serde_json::json!({ "result": result }))
+            .unwrap();
+    }
+
+    #[test]
+    fn asks_rust_analyzer_for_whole_completion_edits_even_when_the_editor_resolves_them() {
+        let mut params = InitializeParams::default();
+        params.capabilities.text_document = serde_json::from_value(serde_json::json!({
+            "completion": {
+                "completionItem": {"resolveSupport": {"properties": ["additionalTextEdits"]}},
+                "completionList": {"itemDefaults": ["editRange"]},
+            },
+        }))
+        .unwrap();
+        let params = rust_initialize_params(params, &module_uri("target/renk/"));
+        let completion = params
+            .capabilities
+            .text_document
+            .unwrap()
+            .completion
+            .unwrap();
+        assert_eq!(completion.completion_item.unwrap().resolve_support, None);
+        assert_eq!(completion.completion_list, None);
+    }
+
+    #[tokio::test]
+    async fn maps_completion_edits_to_renk_positions_and_renk_text() {
+        let (service, _socket) = LspService::new(Backend::new);
+        let backend = service.inner();
+        let uri = module_uri("src/complete.rk");
+        let source = "fn main():\n    let 이름 = String.new()\n    let z = 이름.le\n";
+        let (rust_analyzer, mut sent) = open_module(backend, &uri, source).await;
+        let rust = module_rust(source);
+        let line = rust
+            .lines()
+            .position(|line| line.contains("이름.le"))
+            .unwrap() as u32;
+        let le = utf16_len("    let z = 이름.");
+        let typed = Range::new(Position::new(line, le), Position::new(line, le + 2));
+        let edit = |range: Range, text: &str| serde_json::json!({"range": range, "newText": text});
+        let items = serde_json::json!([
+            {"label": "len", "textEdit": edit(typed, "len")},
+            {"label": "lines", "textEdit": {"newText": "lines", "insert": typed, "replace": typed}},
+            {
+                "label": "HashMap",
+                "textEdit": edit(typed, "HashMap"),
+                "additionalTextEdits": [edit(Range::new(Position::new(1, 0), Position::new(1, 0)), "use std::collections::HashMap;\n")],
+            },
+            // The `;` after `le` is only in the Rust.
+            {"label": "semicolon", "textEdit": edit(Range::new(typed.start, Position::new(line, le + 3)), "x")},
+            // Deleting `이름.` takes a whole-line Renk edit of the line the completion edits.
+            {
+                "label": "if",
+                "textEdit": edit(typed, "if"),
+                "additionalTextEdits": [edit(Range::new(Position::new(line, 12), Position::new(line, 15)), "")],
+            },
+        ]);
+        let params = CompletionParams {
+            text_document_position: TextDocumentPositionParams::new(
+                TextDocumentIdentifier::new(uri),
+                Position::new(2, le + 2),
+            ),
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+            context: None,
+        };
+
+        let (completion, ()) = tokio::join!(
+            backend.completion(params),
+            answer(&rust_analyzer, &mut sent, items)
+        );
+        let Some(CompletionResponse::Array(items)) = completion.unwrap() else {
+            panic!("no completion items");
+        };
+        let typed = Range::new(Position::new(2, le), Position::new(2, le + 2));
+        let edits = items
+            .iter()
+            .map(|item| {
+                (
+                    item.label.as_str(),
+                    &item.text_edit,
+                    &item.additional_text_edits,
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            edits,
+            [
+                (
+                    "len",
+                    &Some(CompletionTextEdit::Edit(TextEdit::new(typed, "len".into()))),
+                    &None
+                ),
+                (
+                    "lines",
+                    &Some(CompletionTextEdit::InsertAndReplace(InsertReplaceEdit {
+                        new_text: "lines".into(),
+                        insert: typed,
+                        replace: typed,
+                    })),
+                    &None
+                ),
+                (
+                    "HashMap",
+                    &Some(CompletionTextEdit::Edit(TextEdit::new(
+                        typed,
+                        "HashMap".into()
+                    ))),
+                    &Some(vec![insert(0, "use std.collections.HashMap\n")])
+                ),
+            ]
+        );
     }
 
     #[test]
