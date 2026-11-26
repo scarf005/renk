@@ -1584,9 +1584,17 @@ fn mirror_workspace(workspace: &Workspace, documents: &HashMap<Url, String>) {
     let dirs = std::iter::once(root).chain(&workspace.packages);
     kept.extend(dirs.filter_map(|dir| mirror_manifest(workspace, dir)));
     for package in &workspace.packages {
+        let hand_written = project::rust_sources(package).unwrap_or_default();
+        let copies = (hand_written.iter())
+            .map(|path| mirror_path(root, path))
+            .collect::<HashSet<_>>();
         for path in project::sources(package).unwrap_or_default() {
             let rust = mirror_path(root, &path).with_extension("rs");
             kept.insert(rust.clone());
+            // A hand-written file beside the module wins.
+            if copies.contains(&rust) {
+                continue;
+            }
             let (uri, text) = match open.get(&path) {
                 Some(&(uri, text)) => (uri.clone(), text.clone()),
                 None => match (Url::from_file_path(&path), fs::read_to_string(&path)) {
@@ -1597,12 +1605,11 @@ fn mirror_workspace(workspace: &Workspace, documents: &HashMap<Url, String>) {
             if !is_script(&uri, &text)
                 && let Ok(generated) = generated(&uri, &text)
             {
-                // Replace the copy of a deleted hand-written file with the same stem. A hand-written
-                // file beside the module wins, because its copy comes next.
+                // Replace the copy of a deleted hand-written file with the same stem.
                 write_if_changed(&rust, &generated.rust);
             }
         }
-        for path in project::rust_sources(package).unwrap_or_default() {
+        for path in hand_written {
             let copy = mirror_path(root, &path);
             if let Ok(text) = fs::read_to_string(&path) {
                 write_if_changed(&copy, &text);
