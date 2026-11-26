@@ -29,16 +29,16 @@ use tower_lsp::{
         CompletionTextEdit, Diagnostic, DiagnosticSeverity, DidChangeTextDocumentParams,
         DidChangeWatchedFilesParams, DidChangeWatchedFilesRegistrationOptions,
         DidCloseTextDocumentParams, DidOpenTextDocumentParams, DidSaveTextDocumentParams,
-        DocumentChangeOperation, DocumentChanges, DocumentFormattingParams, DocumentSymbol,
-        DocumentSymbolParams, DocumentSymbolResponse, FileChangeType, FileEvent, FileSystemWatcher,
-        GlobPattern, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverContents,
-        HoverParams, InitializeParams, InitializeResult, InitializedParams, InlayHint,
-        InlayHintLabel, InlayHintParams, InsertReplaceEdit, Location, MarkupContent, MarkupKind,
-        MessageType, NumberOrString, OneOf, Position, PrepareRenameResponse,
-        PublishDiagnosticsParams, Range, ReferenceParams, Registration, RenameOptions,
-        RenameParams, ResourceOp, ServerCapabilities, SignatureHelp, SignatureHelpOptions,
-        SignatureHelpParams, SymbolKind, TextDocumentContentChangeEvent, TextDocumentEdit,
-        TextDocumentIdentifier, TextDocumentItem, TextDocumentPositionParams,
+        DocumentChangeOperation, DocumentChanges, DocumentFormattingParams, DocumentHighlight,
+        DocumentHighlightParams, DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse,
+        FileChangeType, FileEvent, FileSystemWatcher, GlobPattern, GotoDefinitionParams,
+        GotoDefinitionResponse, Hover, HoverContents, HoverParams, InitializeParams,
+        InitializeResult, InitializedParams, InlayHint, InlayHintLabel, InlayHintParams,
+        InsertReplaceEdit, Location, MarkupContent, MarkupKind, MessageType, NumberOrString, OneOf,
+        Position, PrepareRenameResponse, PublishDiagnosticsParams, Range, ReferenceParams,
+        Registration, RenameOptions, RenameParams, ResourceOp, ServerCapabilities, SignatureHelp,
+        SignatureHelpOptions, SignatureHelpParams, SymbolKind, TextDocumentContentChangeEvent,
+        TextDocumentEdit, TextDocumentIdentifier, TextDocumentItem, TextDocumentPositionParams,
         TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions,
         TextDocumentSyncSaveOptions, TextEdit, Url, VersionedTextDocumentIdentifier, WorkspaceEdit,
         WorkspaceFolder,
@@ -106,6 +106,7 @@ impl LanguageServer for Backend {
                 inlay_hint_provider: Some(OneOf::Left(true)),
                 document_symbol_provider: Some(OneOf::Left(true)),
                 document_formatting_provider: Some(OneOf::Left(true)),
+                document_highlight_provider: Some(OneOf::Left(true)),
                 signature_help_provider: Some(SignatureHelpOptions {
                     trigger_characters: Some(vec!["(".into(), ",".into()]),
                     ..SignatureHelpOptions::default()
@@ -511,6 +512,31 @@ impl LanguageServer for Backend {
             .and_then(|value| serde_json::from_value(value).ok()))
     }
 
+    async fn document_highlight(
+        &self,
+        mut params: DocumentHighlightParams,
+    ) -> Result<Option<Vec<DocumentHighlight>>> {
+        let position = &mut params.text_document_position_params;
+        let Some((rust_analyzer, rust_uri, text, generated)) = self
+            .rust_position(&position.text_document.uri, &mut position.position)
+            .await
+        else {
+            return Ok(None);
+        };
+        position.text_document.uri = rust_uri;
+        let highlights = rust_analyzer
+            .request("textDocument/documentHighlight", params)
+            .await
+            .and_then(|value| serde_json::from_value::<Vec<DocumentHighlight>>(value).ok());
+        Ok(highlights.map(|highlights| {
+            let highlights = highlights.into_iter().filter_map(|highlight| {
+                let range = checked_range(&generated, &text, highlight.range)?;
+                Some(DocumentHighlight { range, ..highlight })
+            });
+            highlights.collect()
+        }))
+    }
+
     async fn references(&self, mut params: ReferenceParams) -> Result<Option<Vec<Location>>> {
         let position = &mut params.text_document_position;
         let Some((rust_analyzer, rust_uri, ..)) = self
@@ -548,9 +574,7 @@ impl LanguageServer for Backend {
             .request("textDocument/prepareRename", params)
             .await
             .and_then(|value| serde_json::from_value(value).ok());
-        let range = |range| {
-            checked_edit(&generated, &text, TextEdit::new(range, String::new())).map(|e| e.range)
-        };
+        let range = |range| checked_range(&generated, &text, range);
         Ok(response.and_then(|response| match response {
             PrepareRenameResponse::Range(rust) => range(rust).map(PrepareRenameResponse::Range),
             PrepareRenameResponse::RangeWithPlaceholder {
@@ -1961,9 +1985,14 @@ fn same_rust(a: &str, b: &str) -> bool {
 /// An edit of a document's generated Rust as the same edit of the document, when the document
 /// has the text the edit replaces where it maps to.
 fn checked_edit(generated: &Generated, text: &str, edit: TextEdit) -> Option<TextEdit> {
-    let range = rust_range_to_source_range(generated, text, edit.range);
-    (range_text(text, range) == range_text(&generated.rust, edit.range))
-        .then_some(TextEdit::new(range, edit.new_text))
+    checked_range(generated, text, edit.range).map(|range| TextEdit::new(range, edit.new_text))
+}
+
+/// A range of a document's generated Rust at the document's positions, when the document has the
+/// same text there.
+fn checked_range(generated: &Generated, text: &str, range: Range) -> Option<Range> {
+    let mapped = rust_range_to_source_range(generated, text, range);
+    (range_text(text, mapped) == range_text(&generated.rust, range)).then_some(mapped)
 }
 
 /// A completion of a document's generated Rust with its edits at the document's positions, or
@@ -1975,9 +2004,7 @@ fn completion_item(
     script: bool,
     item: CompletionItem,
 ) -> Option<CompletionItem> {
-    let range = |range| {
-        checked_edit(generated, text, TextEdit::new(range, String::new())).map(|edit| edit.range)
-    };
+    let range = |range| checked_range(generated, text, range);
     let text_edit = match item.text_edit {
         Some(CompletionTextEdit::Edit(edit)) => Some(CompletionTextEdit::Edit(TextEdit {
             range: range(edit.range)?,
