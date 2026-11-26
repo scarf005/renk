@@ -511,10 +511,14 @@ impl LanguageServer for Backend {
 
     async fn rename(&self, mut params: RenameParams) -> Result<Option<WorkspaceEdit>> {
         let position = &mut params.text_document_position;
-        let Some((rust_analyzer, rust_uri, ..)) = self
+        let at = position.position;
+        let Some((rust_analyzer, rust_uri, text, _)) = self
             .rust_position(&position.text_document.uri, &mut position.position)
             .await
         else {
+            return Ok(None);
+        };
+        let Some(name) = word_at_position(&text, at) else {
             return Ok(None);
         };
         position.text_document.uri = rust_uri;
@@ -525,14 +529,13 @@ impl LanguageServer for Backend {
         else {
             return Ok(None);
         };
-        self.origins()
-            .await
-            .workspace_edit(edit, false)
+        let mut origins = self.origins().await;
+        (origins.rename_edit(edit, &name.text))
             .map(Some)
-            .ok_or_else(|| Error {
+            .map_err(|message| Error {
                 // The protocol's RequestFailed.
                 code: ErrorCode::from(-32803),
-                message: "the rename changes Renk text that differs from its generated Rust".into(),
+                message: message.into(),
                 data: None,
             })
     }
@@ -2312,6 +2315,18 @@ impl Origins {
         }
     }
 
+    /// rust-analyzer's edit renaming `name` as an edit of the editor's files, or why it does not
+    /// map.
+    fn rename_edit(
+        &mut self,
+        edit: WorkspaceEdit,
+        _name: &str,
+    ) -> std::result::Result<WorkspaceEdit, String> {
+        (self.workspace_edit(edit, false)).ok_or_else(|| {
+            "the rename changes Renk text that differs from its generated Rust".into()
+        })
+    }
+
     /// A workspace edit of rust-analyzer's files as one of the editor's, or `None` when any of
     /// its edits does not map; `convert` as in [`Self::text_edits`].
     fn workspace_edit(&mut self, edit: WorkspaceEdit, convert: bool) -> Option<WorkspaceEdit> {
@@ -4051,6 +4066,62 @@ mod tests {
         assert_eq!(
             origins.workspace_edit(edit(vec![rename, brace]), false),
             None
+        );
+    }
+
+    /// Renames `name` to `count` in `source` with an edit of each `name` in its generated Rust, as
+    /// rust-analyzer does, and returns the renamed text or the error message.
+    fn rename_name(source: &str) -> std::result::Result<String, String> {
+        let uri = module_uri("src/rename.rk");
+        let rust_uri = module_uri("target/renk/src/rename.rs");
+        let mut origins = Origins {
+            documents: HashMap::from([(uri.clone(), source.to_string())]),
+            sources: HashMap::from([(rust_uri.clone(), uri.clone())]),
+            roots: Vec::new(),
+            cache: HashMap::new(),
+        };
+        let rust = module_rust(source);
+        let edits = (rust.lines().enumerate())
+            .flat_map(|(line, text)| {
+                text.match_indices("name").map(move |(column, _)| {
+                    let at = |column: usize| Position::new(line as u32, column as u32);
+                    TextEdit::new(Range::new(at(column), at(column + 4)), "count".into())
+                })
+            })
+            .collect();
+        let edit = WorkspaceEdit {
+            changes: Some(HashMap::from([(rust_uri, edits)])),
+            ..WorkspaceEdit::default()
+        };
+        let renamed = origins.rename_edit(edit, "name")?;
+        Ok(edited(source, &renamed.changes.unwrap()[&uri]))
+    }
+
+    #[test]
+    fn renames_replace_each_use_of_the_old_name() {
+        assert_eq!(
+            rename_name("fn main():\n    let name = 1\n    let total = name + name\n"),
+            Ok("fn main():\n    let count = 1\n    let total = count + count\n".to_string())
+        );
+    }
+
+    #[test]
+    fn renames_replace_a_name_inside_a_format_string() {
+        assert_eq!(
+            rename_name("fn main():\n    let name = 1\n    println!(\"{name + 1}\")\n"),
+            Ok("fn main():\n    let count = 1\n    println!(\"{count + 1}\")\n".to_string())
+        );
+    }
+
+    #[test]
+    fn renames_fail_naming_the_file_and_line_of_a_use_that_does_not_map() {
+        let path = module_uri("src/rename.rk").to_file_path().unwrap();
+        assert_eq!(
+            rename_name("fn main():\n    let name = 1\n    println!(\"{name + name}\")\n"),
+            Err(format!(
+                "cannot rename `name` at {}:3. Rename it there by hand.",
+                path.display()
+            ))
         );
     }
 
