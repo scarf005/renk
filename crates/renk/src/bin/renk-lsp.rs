@@ -512,14 +512,10 @@ impl LanguageServer for Backend {
 
     async fn rename(&self, mut params: RenameParams) -> Result<Option<WorkspaceEdit>> {
         let position = &mut params.text_document_position;
-        let at = position.position;
-        let Some((rust_analyzer, rust_uri, text, _)) = self
+        let Some((rust_analyzer, rust_uri, ..)) = self
             .rust_position(&position.text_document.uri, &mut position.position)
             .await
         else {
-            return Ok(None);
-        };
-        let Some(name) = word_at_position(&text, at) else {
             return Ok(None);
         };
         position.text_document.uri = rust_uri;
@@ -531,7 +527,7 @@ impl LanguageServer for Backend {
             return Ok(None);
         };
         let mut origins = self.origins().await;
-        (origins.rename_edit(edit, &name.text))
+        (origins.rename_edit(edit))
             .map(Some)
             .map_err(|message| Error {
                 // The protocol's RequestFailed.
@@ -2322,13 +2318,9 @@ impl Origins {
         }
     }
 
-    /// rust-analyzer's edit renaming `name` as an edit of the editor's files, or a message naming
-    /// the Renk file and line of the first edit that does not replace exactly `name` there.
-    fn rename_edit(
-        &mut self,
-        edit: WorkspaceEdit,
-        name: &str,
-    ) -> std::result::Result<WorkspaceEdit, String> {
+    /// rust-analyzer's rename edit as an edit of the editor's files, or a message naming the Rust
+    /// text, the Renk file and the line of the first edit whose Renk text differs from that text.
+    fn rename_edit(&mut self, edit: WorkspaceEdit) -> std::result::Result<WorkspaceEdit, String> {
         let document_edits = match &edit.document_changes {
             Some(DocumentChanges::Edits(edits)) => edits.iter().collect(),
             Some(DocumentChanges::Operations(operations)) => (operations.iter())
@@ -2354,23 +2346,21 @@ impl Origins {
                 generated,
                 ..
             }) = self.origin(rust_uri)
+                && checked_edit(generated, text, edit.clone()).is_none()
             {
+                let name = range_text(&generated.rust, edit.range);
+                let path = uri.to_file_path().unwrap_or_else(|_| uri.path().into());
                 let range = rust_range_to_source_range(generated, text, edit.range);
-                if range_text(text, range) != name
-                    || range_text(&generated.rust, edit.range) != name
-                {
-                    let path = uri.to_file_path().unwrap_or_else(|_| uri.path().into());
-                    let line = range.start.line + 1;
-                    return Err(format!(
-                        "cannot rename `{name}` at {}:{line}. Rename it there by hand.",
-                        path.display()
-                    ));
-                }
+                let line = range.start.line + 1;
+                return Err(format!(
+                    "cannot rename `{name}` at {}:{line}. Rename it there by hand.",
+                    path.display()
+                ));
             }
         }
-        // Every Renk edit replaces `name` in both texts, so each one maps.
+        // Every Renk edit passed `checked_edit`, so each one maps.
         self.workspace_edit(edit, false)
-            .ok_or_else(|| format!("cannot rename `{name}`"))
+            .ok_or_else(|| "cannot rename".to_string())
     }
 
     /// A workspace edit of rust-analyzer's files as one of the editor's, or `None` when any of
@@ -4189,7 +4179,7 @@ mod tests {
             changes: Some(HashMap::from([(rust_uri, edits)])),
             ..WorkspaceEdit::default()
         };
-        let renamed = origins.rename_edit(edit, "name")?;
+        let renamed = origins.rename_edit(edit)?;
         Ok(edited(source, &renamed.changes.unwrap()[&uri]))
     }
 
