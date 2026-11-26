@@ -1400,6 +1400,51 @@ mod tests {
         assert_eq!(result, (&json!(true), &json!("hello\n")), "{body}");
     }
 
+    /// Makes a directory `renk-run-0-<test pid>` beside the run directories, then lists the
+    /// parent of the program's working directory. The program must find only its own directory.
+    #[tokio::test]
+    #[ignore = "needs unprivileged user namespaces"]
+    async fn hides_other_run_directories_from_a_program() {
+        let other = env::temp_dir().join(format!("renk-run-0-{}", std::process::id()));
+        fs::create_dir_all(&other).unwrap();
+        let body = run_in_namespaces(
+            r#"fn main() {
+                let cwd = std::env::current_dir().unwrap();
+                for entry in std::fs::read_dir(cwd.parent().unwrap()).unwrap() {
+                    println!("{}", entry.unwrap().path().display());
+                }
+                println!("{}", cwd.display());
+            }"#,
+        )
+        .await;
+        let _ = fs::remove_dir_all(other);
+        let stdout = body["stdout"].as_str().unwrap();
+        let lines = stdout.lines().collect::<Vec<_>>();
+        assert!(lines.len() == 2 && lines[0] == lines[1], "{body}");
+    }
+
+    /// Reads `/proc/1/environ` and lists the process directories in `/proc`. The program must
+    /// find its own `TMPDIR` there and no process but PID 1, itself.
+    #[tokio::test]
+    #[ignore = "needs unprivileged user namespaces"]
+    async fn shows_only_the_program_in_proc() {
+        let body = run_in_namespaces(
+            r#"fn main() {
+                let environ = std::fs::read("/proc/1/environ").unwrap_or_default();
+                let tmpdir = format!("TMPDIR={}", std::env::var("TMPDIR").unwrap());
+                let pids = std::fs::read_dir("/proc")
+                    .unwrap()
+                    .filter_map(|entry| entry.unwrap().file_name().into_string().ok())
+                    .filter(|name| name.parse::<u32>().is_ok())
+                    .collect::<Vec<_>>();
+                let own = String::from_utf8_lossy(&environ).split('\0').any(|var| var == tmpdir);
+                println!("{own} {pids:?}");
+            }"#,
+        )
+        .await;
+        assert_eq!(body["stdout"], json!("true [\"1\"]\n"), "{body}");
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn commands_are_killed_with_their_process_group_on_timeout() {
