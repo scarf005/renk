@@ -19,6 +19,30 @@ use serde_json::{Value, json};
 /// `EXTRA` from the hand-written `src/extra.rs`.
 const MAIN: &str = "mod extra\nmod util\nuse extra.EXTRA\nuse util.helper\n\nfn main():\n    let a = helper()\n    let b = helper() + EXTRA\n    println!(\"{a}{b}\")\n";
 
+const PACKAGE: &str = "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2024\"\n";
+
+/// `app/src/main.rk`, which calls `helper` of the package `shared` on line 3.
+const HELPER_MAIN: &str =
+    "use shared.helper\n\nfn main():\n    let a = helper()\n    println!(\"{a}\")\n";
+
+/// A workspace with the members `app` and `shared`. `app` takes its version from the workspace.
+const WORKSPACE: [(&str, &str); 5] = [
+    (
+        "Cargo.toml",
+        "[workspace]\nmembers = [\"app\", \"shared\"]\nresolver = \"3\"\n\n[workspace.package]\nversion = \"0.1.0\"\n",
+    ),
+    (
+        "app/Cargo.toml",
+        "[package]\nname = \"app\"\nversion.workspace = true\nedition = \"2024\"\n\n[dependencies]\nshared = { path = \"../shared\" }\n",
+    ),
+    ("app/src/main.rk", HELPER_MAIN),
+    (
+        "shared/Cargo.toml",
+        "[package]\nname = \"shared\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    ),
+    ("shared/src/lib.rk", "pub fn helper() -> i32 = 1\n"),
+];
+
 /// renk-lsp over a crate with `src/main.rk` open.
 struct Session {
     server: Child,
@@ -31,17 +55,24 @@ struct Session {
 impl Session {
     /// `None` without rust-analyzer.
     fn open(name: &str, main: &str) -> Option<Self> {
+        let files = [
+            ("Cargo.toml", PACKAGE),
+            ("src/main.rk", main),
+            ("src/util.rk", "pub fn helper() -> i32 = 1\n"),
+            ("src/extra.rs", "pub const EXTRA: i32 = 2;\n"),
+        ];
+        Self::start(name, &files, &[""], "src/main.rk")
+    }
+
+    /// renk-lsp over a directory with `files`, the folders `roots` of it as the editor's
+    /// workspace folders, and the file `open` of `files` open.
+    fn start(name: &str, files: &[(&str, &str)], roots: &[&str], open: &str) -> Option<Self> {
         rust_analyzer()?;
         let dir = temp_dir(name);
-        fs::create_dir_all(dir.join("src")).unwrap();
-        fs::write(
-            dir.join("Cargo.toml"),
-            "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
-        )
-        .unwrap();
-        fs::write(dir.join("src/main.rk"), main).unwrap();
-        fs::write(dir.join("src/util.rk"), "pub fn helper() -> i32 = 1\n").unwrap();
-        fs::write(dir.join("src/extra.rs"), "pub const EXTRA: i32 = 2;\n").unwrap();
+        for (path, text) in files {
+            fs::create_dir_all(dir.join(path).parent().unwrap()).unwrap();
+            fs::write(dir.join(path), text).unwrap();
+        }
 
         let mut server = Command::new(env!("CARGO_BIN_EXE_renk-lsp"))
             .env("XDG_CACHE_HOME", dir.join("cache"))
@@ -67,18 +98,34 @@ impl Session {
             next_id: 1,
             dir,
         };
-        let root = format!("file://{}", session.dir.display());
+        let folders = (roots.iter())
+            .map(|root| json!({"uri": session.uri(root), "name": root}))
+            .collect::<Vec<_>>();
+        let root = (folders.len() == 1).then(|| folders[0]["uri"].clone());
         session.request(
             "initialize",
-            json!({"processId": null, "rootUri": root, "capabilities": {}}),
+            json!({"processId": null, "rootUri": root, "workspaceFolders": folders, "capabilities": {}}),
         );
         session.notify("initialized", json!({}));
-        let uri = session.uri("src/main.rk");
+        let (uri, text) = (
+            session.uri(open),
+            files.iter().find(|(path, _)| *path == open)?.1,
+        );
         session.notify(
             "textDocument/didOpen",
-            json!({"textDocument": {"uri": uri, "languageId": "renk", "version": 1, "text": main}}),
+            json!({"textDocument": {"uri": uri, "languageId": "renk", "version": 1, "text": text}}),
         );
         Some(session)
+    }
+
+    /// Hovers `helper` in `HELPER_MAIN` until rust-analyzer names it.
+    fn hover_helper(&mut self, main: &str) -> Value {
+        let uri = self.uri(main);
+        self.request_until(
+            "textDocument/hover",
+            json!({"textDocument": {"uri": uri}, "position": position(3, 13)}),
+            |hover| hover["contents"].to_string().contains("fn helper"),
+        )
     }
 
     fn uri(&self, path: &str) -> String {
@@ -585,4 +632,47 @@ fn leaves_out_code_actions_that_change_nothing_or_do_not_transpile_back() {
         |actions| titles(actions).contains(&"Rewrite as raw string".to_string()),
     );
     assert_eq!(titles(&actions), ["Rewrite as raw string"], "{actions}");
+}
+
+#[test]
+fn hovers_come_from_rust_analyzer_in_a_virtual_workspace() {
+    let Some(mut session) = Session::start("lsp-members", &WORKSPACE, &[""], "app/src/main.rk")
+    else {
+        return;
+    };
+    let hover = session.hover_helper("app/src/main.rk");
+    assert!(
+        hover["contents"].to_string().contains("fn helper"),
+        "{hover}"
+    );
+}
+
+#[test]
+fn hovers_come_from_rust_analyzer_when_the_editor_opens_a_member_directory() {
+    let Some(mut session) =
+        Session::start("lsp-member-dir", &WORKSPACE, &["app"], "app/src/main.rk")
+    else {
+        return;
+    };
+    let hover = session.hover_helper("app/src/main.rk");
+    assert!(
+        hover["contents"].to_string().contains("fn helper"),
+        "{hover}"
+    );
+}
+
+#[test]
+fn hovers_come_from_rust_analyzer_through_a_path_dependency_outside_the_workspace() {
+    let app = "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\nshared = { path = \"../shared\" }\n";
+    let mut files = WORKSPACE;
+    files[1] = ("app/Cargo.toml", app);
+    let Some(mut session) = Session::start("lsp-outside", &files[1..], &["app"], "app/src/main.rk")
+    else {
+        return;
+    };
+    let hover = session.hover_helper("app/src/main.rk");
+    assert!(
+        hover["contents"].to_string().contains("fn helper"),
+        "{hover}"
+    );
 }
