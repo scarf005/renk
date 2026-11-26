@@ -172,7 +172,19 @@ struct Emitter {
 }
 
 pub fn transpile(source: &str) -> Result<TranspileOutput, TranspileError> {
-    on_large_stack(|| transpile_source(without_bom(source)))
+    let mut output = on_large_stack(|| transpile_source(without_bom(source)))?;
+    if source.starts_with('\u{feff}') {
+        shift_line_one_columns(&mut output.source_tree);
+    }
+    Ok(output)
+}
+
+/// Adds the byte order mark, one UTF-16 unit, to the columns of the nodes on line 1.
+fn shift_line_one_columns(nodes: &mut [SourceMapNode]) {
+    for node in nodes.iter_mut().filter(|node| node.source_line == 1) {
+        node.source_column += 1;
+        shift_line_one_columns(&mut node.children);
+    }
 }
 
 /// `source` without the byte order mark some editors write at its start.
