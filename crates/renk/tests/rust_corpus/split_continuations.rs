@@ -64,3 +64,27 @@ pub fn chained(v: Option<u8>, items: Vec<u8>) -> Result<Option<u8>, ()> {
     .ok_or(())
     .map(Some)
 }
+
+pub fn sizes(items: &[u8], extra: usize, place: &mut usize) -> usize {
+    let wide = items.len()
+    - extra;
+    let same = wide
+    == extra;
+    *place = wide;
+    let reset = || 0;
+    // A sum over several lines.
+
+    items.len() * 2
+    + extra
+    // The next term counts the flag.
+    + usize::from(same)
+
+    + reset()
+}
+
+pub fn sizes_tail(items: &[u8]) -> usize {
+    let call = || items.len();
+    call();
+    || 1;
+    call()
+}
