@@ -6,6 +6,10 @@ const runnerDeps = resolve("../runner/target/debug/deps")
 const backendPath = resolve("../target/debug/renk-web")
 const backendAddress = "127.0.0.1:8081"
 const backendUrl = `http://${backendAddress}/`
+const devPort = 5173
+const devHosts = ["localhost", "127.0.0.1", "[::1]"]
+  .map((host) => `${host}:${devPort}`)
+  .join(",")
 
 const runChecked = async (
   command: string,
@@ -53,6 +57,7 @@ const backend = new Deno.Command(backendPath, {
   env: {
     ...Deno.env.toObject(),
     RENK_WEB_ADDR: backendAddress,
+    RENK_WEB_HOSTS: devHosts,
     RENK_WEB_DIST: resolve("dist"),
     RENK_RUN_DEPS: runnerDeps,
   },
@@ -70,7 +75,15 @@ try {
   ])
 
   const vite = new Deno.Command("deno", {
-    args: ["run", "-A", "--node-modules-dir", "npm:vite"],
+    args: [
+      "run",
+      "-A",
+      "--node-modules-dir",
+      "npm:vite",
+      "--port",
+      String(devPort),
+      "--strictPort",
+    ],
     cwd: resolve("."),
     stdin: "inherit",
     stdout: "inherit",
