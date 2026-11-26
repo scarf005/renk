@@ -125,11 +125,20 @@ struct ServerConfig {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Sandbox {
     /// New user, mount, PID, network, IPC and UTS namespaces. The step sees its own run directory
-    /// and no other in the temporary directory, and only its own processes in `/proc`. The step
-    /// fails when one of them cannot be made.
-    Namespaces,
+    /// and no other in the temporary directory. The step fails when one of them cannot be made.
+    Namespaces(Proc),
     /// No namespaces. `RENK_WEB_UNSANDBOXED=1` selects this.
     Unsandboxed,
+}
+
+/// What a step in namespaces sees at `/proc`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Proc {
+    /// A new `proc` with only the processes of the step.
+    Own,
+    /// An empty read-only tmpfs. The kernel refuses a new `proc` in a user namespace when a
+    /// container masks paths below `/proc`.
+    Hidden,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -204,7 +213,7 @@ pub async fn main() -> std::io::Result<()> {
             sandbox: if env::var_os("RENK_WEB_UNSANDBOXED").is_some_and(|value| value == "1") {
                 Sandbox::Unsandboxed
             } else {
-                Sandbox::Namespaces
+                Sandbox::Namespaces(Proc::Own)
             },
         },
         dist: PathBuf::from(env::var("RENK_WEB_DIST").unwrap_or_else(|_| DEFAULT_DIST.to_string())),
@@ -243,14 +252,14 @@ fn log_namespace_support(sandbox: Sandbox) -> std::io::Result<()> {
     fs::create_dir_all(&dir)?;
     let options = ChildOptions {
         timeout: Duration::from_secs(5),
-        sandbox: Sandbox::Namespaces,
+        sandbox: Sandbox::Namespaces(Proc::Own),
         max_file_bytes: COMPILE_FILE_SIZE_BYTES,
         run_step: false,
     };
     let probe = run_command("rustc", &["--version"], &dir, options);
     let _ = fs::remove_dir_all(dir);
     let mode = match sandbox {
-        Sandbox::Namespaces => "runs need them",
+        Sandbox::Namespaces(_) => "runs need them",
         Sandbox::Unsandboxed => "RENK_WEB_UNSANDBOXED=1 runs code without them",
     };
     if probe.status == Some(0) {
@@ -772,7 +781,7 @@ fn read_limited_utf8(path: &Path, limit: usize) -> (String, bool) {
 fn configure_child_process(command: &mut Command, cwd: &Path, options: ChildOptions) {
     let cpu_seconds = options.timeout.as_secs().saturating_add(1).max(1);
     // Make the strings here: the code between `fork` and `exec` must not allocate.
-    let setup = (options.sandbox == Sandbox::Namespaces).then(|| {
+    let setup = matches!(options.sandbox, Sandbox::Namespaces(_)).then(|| {
         let (uid, gid) = unsafe { (libc::getuid(), libc::getgid()) };
         let path =
             |path: &Path| CString::new(path.as_os_str().as_encoded_bytes()).unwrap_or_default();
@@ -1271,7 +1280,7 @@ mod tests {
         fs::write(deps.join("libtrpl-0.rlib"), "").unwrap();
         let mut state = state(&deps, usize::MAX);
         state.run_deps = deps;
-        state.config.sandbox = Sandbox::Namespaces;
+        state.config.sandbox = Sandbox::Namespaces(Proc::Own);
         state.config.run_timeout = run_timeout;
         state.config.request_timeout = run_timeout * 3;
         state
@@ -1282,9 +1291,11 @@ mod tests {
     static NAMESPACE_TESTS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
     /// Sends `rust` to `/api/run` of a server with namespaces on and a run timeout of 2 s.
-    async fn run_in_namespaces(rust: &str) -> Value {
+    async fn run_in_namespaces(proc: Proc, rust: &str) -> Value {
         let _lock = NAMESPACE_TESTS.lock().await;
-        let app = router(namespace_state(Duration::from_secs(2)));
+        let mut state = namespace_state(Duration::from_secs(2));
+        state.config.sandbox = Sandbox::Namespaces(proc);
+        let app = router(state);
         let (status, _, body) = send(&app, run(json!({ "rust": rust }).to_string())).await;
         let body = serde_json::from_slice::<Value>(&body).unwrap();
         assert_eq!(status, StatusCode::OK, "{body}");
@@ -1511,7 +1522,7 @@ mod tests {
             };
             run_command("readlink", &["/proc/self/ns/net"], &dir, options)
         };
-        let sandboxed = readlink(Sandbox::Namespaces);
+        let sandboxed = readlink(Sandbox::Namespaces(Proc::Own));
         if sandboxed.status == Some(0) {
             assert_ne!(sandboxed.stdout.trim(), server.to_str().unwrap());
         } else {
@@ -1530,7 +1541,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "needs unprivileged user namespaces"]
     async fn runs_a_program_in_namespaces() {
-        let body = run_in_namespaces(r#"fn main() { println!("hello") }"#).await;
+        let body = run_in_namespaces(Proc::Own, r#"fn main() { println!("hello") }"#).await;
         let result = (&body["ok"], &body["stdout"]);
         assert_eq!(result, (&json!(true), &json!("hello\n")), "{body}");
     }
@@ -1543,6 +1554,7 @@ mod tests {
         let other = env::temp_dir().join(format!("renk-run-0-{}", std::process::id()));
         fs::create_dir_all(&other).unwrap();
         let body = run_in_namespaces(
+            Proc::Own,
             r#"fn main() {
                 let cwd = std::env::current_dir().unwrap();
                 for entry in std::fs::read_dir(cwd.parent().unwrap()).unwrap() {
@@ -1564,6 +1576,7 @@ mod tests {
     #[ignore = "needs unprivileged user namespaces"]
     async fn shows_only_the_program_in_proc() {
         let body = run_in_namespaces(
+            Proc::Own,
             r#"fn main() {
                 let environ = std::fs::read("/proc/1/environ").unwrap_or_default();
                 let tmpdir = format!("TMPDIR={}", std::env::var("TMPDIR").unwrap());
@@ -1580,12 +1593,28 @@ mod tests {
         assert_eq!(body["stdout"], json!("true [\"1\"]\n"), "{body}");
     }
 
+    /// Hides `/proc` as in a container that masks it. rustc, the linker and the program must
+    /// still work, and the program must find `/proc` empty.
+    #[tokio::test]
+    #[ignore = "needs unprivileged user namespaces"]
+    async fn runs_a_program_with_proc_hidden() {
+        let body = run_in_namespaces(
+            Proc::Hidden,
+            r#"fn main() {
+                println!("hello {}", std::fs::read_dir("/proc").unwrap().count());
+            }"#,
+        )
+        .await;
+        assert_eq!(body["stdout"], json!("hello 0\n"), "{body}");
+    }
+
     /// Reserves 64 MiB every 10 ms and never frees it. The address-space limit must stop the
     /// program before the run timeout of 2 s.
     #[tokio::test]
     #[ignore = "needs unprivileged user namespaces"]
     async fn stops_a_program_that_allocates_without_end() {
         let body = run_in_namespaces(
+            Proc::Own,
             r#"fn main() {
                 loop {
                     std::mem::forget(Vec::<u8>::with_capacity(64 << 20));
@@ -1605,6 +1634,7 @@ mod tests {
     #[ignore = "needs unprivileged user namespaces"]
     async fn stops_a_program_that_forks_without_end() {
         let body = run_in_namespaces(
+            Proc::Own,
             r#"fn main() {
                 let mut children = Vec::new();
                 loop {
@@ -1724,7 +1754,7 @@ mod tests {
                         .any(|arg| arg == sleep.as_bytes())
                 })
         };
-        for sandbox in [Sandbox::Namespaces, Sandbox::Unsandboxed] {
+        for sandbox in [Sandbox::Namespaces(Proc::Own), Sandbox::Unsandboxed] {
             let dir = temp_dir("setsid");
             let options = ChildOptions {
                 sandbox,
