@@ -888,6 +888,29 @@ fn cargo_wrapper_transpiles_glob_members_and_outside_path_dependencies() {
     let _ = fs::remove_dir_all(dir);
 }
 
+#[test]
+fn workspace_lists_each_package_directory_once() {
+    let dir = temp_dir("cargo-overlapping-members");
+    let workspace =
+        "\n[workspace]\nmembers = [\".\", \"crates/*\", \"crates/a\", \"crates/../crates/a\"]\n";
+    let b = manifest("b", "\n[dependencies]\na = { path = \"../a/../a\" }\n");
+    write_files(
+        &dir,
+        &[
+            ("Cargo.toml", &manifest("root", workspace)),
+            ("crates/a/Cargo.toml", &manifest("a", "")),
+            ("crates/b/Cargo.toml", &b),
+        ],
+    );
+    let mut packages = renk::project::workspace(&dir).unwrap().packages;
+    packages.sort();
+    let mut unique = packages.clone();
+    unique.dedup();
+    assert_eq!(packages.len(), 3, "{packages:?}");
+    assert_eq!(packages, unique);
+    let _ = fs::remove_dir_all(dir);
+}
+
 #[cfg(unix)]
 #[test]
 fn walks_do_not_follow_symlinks_to_directories() {
