@@ -1209,6 +1209,57 @@ mod tests {
         let _ = fs::remove_dir_all(dir);
     }
 
+    /// `setsid -f sleep 60.<test pid>` moves the `sleep` out of the process group, so a kill of
+    /// the group misses it. The odd argument finds the `sleep` in `/proc`. One second after the
+    /// 300 ms timeout it must be gone in both modes. The program also runs `kill -0` on the
+    /// server, which must fail in namespace mode.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn programs_that_leave_the_process_group_are_killed_on_timeout() {
+        become_child_subreaper();
+        let server = std::process::id();
+        let sleep = format!("60.{server}");
+        let running = || {
+            fs::read_dir("/proc")
+                .unwrap()
+                .filter_map(|entry| fs::read(entry.ok()?.path().join("cmdline")).ok())
+                .any(|cmdline| {
+                    cmdline
+                        .split(|byte| *byte == 0)
+                        .any(|arg| arg == sleep.as_bytes())
+                })
+        };
+        for sandbox in [Sandbox::Namespaces, Sandbox::Unsandboxed] {
+            let dir = temp_dir("setsid");
+            let options = ChildOptions {
+                timeout: Duration::from_millis(300),
+                sandbox,
+            };
+            let script =
+                format!("setsid -f sleep {sleep}; kill -0 {server} && echo signalled; sleep 60");
+            let result = run_command("sh", &["-c", &script], &dir, options);
+            let _ = fs::remove_dir_all(dir);
+            if result.stderr.starts_with("sandbox step `") {
+                eprintln!("namespace mode not tested: {}", result.stderr);
+                continue;
+            }
+            assert!(result.timed_out, "{result:?}");
+            assert_eq!(
+                result.stdout.contains("signalled"),
+                sandbox == Sandbox::Unsandboxed,
+                "{sandbox:?}"
+            );
+            let deadline = Instant::now() + Duration::from_secs(1);
+            while running() && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(10));
+            }
+            assert!(
+                !running(),
+                "{sandbox:?}: sleep {sleep} survived the timeout"
+            );
+        }
+    }
+
     #[test]
     fn command_output_is_capped() {
         let dir = temp_dir("cap");
