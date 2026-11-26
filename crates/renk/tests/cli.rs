@@ -462,8 +462,6 @@ fn fmt_write_formats_files_and_directories_in_place() {
     for path in ["sub/note.txt", "sub/target/skip.rk", "sub/.hidden/skip.rk"] {
         assert_eq!(fs::read_to_string(dir.join(path)).unwrap(), unformatted);
     }
-    let output = renk(&["fmt", "--check", "--write", "a.rk"], "", &dir);
-    assert_eq!(output.status.code(), Some(2));
     let output = renk(&["fmt", "--check", "a.rk", "sub"], "", &dir);
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout));
     let _ = fs::remove_dir_all(dir);

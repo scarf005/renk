@@ -108,11 +108,14 @@ struct Io {
 
 #[derive(clap::Args)]
 struct Fmt {
-    /// Input files; reads stdin when omitted
+    /// Input files, or directories to format every .rk file under; reads stdin when omitted
     inputs: Vec<PathBuf>,
     /// Write to PATH instead of stdout
-    #[arg(short, long, value_name = "PATH", conflicts_with = "check")]
+    #[arg(short, long, value_name = "PATH", conflicts_with_all = ["check", "write"])]
     output: Option<PathBuf>,
+    /// Rewrite each unformatted file in place
+    #[arg(short, long, conflicts_with = "check", requires = "inputs")]
+    write: bool,
     /// Write nothing; print a diff for each unformatted file and exit with 1 if there is one
     #[arg(long)]
     check: bool,
@@ -229,8 +232,9 @@ fn emit(output: Option<PathBuf>, text: &str) -> CliResult<()> {
 }
 
 fn run_fmt(args: Fmt) -> CliResult<i32> {
-    if !args.check && args.inputs.len() > 1 {
-        return Err("formatting more than one file needs --check".into());
+    let to_stdout = !args.check && !args.write;
+    if to_stdout && (args.inputs.len() > 1 || args.inputs.iter().any(|path| path.is_dir())) {
+        return Err("formatting more than one file needs --check or --write".into());
     }
     Command::new("rustfmt")
         .arg("--version")
@@ -238,40 +242,64 @@ fn run_fmt(args: Fmt) -> CliResult<i32> {
         .map_err(|error| {
             format!("cannot run rustfmt ({error}); install it with `rustup component add rustfmt`")
         })?;
-    let inputs = match args.inputs.as_slice() {
-        [] => vec![None],
-        paths => paths.iter().map(Some).collect(),
+    let mut paths = Vec::new();
+    for input in &args.inputs {
+        if input.is_dir() {
+            paths.extend(
+                project::renk_files(input)
+                    .map_err(|error| format!("{}: {error}", input.display()))?,
+            );
+        } else {
+            paths.push(input.clone());
+        }
+    }
+    let inputs = if args.inputs.is_empty() {
+        vec![None]
+    } else {
+        paths.iter().map(Some).collect()
     };
     let mut code = 0;
     for input in inputs {
         let name = input_name(input.map(PathBuf::as_path));
         let formatted = read_source(input).and_then(|source| {
-            let formatted =
-                format_source_with(&source, &rustfmt).map_err(|error| located(&name, error))?;
+            // The formatter ends even an empty file with a line break.
+            let formatted = if source.is_empty() {
+                String::new()
+            } else {
+                format_source_with(&source, &rustfmt).map_err(|error| located(&name, error))?
+            };
             Ok((source, formatted))
         });
         let (source, formatted) = match formatted {
             Ok(formatted) => formatted,
-            Err(error) if args.check => {
+            Err(error) if !to_stdout => {
                 eprintln!("renk: {error}");
                 code = 1;
                 continue;
             }
             Err(error) => return Err(error),
         };
-        if !args.check {
+        if to_stdout {
             emit(args.output, &formatted)?;
             return Ok(0);
         }
-        if formatted != source {
-            print!(
-                "{}",
-                similar::TextDiff::from_lines(&source, &formatted)
-                    .unified_diff()
-                    .header(&name, &name)
-            );
-            code = 1;
+        if formatted == source {
+            continue;
         }
+        if let Some(path) = input.filter(|_| args.write) {
+            fs::write(path, formatted).map_err(|error| format!("{name}: {error}"))?;
+            continue;
+        }
+        if source.contains("\r\n") {
+            println!("{name}: CRLF line endings");
+        }
+        print!(
+            "{}",
+            similar::TextDiff::from_lines(&source, &formatted)
+                .unified_diff()
+                .header(&name, &name)
+        );
+        code = 1;
     }
     Ok(code)
 }

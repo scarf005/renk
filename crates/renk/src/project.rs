@@ -151,6 +151,19 @@ fn walk(dir: &Path, visit: &mut dyn FnMut(&Path)) -> io::Result<()> {
     Ok(())
 }
 
+/// The `.rk` files under `dir` in sorted order. It skips `target`, `node_modules`, and the
+/// directories whose names start with `.`.
+pub fn renk_files(dir: &Path) -> io::Result<Vec<PathBuf>> {
+    let mut files = Vec::new();
+    walk(dir, &mut |path| {
+        if path.extension().is_some_and(|extension| extension == "rk") {
+            files.push(path.to_path_buf());
+        }
+    })?;
+    files.sort();
+    Ok(files)
+}
+
 /// The `.rk` files in the source directories of `package`, and its `build.rk`. It deletes each
 /// generated `.rs` file there that has no `.rk` file with the same stem beside it.
 pub fn sources(package: &Path) -> io::Result<Vec<PathBuf>> {
