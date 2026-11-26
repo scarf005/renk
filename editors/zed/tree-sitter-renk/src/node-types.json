@@ -603,6 +603,10 @@
     "named": false
   },
   {
+    "type": "dyn",
+    "named": false
+  },
+  {
     "type": "else",
     "named": false
   },
@@ -721,6 +725,10 @@
   },
   {
     "type": "struct",
+    "named": false
+  },
+  {
+    "type": "super",
     "named": false
   },
   {

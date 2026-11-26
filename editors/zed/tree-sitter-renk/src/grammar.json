@@ -493,6 +493,10 @@
         },
         {
           "type": "STRING",
+          "value": "dyn"
+        },
+        {
+          "type": "STRING",
           "value": "else"
         },
         {
@@ -558,6 +562,10 @@
         {
           "type": "STRING",
           "value": "self"
+        },
+        {
+          "type": "STRING",
+          "value": "super"
         },
         {
           "type": "STRING",
