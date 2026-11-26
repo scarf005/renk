@@ -60,8 +60,11 @@ jobs:
       - uses: actions/checkout@v7
       - run: rustup toolchain install stable --profile minimal --target wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
+      # The Containerfile holds the one Deno version.
+      - id: deno
+        run: echo "version=$(sed -n 's/^ARG DENO_VERSION=//p' ../Containerfile)" >> "$GITHUB_OUTPUT"
       - uses: denoland/setup-deno@v2
-        with: { deno-version: 2.5.6 }
+        with: { deno-version: "${{ steps.deno.outputs.version }}" }
       - run: deno task check
       - run: deno task test
       - run: deno task build

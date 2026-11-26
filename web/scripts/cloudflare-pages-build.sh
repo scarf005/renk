@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-DENO_VERSION=2.5.6
+# The Containerfile holds the one Deno version.
+DENO_VERSION=$(sed -n 's/^ARG DENO_VERSION=//p' "$(dirname "$0")/../../Containerfile")
 
 install_deno() {
   if command -v deno >/dev/null 2>&1; then
