@@ -185,6 +185,36 @@ fn macros_under_a_crate_path_keep_their_arguments() {
 }
 
 #[test]
+fn dotted_macro_paths_lower_like_colon_paths() {
+    // `log.println!("{x + 1}")` keeps `{x + 1}` as `log::println!` does. `std.println!` gets the
+    // std lowering.
+    for (dotted, colons) in [
+        ("log.println!(\"{x + 1}\")", "log::println!(\"{x + 1}\")"),
+        (
+            "mylib.vec![if x > 0 then 1 else 2]",
+            "mylib::vec![if x > 0 then 1 else 2]",
+        ),
+        ("Std.println!(\"{x + 1}\")", "Std::println!(\"{x + 1}\")"),
+        (
+            "a.std.println!(\"{x + 1}\")",
+            "a::std::println!(\"{x + 1}\")",
+        ),
+        ("std.println!(\"{x + 1}\")", "std::println!(\"{x + 1}\")"),
+        (
+            "core.write!(s, \"{x + 1}\")",
+            "core::write!(s, \"{x + 1}\")",
+        ),
+    ] {
+        assert_eq!(
+            rust(&format!("fn f(x: i32):\n    {dotted}\n")),
+            rust(&format!("fn f(x: i32):\n    {colons}\n")),
+            "{dotted}"
+        );
+    }
+    assert!(rust("fn f(x: i32):\n    std.println!(\"{x + 1}\")\n").contains("\"{}\", x + 1"));
+}
+
+#[test]
 fn type_lowering_reenters_expression_context_for_consts() {
     let output = rust(
         "fn bytes() -> [u8; (TABLE)[N].len()] = todo!()\nfn array() -> Array[u8, { size_of[T]() }] = todo!()\n",
