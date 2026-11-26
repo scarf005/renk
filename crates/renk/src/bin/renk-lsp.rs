@@ -1303,14 +1303,22 @@ async fn read_lsp_body<R: tokio::io::AsyncBufRead + Unpin>(reader: &mut R) -> Op
         if line.is_empty() {
             break;
         }
-        if let Some(value) = line.strip_prefix("Content-Length: ") {
-            content_length = value.parse::<usize>().ok();
+        if let Some((name, value)) = line.split_once(':')
+            && name.trim().eq_ignore_ascii_case("content-length")
+        {
+            content_length = value.trim().parse::<usize>().ok();
         }
     }
 
-    let mut body = vec![0; content_length?];
-    reader.read_exact(&mut body).await.ok()?;
-    Some(body)
+    // Read as the bytes arrive: a length that the input never reaches must not allocate.
+    let length = content_length?;
+    let mut body = Vec::new();
+    reader
+        .take(length as u64)
+        .read_to_end(&mut body)
+        .await
+        .ok()?;
+    (body.len() == length).then_some(body)
 }
 
 async fn write_lsp_message<W: tokio::io::AsyncWrite + Unpin>(
