@@ -21,6 +21,10 @@ web-check:
 web-test:
     cd web && deno task test
 
+# Round-trip pinned crates.io releases, the same command as the weekly CI run.
+test-real-crates:
+    cargo test -p renk --test real_crates -- --ignored
+
 # Run the renk-web tests that need unprivileged user namespaces.
 test-web-namespaces:
     cargo test -p renk --bin renk-web -- --ignored
