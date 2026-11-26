@@ -785,6 +785,36 @@ fn signature_help_names_the_parameter_at_the_cursor() {
     assert!(help.is_null() || parameter(&help) == f, "{help}");
 }
 
+#[test]
+fn highlights_a_name_in_code_and_in_format_strings() {
+    let main =
+        "fn main():\n    let name = 1\n    let a = name + 2\n    println!(\"{a} {name + name}\")\n";
+    let Some(mut session) = Session::open("lsp-highlight", main) else {
+        return;
+    };
+    let main = session.uri("src/main.rk");
+    let ranges = |highlights: &Value| {
+        let highlights = highlights.as_array().into_iter().flatten();
+        highlights
+            .map(|highlight| highlight["range"].clone())
+            .collect::<Vec<_>>()
+    };
+    let names = [
+        range(1, 8, 12),
+        range(2, 12, 16),
+        range(3, 19, 23),
+        range(3, 26, 30),
+    ];
+    for at in [position(1, 8), position(3, 27)] {
+        let params = json!({"textDocument": {"uri": main}, "position": at});
+        let highlights =
+            session.request_until("textDocument/documentHighlight", params, |highlights| {
+                highlights.is_array()
+            });
+        assert_eq!(ranges(&highlights), names, "{highlights}");
+    }
+}
+
 /// Opens `app/src/main.rk` of `WORKSPACE`, or with `outside` of its packages without the
 /// workspace, with the folders `roots`, and hovers `helper` until rust-analyzer names it.
 fn assert_hover_names_helper(name: &str, roots: &[&str], outside: bool) {
