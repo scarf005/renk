@@ -7681,10 +7681,10 @@ fn opaque_span_end(chars: &[char], index: usize) -> Option<usize> {
 /// The byte index just past the raw string literal starting at byte `index`, as after the `#` of
 /// `r#"a"#`, whose `"` ends no ordinary string.
 fn raw_literal_end(text: &str, index: usize) -> Option<usize> {
-    let rest = text[index..].as_bytes();
-    let prefix = usize::from(matches!(rest.first(), Some(b'b' | b'c')));
-    if rest.get(prefix) != Some(&b'r')
-        || !matches!(rest.get(prefix + 1), Some(b'#' | b'"'))
+    let rest = &text[index..];
+    let bytes = rest.as_bytes();
+    let prefix = usize::from(matches!(bytes.first(), Some(b'b' | b'c')));
+    if bytes.get(prefix) != Some(&b'r')
         || text[..index]
             .chars()
             .next_back()
@@ -7692,9 +7692,17 @@ fn raw_literal_end(text: &str, index: usize) -> Option<usize> {
     {
         return None;
     }
-    let chars = text[index..].chars().collect::<Vec<_>>();
-    let end = raw_string_span_end(&chars, 0)?;
-    Some(index + chars[..=end].iter().map(|c| c.len_utf8()).sum::<usize>())
+    let hashes = bytes[prefix + 1..]
+        .iter()
+        .take_while(|&&b| b == b'#')
+        .count();
+    let quote = prefix + 1 + hashes;
+    if bytes.get(quote) != Some(&b'"') {
+        return None;
+    }
+    let close = format!("\"{}", "#".repeat(hashes));
+    let end = rest[quote + 1..].find(&close);
+    Some(index + end.map_or(rest.len(), |end| quote + 1 + end + close.len()))
 }
 
 fn raw_string_span_end(chars: &[char], index: usize) -> Option<usize> {
