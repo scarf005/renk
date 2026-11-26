@@ -494,6 +494,18 @@ fn fmt_names_a_byte_order_mark_and_writes_the_file_without_it() {
 }
 
 #[test]
+fn fmt_check_diff_leaves_the_byte_order_mark_out_of_line_one() {
+    let dir = temp_dir("fmt-bom-diff");
+    fs::write(dir.join("both.rk"), "\u{feff}fn main():\n  let  x = 1\n").unwrap();
+    let output = renk(&["fmt", "--check", "both.rk"], "", &dir);
+    assert_eq!(
+        text(&output.stdout),
+        "both.rk: byte order mark\n--- both.rk\n+++ both.rk\n@@ -1,2 +1,2 @@\n fn main():\n-  let  x = 1\n+    let x = 1\n"
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
 fn fmt_keeps_an_empty_file_empty_and_turns_crlf_into_lf() {
     let dir = temp_dir("fmt-edges");
     fs::write(dir.join("empty.rk"), "").unwrap();
