@@ -207,13 +207,16 @@ impl LanguageServer for Backend {
         let saved = match self.rust_analyzer(&uri).await {
             Some(saved) => Some(saved),
             // The editor's rust-analyzer serves a Rust file, but the workspace check reads its copy.
-            None if is_rust(&uri) => match mirrored_file(&uri) {
-                Some((workspace, copy)) => {
-                    let found = self.workspaces.read().await.get(&workspace.root).cloned();
-                    found.zip(Url::from_file_path(copy).ok())
+            None if is_rust(&uri) => {
+                let lookup = uri.clone();
+                match blocking(move || mirrored_file(&lookup)).await.flatten() {
+                    Some((workspace, copy)) => {
+                        let found = self.workspaces.read().await.get(&workspace.root).cloned();
+                        found.zip(Url::from_file_path(copy).ok())
+                    }
+                    None => None,
                 }
-                None => None,
-            },
+            }
             None => None,
         };
         let Some((rust_analyzer, uri)) = saved else {
@@ -262,6 +265,11 @@ impl LanguageServer for Backend {
     async fn did_change_watched_files(&self, params: DidChangeWatchedFilesParams) {
         let _sync = self.sync.lock().await;
         let mut changed = HashMap::<PathBuf, Vec<FileEvent>>::new();
+        let uris = (params.changes.iter())
+            .map(|change| change.uri.clone())
+            .collect::<Vec<_>>();
+        let found = blocking(move || uris.iter().map(mirrored_file).collect::<Vec<_>>()).await;
+        let mut found = found.unwrap_or_default().into_iter();
         for change in params.changes {
             let open = self.documents.read().await.contains_key(&change.uri);
             if change.typ == FileChangeType::DELETED && !open {
@@ -270,7 +278,7 @@ impl LanguageServer for Backend {
                     .publish_diagnostics(change.uri.clone(), Vec::new(), None)
                     .await;
             }
-            if let Some((workspace, copy)) = mirrored_file(&change.uri)
+            if let Some((workspace, copy)) = found.next().flatten()
                 && let Ok(uri) = Url::from_file_path(copy)
             {
                 let events = changed.entry(workspace.root).or_default();
@@ -909,30 +917,30 @@ impl Backend {
     /// already has it open, otherwise an open, after closing it where it was open before (the
     /// document may have become a script or stopped being one).
     async fn sync_rust_document(&self, uri: &Url, text: &str, version: i32) {
-        let found = if is_script(uri, text) {
-            script_rust_path(uri).map(|path| (None, path))
-        } else {
-            mirrored_file(uri).map(|(workspace, path)| (Some(workspace), path))
-        };
-        let Some((workspace, path)) = found else {
+        let Ok(rust) = generated(uri, text).map(|generated| generated.rust) else {
             return;
         };
-        let (Ok(rust_uri), Ok(rust)) = (
-            Url::from_file_path(&path),
-            generated(uri, text).map(|generated| generated.rust),
-        ) else {
-            return;
-        };
-        match &workspace {
-            Some(workspace) => {
-                for dir in std::iter::once(&workspace.root).chain(&workspace.packages) {
-                    mirror_manifest(workspace, dir);
-                }
-                write_generated_rust_file(&path, &rust);
+        let (script, document, written) = (is_script(uri, text), uri.clone(), rust.clone());
+        let found = blocking(move || {
+            if script {
+                let path = script_rust_path(&document)?;
+                // Its frontmatter comes first, so no header; nothing else writes to renk's cache.
+                write_if_changed(&path, &written);
+                return Some((None, path));
             }
-            // Its frontmatter comes first, so no header; nothing else writes to renk's cache.
-            None => write_if_changed(&path, &rust),
-        }
+            let (workspace, path) = mirrored_file(&document)?;
+            for dir in std::iter::once(&workspace.root).chain(&workspace.packages) {
+                mirror_manifest(&workspace, dir);
+            }
+            write_generated_rust_file(&path, &written);
+            Some((Some(workspace), path))
+        });
+        let Some((workspace, path)) = found.await.flatten() else {
+            return;
+        };
+        let Ok(rust_uri) = Url::from_file_path(&path) else {
+            return;
+        };
         let Some(rust_analyzer) = self.ensure_rust_analyzer(uri, workspace.as_ref()).await else {
             return;
         };
@@ -1011,7 +1019,7 @@ impl Backend {
     /// documents. It reads every source file of the workspace, so it runs on a blocking thread.
     async fn refresh_mirror(&self, root: &Path) {
         let (root, documents) = (root.to_path_buf(), self.documents.read().await.clone());
-        let _ = tokio::task::spawn_blocking(move || {
+        blocking(move || {
             if let Some(workspace) = project::workspace(&root) {
                 mirror_workspace(&workspace, &documents);
             }
@@ -1499,6 +1507,11 @@ fn canonical(path: &Path) -> Option<PathBuf> {
                 .join(path.file_name()?),
         )
     })
+}
+
+/// Runs `work`, which reads or writes files, on a blocking thread; `None` when it panicked.
+async fn blocking<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> Option<T> {
+    tokio::task::spawn_blocking(work).await.ok()
 }
 
 /// The workspace of a Renk module or a Rust file, and the Rust file in its mirror: the module's
