@@ -256,15 +256,19 @@ fn skipped(name: &str) -> bool {
     name.starts_with('.') || name == "target" || name == "node_modules"
 }
 
-/// Calls `visit` with each file under `dir`. It skips `target`, `node_modules`, the directories
-/// whose names start with `.`, and symlinks to directories.
-fn walk(dir: &Path, visit: &mut dyn FnMut(&Path)) -> io::Result<()> {
+/// Calls `visit` with each file under `dir`, but enters only the directories that `enter` accepts.
+/// It skips `target`, `node_modules`, the directories whose names start with `.`, and symlinks to
+/// directories.
+fn walk(dir: &Path, enter: &dyn Fn(&Path) -> bool, visit: &mut dyn FnMut(&Path)) -> io::Result<()> {
+    if !enter(dir) {
+        return Ok(());
+    }
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
         if entry.file_type()?.is_dir() {
             if !skipped(&entry.file_name().to_string_lossy()) {
-                walk(&path, visit)?;
+                walk(&path, enter, visit)?;
             }
         } else if !path.is_dir() {
             visit(&path);
@@ -276,7 +280,7 @@ fn walk(dir: &Path, visit: &mut dyn FnMut(&Path)) -> io::Result<()> {
 /// The `.rk` files under `dir` in sorted order, found as `walk` does.
 pub fn renk_files(dir: &Path) -> io::Result<Vec<PathBuf>> {
     let mut files = Vec::new();
-    walk(dir, &mut |path| {
+    walk(dir, &|_| true, &mut |path| {
         if path.extension().is_some_and(|extension| extension == "rk") {
             files.push(path.to_path_buf());
         }
@@ -291,22 +295,16 @@ pub fn renk_files(dir: &Path) -> io::Result<Vec<PathBuf>> {
 pub fn sources(package: &Path) -> io::Result<Vec<PathBuf>> {
     let mut sources = Vec::new();
     let mut rust = Vec::new();
-    let mut visit = |path: &Path| {
-        // A directory with its own manifest is another package, such as `tests/fixtures/demo`.
-        let nested = path
-            .ancestors()
-            .skip(1)
-            .take_while(|dir| *dir != package)
-            .any(|dir| dir.join("Cargo.toml").is_file());
-        match path.extension().and_then(|extension| extension.to_str()) {
-            Some("rk") if !nested => sources.push(path.to_path_buf()),
-            Some("rs") if !nested => rust.push(path.to_path_buf()),
-            _ => {}
-        }
+    let mut visit = |path: &Path| match path.extension().and_then(|extension| extension.to_str()) {
+        Some("rk") => sources.push(path.to_path_buf()),
+        Some("rs") => rust.push(path.to_path_buf()),
+        _ => {}
     };
+    // A directory with its own manifest is another package, such as `tests/fixtures/demo`.
+    let own = |dir: &Path| !dir.join("Cargo.toml").is_file();
     for root in SOURCE_ROOTS.map(|root| package.join(root)) {
         if root.is_dir() {
-            walk(&root, &mut visit)?;
+            walk(&root, &own, &mut visit)?;
         } else {
             for path in [root.with_extension("rs"), root] {
                 if path.is_file() {
