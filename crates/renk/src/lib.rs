@@ -2608,11 +2608,6 @@ fn source_lines(source: &str) -> Result<Vec<SourceLine>, TranspileError> {
         let mut group = chained.then_some('}');
         let mut open = OpenDelimiters::default();
         let mut header_end = heads[index];
-        // A macro arm's matcher continued over several lines, up to its `=>`.
-        let in_matcher = |text: &str| {
-            macro_indent.is_some_and(|item| indent > item)
-                && open_delimiters(text).is_some_and(|open| !open.is_empty())
-        };
         while joins_next_line(
             &text,
             raw_lines.peek().map(|(_, next)| *next),
@@ -2620,7 +2615,9 @@ fn source_lines(source: &str) -> Result<Vec<SourceLine>, TranspileError> {
             &mut group,
             &mut open,
         ) || header_end.is_some()
-            || in_matcher(&text)
+            // A macro arm's matcher continued over several lines, up to its `=>`, with the
+            // delimiters `joins_next_line` left open.
+            || (macro_indent.is_some_and(|item| indent > item) && !open.open.is_empty())
             || continues_line(
                 raw_lines.peek().and_then(|&(index, _)| next_code[index]),
                 raw_indent(without_comment),
@@ -2743,7 +2740,8 @@ fn joins_next_line(
                 *first == outer || (matches!(first, '(' | '[') && !code.trim_end().ends_with(':'))
             }
             None => next.is_some_and(|next| {
-                continues_chain(next, indent) || continues_where_clause(text, next, indent)
+                continues_chain(next, indent)
+                    || continues_where_clause(text, next, indent, delimiters)
             }),
         };
     }
@@ -2779,7 +2777,7 @@ fn joins_next_line(
                 .any(|operator| trimmed.ends_with(operator)))
             || ends_with_binary_operator(trimmed)
             || (trimmed.ends_with(',') && delimiters.in_closure_parameters(text))
-            || next.is_some_and(|next| continues_where_clause(text, next, indent)))
+            || next.is_some_and(|next| continues_where_clause(text, next, indent, delimiters)))
 }
 
 /// Whether the `{` ending `code` opens a block operand: on a line continuing an expression with
@@ -3180,9 +3178,13 @@ fn block_condition_heads(
 /// Whether `next` continues the multi-line `where` clause of the item header `text`: a `where`
 /// line at the header's `indent`, the more indented bounds after it, and the `:` (or Rust `{`)
 /// line at the header's indent that opens the body.
-fn continues_where_clause(text: &str, next: &str, indent: usize) -> bool {
+fn continues_where_clause(
+    text: &str,
+    next: &str,
+    indent: usize,
+    delimiters: &mut OpenDelimiters,
+) -> bool {
     let code = |line: &str| without_trailing_line_comment(line).trim().to_string();
-    let starts_where = |line: &str| line == "where" || line.starts_with("where ");
     let last = code(text.lines().last().unwrap_or_default());
     let next_code = code(next);
     let header = text.lines().next().unwrap_or_default().trim_start();
@@ -3192,14 +3194,14 @@ fn continues_where_clause(text: &str, next: &str, indent: usize) -> bool {
     {
         return false;
     }
-    let in_where = text
-        .lines()
-        .map(code)
-        .any(|line| starts_where(&line) || line.ends_with(" where") || line.contains(" where "));
-    if !in_where {
+    if !delimiters.has_where(text) {
         return raw_indent(next) == indent && starts_where(&next_code);
     }
     raw_indent(next) > indent || (raw_indent(next) == indent && matches!(&*next_code, "{" | "{}"))
+}
+
+fn starts_where(line: &str) -> bool {
+    line == "where" || line.starts_with("where ")
 }
 
 /// Whether `text` holds a control expression as an operand or a let-else outside its groups, as
@@ -3519,9 +3521,24 @@ struct OpenDelimiters {
     chars: Vec<char>,
     parameters_at: usize,
     parameters_depth: Option<usize>,
+    /// Bytes of the text already searched for a `where`, and whether a line held one.
+    where_searched: usize,
+    where_found: bool,
 }
 
 impl OpenDelimiters {
+    /// Whether a line of `text` starts with, ends with, or holds the word `where`; `text` extends
+    /// the text of the previous call.
+    fn has_where(&mut self, text: &str) -> bool {
+        self.where_found = self.where_found
+            || text[self.where_searched..].lines().any(|line| {
+                let line = without_trailing_line_comment(line).trim();
+                starts_where(line) || line.ends_with(" where") || line.contains(" where ")
+            });
+        self.where_searched = text.len();
+        self.where_found
+    }
+
     /// The last line of `text` with code; `text` extends the text of the previous call.
     fn last_code_line<'a>(&mut self, text: &'a str) -> &'a str {
         let mut at = self.searched;
