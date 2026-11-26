@@ -289,14 +289,13 @@ pub fn renk_files(dir: &Path) -> io::Result<Vec<PathBuf>> {
     Ok(files)
 }
 
-/// The `.rk` files in the source directories of `package`, and its `build.rk`, but not those of
-/// a package nested in them. It deletes each generated `.rs` file there that has no `.rk` file
-/// with the same stem beside it.
-pub fn sources(package: &Path) -> io::Result<Vec<PathBuf>> {
-    let mut sources = Vec::new();
+/// The `.rk` and the `.rs` files in the source directories of `package`, and its `build.rk` and
+/// `build.rs`, but not those of a package nested in them.
+fn package_files(package: &Path) -> io::Result<(Vec<PathBuf>, Vec<PathBuf>)> {
+    let mut renk = Vec::new();
     let mut rust = Vec::new();
     let mut visit = |path: &Path| match path.extension().and_then(|extension| extension.to_str()) {
-        Some("rk") => sources.push(path.to_path_buf()),
+        Some("rk") => renk.push(path.to_path_buf()),
         Some("rs") => rust.push(path.to_path_buf()),
         _ => {}
     };
@@ -313,6 +312,13 @@ pub fn sources(package: &Path) -> io::Result<Vec<PathBuf>> {
             }
         }
     }
+    Ok((renk, rust))
+}
+
+/// The `.rk` files of `package`, found as `package_files` does. It deletes each generated `.rs`
+/// file there that has no `.rk` file with the same stem beside it.
+pub fn sources(package: &Path) -> io::Result<Vec<PathBuf>> {
+    let (sources, rust) = package_files(package)?;
     for path in rust {
         if !path.with_extension("rk").exists() && is_generated(&path) {
             fs::remove_file(path)?;
@@ -342,4 +348,14 @@ pub fn write_generated(path: &Path, rust: &str) -> Result<(), String> {
         }
     }
     fs::write(path, rust).map_err(|error| format!("{}: {error}", path.display()))
+}
+
+/// The hand-written `.rs` files of `package`, found as `package_files` does. It leaves out the
+/// Rust files that renk generated.
+pub fn rust_sources(package: &Path) -> io::Result<Vec<PathBuf>> {
+    let (_, rust) = package_files(package)?;
+    Ok(rust
+        .into_iter()
+        .filter(|path| !is_generated(path))
+        .collect())
 }
