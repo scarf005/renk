@@ -2098,11 +2098,21 @@ fn source_lines(source: &str) -> Result<Vec<SourceLine>, TranspileError> {
     let mut macro_indent = None;
     let mut arm_indent = None;
     let in_literal = lines_ending_in_literal(source);
+    let physical = source.lines().collect::<Vec<_>>();
     let heads = with_pipe_patterns(
-        colon_header_heads(&source.lines().collect::<Vec<_>>(), &in_literal),
-        &source.lines().collect::<Vec<_>>(),
+        colon_header_heads(&physical, &in_literal),
+        &physical,
         &in_literal,
     );
+    // The first line with code at or after each line, so a run of comment lines looks ahead once.
+    let mut next_code = vec![None; physical.len() + 1];
+    for (index, line) in physical.iter().enumerate().rev() {
+        next_code[index] = if code_len(line.trim_start()) > 0 {
+            Some(*line)
+        } else {
+            next_code[index + 1]
+        };
+    }
     // The closing line split off a one-line `else`, as `)` from `else { 2 })`.
     let mut carry = None;
     while let Some((index, raw)) = carry.take().or_else(|| {
@@ -2264,7 +2274,10 @@ fn source_lines(source: &str) -> Result<Vec<SourceLine>, TranspileError> {
             &mut open,
         ) || header_end.is_some()
             || in_matcher(&text)
-            || continues_line(raw_lines.clone(), raw_indent(without_comment))
+            || continues_line(
+                raw_lines.peek().and_then(|&(index, _)| next_code[index]),
+                raw_indent(without_comment),
+            )
         {
             let Some((index, next)) = raw_lines.next() else {
                 return Err(TranspileError {
@@ -2357,15 +2370,14 @@ fn joins_next_line(
     next: Option<&str>,
     indent: usize,
     group: &mut Option<char>,
-    open: &mut OpenDelimiters,
+    delimiters: &mut OpenDelimiters,
 ) -> bool {
-    let Some(open) = open.update(text) else {
-        return true;
-    };
     // The line that decides is the last one with code, so a blank or comment line after `=` waits
     // too.
-    let last = text.lines().rev().find(|line| code_len(line) > 0);
-    let code = without_trailing_line_comment(last.unwrap_or_default());
+    let code = without_trailing_line_comment(delimiters.last_code_line(text));
+    let Some(open) = delimiters.update(text) else {
+        return true;
+    };
     if *group == Some('<') {
         // Generic parameters over several lines, closed by a `>` line at the head's indent.
         if !code.trim_start().starts_with('>') {
@@ -2401,7 +2413,7 @@ fn joins_next_line(
                 && !is_trailing_match(strip_open_brace(code))
                 && !is_trailing_if(strip_open_brace(code)))
                 || opens_operand_block(code, open.contains(&'('))))
-        || opens_macro_braces(text)
+        || (!open.is_empty() && opens_macro_braces(text))
     {
         *group = open.first().copied();
         return true;
@@ -2419,29 +2431,8 @@ fn joins_next_line(
                 .iter()
                 .any(|operator| trimmed.ends_with(operator)))
             || ends_with_binary_operator(trimmed)
-            || (trimmed.ends_with(',') && ends_in_closure_parameters(text))
+            || (trimmed.ends_with(',') && delimiters.in_closure_parameters(text))
             || next.is_some_and(|next| continues_where_clause(text, next, indent)))
-}
-
-/// Whether `code` ends inside the parameters of a closure, as `let f = |a: u8,` before
-/// `b: u8| {`.
-fn ends_in_closure_parameters(code: &str) -> bool {
-    let chars = code.chars().collect::<Vec<_>>();
-    let mut index = 0;
-    while index < chars.len() {
-        if let Some(end) = opaque_span_end(&chars, index) {
-            index = end + 1;
-            continue;
-        }
-        if chars[index] == '|' && is_closure_start(&chars, index) {
-            match top_level_position(&chars, index + 1, |at| chars[at] == '|') {
-                Some(close) => index = close,
-                None => return true,
-            }
-        }
-        index += 1;
-    }
-    false
 }
 
 /// Whether the `{` ending `code` opens a block operand: on a line continuing an expression with
@@ -2457,24 +2448,22 @@ fn opens_operand_block(code: &str, in_parentheses: bool) -> bool {
     (starts_with_binary_operator(line) && opens_directly) || (in_parentheses && after_operator)
 }
 
-/// Whether the next line with code, after any blank or comment lines, continues the line at
-/// `indent`: with a binary operator at that indent, as `+ b` or `== b`, or on a more indented
+/// Whether `next`, the next line with code after any blank or comment lines, continues the line
+/// at `indent`: with a binary operator at that indent, as `+ b` or `== b`, or on a more indented
 /// line with a match arm's guard, as `if a => b`, or a signature's return type, as `-> u8;`.
 /// `|| f()` is a closure and `> Type` closes generic parameters instead.
-fn continues_line<'a>(mut lines: impl Iterator<Item = (usize, &'a str)>, indent: usize) -> bool {
-    lines
-        .find(|(_, line)| code_len(line.trim_start()) > 0)
-        .is_some_and(|(_, line)| {
-            let code = line.trim_start();
-            (raw_indent(line) == indent
-                && starts_with_binary_operator(code)
-                && !code.starts_with("|| ")
-                && !code.starts_with("> "))
-                || (raw_indent(line) > indent
-                    && (code.starts_with("-> ")
-                        || (code.starts_with("if ")
-                            && find_top_level_keyword(&code[..code_len(code)], "=>").is_some())))
-        })
+fn continues_line(next: Option<&str>, indent: usize) -> bool {
+    next.is_some_and(|line| {
+        let code = line.trim_start();
+        (raw_indent(line) == indent
+            && starts_with_binary_operator(code)
+            && !code.starts_with("|| ")
+            && !code.starts_with("> "))
+            || (raw_indent(line) > indent
+                && (code.starts_with("-> ")
+                    || (code.starts_with("if ")
+                        && find_top_level_keyword(&code[..code_len(code)], "=>").is_some())))
+    })
 }
 
 const BINARY_OPERATORS: [&str; 17] = [
@@ -2542,25 +2531,29 @@ fn with_pipe_patterns(
     lines: &[&str],
     in_literal: &[bool],
 ) -> Vec<Option<usize>> {
+    let continued = |index: usize| {
+        index + 1 < lines.len()
+            && !in_literal[index]
+            && raw_indent(lines[index + 1]) == raw_indent(lines[index])
+    };
+    // The last `| B` line in the run of blank, comment, and `| B` lines at one indent starting
+    // at each line, found in one backward pass.
+    let mut run_ends = vec![None; lines.len()];
+    for index in (0..lines.len()).rev() {
+        let code = lines[index].trim();
+        let pipe = code.starts_with("| ");
+        if pipe || code.is_empty() || is_comment(code) {
+            run_ends[index] = continued(index)
+                .then(|| run_ends[index + 1])
+                .flatten()
+                .or(pipe.then_some(index));
+        }
+    }
     for start in 0..lines.len() {
         if lines[start].trim().is_empty() || (start > 0 && in_literal[start - 1]) {
             continue;
         }
-        let indent = raw_indent(lines[start]);
-        let mut end = None;
-        let mut next = start + 1;
-        while next < lines.len() && !in_literal[next - 1] {
-            let code = lines[next].trim();
-            if raw_indent(lines[next]) != indent || !(code.is_empty() || is_comment(code)) {
-                if raw_indent(lines[next]) == indent && code.starts_with("| ") {
-                    end = Some(next);
-                    next += 1;
-                    continue;
-                }
-                break;
-            }
-            next += 1;
-        }
+        let end = continued(start).then(|| run_ends[start + 1]).flatten();
         heads[start] = heads[start].max(end);
     }
     heads
@@ -3163,9 +3156,60 @@ struct OpenDelimiters {
     open: Vec<char>,
     /// Bytes of the text already scanned; a literal or comment left open is rescanned.
     scanned: usize,
+    /// Bytes of the text already searched for lines with code, and the last such line.
+    searched: usize,
+    last_code: std::ops::Range<usize>,
+    /// The text's characters as far as the closure parameter scan has read them (`read` bytes),
+    /// the index it resumes at, and its bracket depth while inside parameters.
+    read: usize,
+    chars: Vec<char>,
+    parameters_at: usize,
+    parameters_depth: Option<usize>,
 }
 
 impl OpenDelimiters {
+    /// The last line of `text` with code; `text` extends the text of the previous call.
+    fn last_code_line<'a>(&mut self, text: &'a str) -> &'a str {
+        let mut at = self.searched;
+        for line in text[self.searched..].split('\n') {
+            if code_len(line) > 0 {
+                self.last_code = at..at + line.len();
+            }
+            at += line.len() + 1;
+        }
+        self.searched = text.len();
+        &text[self.last_code.clone()]
+    }
+
+    /// Whether `text` ends inside the parameters of a closure, as `let f = |a: u8,` before
+    /// `b: u8| {`; `text` extends the text of the previous call.
+    fn in_closure_parameters(&mut self, text: &str) -> bool {
+        self.chars.extend(text[self.read..].chars());
+        self.read = text.len();
+        let chars = &self.chars;
+        let (mut index, mut depth) = (self.parameters_at, self.parameters_depth);
+        while index < chars.len() {
+            if let Some(end) = opaque_span_end(chars, index)
+                .or_else(|| depth.and_then(|_| macro_invocation_end(chars, index)))
+            {
+                index = end + 1;
+                continue;
+            }
+            depth = match (depth, chars[index]) {
+                (None, '|') if is_closure_start(chars, index) => Some(0),
+                (Some(0), '|') => None,
+                (Some(inner), '(' | '[' | '{') => Some(inner + 1),
+                // An unmatched closing bracket leaves the parameters unclosed for good.
+                (Some(0), ')' | ']' | '}') => break,
+                (Some(inner), ')' | ']' | '}') => Some(inner - 1),
+                _ => depth,
+            };
+            index += 1;
+        }
+        (self.parameters_at, self.parameters_depth) = (index, depth);
+        depth.is_some()
+    }
+
     /// The delimiters `text` leaves open, or `None` inside a literal or block comment; `text`
     /// extends the text of the previous call.
     fn update(&mut self, text: &str) -> Option<&[char]> {
@@ -3728,22 +3772,31 @@ fn emit_scoped_sequence(
     let mut chain_closures = Vec::new();
     let mut branch_is_value = false;
     let is_cfg = |index: usize| nodes[index].text.trim().starts_with("#[cfg");
-    // The head of the `else` chain ending at `index`.
-    let chain_head = |mut index: usize| {
-        while index > 0 && {
-            let text = nodes[index].text.trim();
-            is_branch(text) || is_comment(text)
-        } {
-            index -= 1;
+    let continues_chain = |index: usize| {
+        let text = nodes[index].text.trim();
+        is_branch(text) || is_comment(text)
+    };
+    // Per node, each found in one pass so a long run of comments stays linear: the head of the
+    // `else` chain ending there, the last of the branches and comments after it, and whether only
+    // comments follow it.
+    let mut chain_heads = (0..nodes.len()).collect::<Vec<_>>();
+    let mut run_ends = chain_heads.clone();
+    let mut only_comments_after = vec![true; nodes.len()];
+    for index in 1..nodes.len() {
+        if continues_chain(index) {
+            chain_heads[index] = chain_heads[index - 1];
         }
-        index
-    };
+    }
+    for index in (0..nodes.len().saturating_sub(1)).rev() {
+        if continues_chain(index + 1) {
+            run_ends[index] = run_ends[index + 1];
+        }
+        only_comments_after[index] =
+            is_comment(nodes[index + 1].text.trim()) && only_comments_after[index + 1];
+    }
+    let chain_head = |index: usize| chain_heads[index];
     // Comments after the tail leave it the tail.
-    let ends_at = |index: usize| {
-        nodes[index + 1..]
-            .iter()
-            .all(|next| is_comment(next.text.trim()))
-    };
+    let ends_at = |index: usize| only_comments_after[index];
     // Nodes `start..=end` are one of several tails, each under its own `#[cfg(...)]`, when only
     // other alternatives follow them.
     let is_attribute = |index: usize| nodes[index].text.trim().starts_with("#[");
@@ -3801,11 +3854,7 @@ fn emit_scoped_sequence(
             // A chain's branches are values when the chain is the tail or its head uses them, as
             // in `let x = if c {`.
             let (head, _) = strip_explicit_semicolon(head);
-            let end = index
-                + nodes[index + 1..]
-                    .iter()
-                    .take_while(|next| is_branch(next.text.trim()) || is_comment(next.text.trim()))
-                    .count();
+            let end = run_ends[index];
             branch_is_value = !is_control(strip_block_marker(head).0)
                 || (tail_is_value && (ends_at(end) || is_cfg_tail(index, end)));
         }
