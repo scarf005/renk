@@ -2668,9 +2668,19 @@ fn block_condition_heads(
             .or_else(|| head_code.strip_prefix("return "))
             .filter(|value| value.starts_with("if ") || value.starts_with("match "))
             .unwrap_or(&head_code);
-        let condition = ["if ", "while ", "else if ", "match "]
+        let condition = ["if ", "while ", "else if ", "match ", "for "]
             .iter()
             .find_map(|keyword| expression.strip_prefix(keyword));
+        // A block value, as in `while let Some(x) = {`, `for x in {`, or `match unsafe {`.
+        let block_value = head_code.strip_suffix('{').is_some_and(|before| {
+            let before = before.trim_end();
+            before.ends_with('=')
+                || ["in", "unsafe"].iter().any(|keyword| {
+                    before
+                        .strip_suffix(keyword)
+                        .is_some_and(|rest| rest.ends_with(' '))
+                })
+        });
         // A pattern continued over lines, as in `if let Flags::Coff {` / `    c, ..` / `} = s.flags:`.
         let pattern = condition.is_some_and(|condition| {
             condition.starts_with("let ") && !condition.contains(" = ") && head_code.ends_with('{')
@@ -2682,7 +2692,8 @@ fn block_condition_heads(
                     .strip_prefix("let ")
                     .and_then(|binding| binding.split_once(" = "))
                     .map(|(_, value)| value);
-                (condition.starts_with("match ") && !expression.starts_with("match "))
+                block_value
+                    || (condition.starts_with("match ") && !expression.starts_with("match "))
                     || value.is_some_and(|value| {
                         value.starts_with("if ") || value.starts_with("match ")
                     })
@@ -2704,7 +2715,7 @@ fn block_condition_heads(
             })
             .find(|&end| {
                 let end_code = code(lines[end]);
-                // `} {`, `}) {`, `}) {}`, `} {};`, or `}:`, unlike `} && match y {`.
+                // `} {`, `}) {`, `}) {}`, `} {};`, `}:`, or `} || b:`, unlike `} && match y {`.
                 raw_indent(lines[end]) == indent
                     && end_code
                         .strip_prefix('}')
@@ -2712,6 +2723,7 @@ fn block_condition_heads(
                         .is_some_and(|rest| {
                             rest == opener
                                 || matches!(rest, "{}" | "{};")
+                                || (starts_with_binary_operator(rest) && rest.ends_with(opener))
                                 || (pattern && rest.starts_with("= ") && rest.ends_with(opener))
                         })
             })
@@ -7764,7 +7776,8 @@ fn is_match(text: &str) -> bool {
 }
 
 /// A `match` ending a larger expression, such as `let x = match y`, `return match y`, or
-/// `.filter(|x| match y`; it owns match arms and closes the delimiters its head left open.
+/// `.filter(|x| match y`; it owns match arms and closes the delimiters its head left open. The
+/// scrutinee may be a block over several lines, as in `let v = match unsafe {` ... `}`.
 fn is_trailing_match(text: &str) -> bool {
     !is_match(text)
         && text.match_indices("match ").any(|(at, _)| {
@@ -7777,7 +7790,12 @@ fn is_trailing_match(text: &str) -> bool {
                             .strip_suffix(keyword)
                             .is_some_and(|rest| !rest.ends_with(is_ident_continue))
                     }))
-                && !has_top_level_brace(&text[at..])
+                && (!has_top_level_brace(&text[at..])
+                    || (text[at..].contains('\n')
+                        && !is_control(text)
+                        && ["match {", "match unsafe {"]
+                            .iter()
+                            .any(|head| text[at..].starts_with(head))))
                 && is_balanced_tail(text, at)
         })
 }
