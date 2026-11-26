@@ -396,3 +396,84 @@ fn a_script_that_becomes_a_module_leaves_its_own_rust_analyzer() {
     let _ = fs::remove_dir_all(&dir);
     assert_eq!(running, 1);
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn exit_ends_renk_lsp_and_its_rust_analyzers_while_stdin_stays_open() {
+    if rust_analyzer().is_none() {
+        return;
+    }
+    let dir = temp_dir("lsp-exit");
+    fs::create_dir_all(dir.join("src")).unwrap();
+    fs::write(
+        dir.join("Cargo.toml"),
+        "[package]\nname = \"tool\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )
+    .unwrap();
+    let (mut server, mut stdin, received) = start(
+        &dir,
+        "#!/bin/sh\nexec \"$RENK_TEST_RUST_ANALYZER\" \"$@\"\n",
+    );
+    // The module goes to the workspace rust-analyzer, and the script to its own.
+    for (path, text) in [
+        ("src/main.rk", "fn main():\n    println!(\"hi\")\n"),
+        ("tool.rk", SCRIPT),
+    ] {
+        send(
+            &mut stdin,
+            json!({"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {
+                "textDocument": {
+                    "uri": format!("file://{}", dir.join(path).display()),
+                    "languageId": "renk",
+                    "version": 1,
+                    "text": text,
+                },
+            }}),
+        );
+    }
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut started = rust_analyzer_children(server.id());
+    while started.len() < 2 && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(100));
+        started = rust_analyzer_children(server.id());
+    }
+
+    // Some editors send `shutdown` with `null` params.
+    send(
+        &mut stdin,
+        json!({"jsonrpc": "2.0", "id": 2, "method": "shutdown", "params": null}),
+    );
+    let shutdown = loop {
+        let message = received.recv_timeout(Duration::from_secs(30)).unwrap();
+        if message["id"] == 2 {
+            break message;
+        }
+    };
+    send(&mut stdin, json!({"jsonrpc": "2.0", "method": "exit"}));
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let mut exited = server.try_wait().unwrap();
+    while exited.is_none() && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(20));
+        exited = server.try_wait().unwrap();
+    }
+    let running = started
+        .iter()
+        .filter(|pid| {
+            fs::read_to_string(format!("/proc/{pid}/stat"))
+                .is_ok_and(|stat| stat.contains("(rust-analyzer)") && !stat.contains(") Z "))
+        })
+        .collect::<Vec<_>>();
+    let _ = server.kill();
+    let _ = server.wait();
+    for pid in &running {
+        let _ = Command::new("kill")
+            .args(["-KILL", &pid.to_string()])
+            .status();
+    }
+    drop(stdin);
+    let _ = fs::remove_dir_all(&dir);
+    assert_eq!(started.len(), 2, "{started:?}");
+    assert!(shutdown.get("error").is_none(), "{shutdown}");
+    assert!(exited.is_some(), "renk-lsp still runs 2 s after exit");
+    assert!(running.is_empty(), "{running:?} still run");
+}

@@ -3281,12 +3281,12 @@ mod tests {
         (rust_analyzer, sent)
     }
 
-    /// Answers the next request sent to `rust_analyzer` with `result`.
+    /// Answers the next request sent to `rust_analyzer` with `result`, and returns the request.
     async fn answer(
         rust_analyzer: &RustAnalyzerClient,
         sent: &mut mpsc::UnboundedReceiver<serde_json::Value>,
         result: serde_json::Value,
-    ) {
+    ) -> serde_json::Value {
         let request = sent.recv().await.unwrap();
         let id = request["id"].as_u64().unwrap();
         let reply = rust_analyzer
@@ -3300,6 +3300,7 @@ mod tests {
             .unwrap()
             .send(serde_json::json!({ "result": result }))
             .unwrap();
+        request
     }
 
     #[test]
@@ -3365,7 +3366,7 @@ mod tests {
             context: None,
         };
 
-        let (completion, ()) = tokio::join!(
+        let (completion, _) = tokio::join!(
             backend.completion(params),
             answer(&rust_analyzer, &mut sent, items)
         );
@@ -3449,7 +3450,7 @@ mod tests {
             work_done_progress_params: Default::default(),
             partial_result_params: Default::default(),
         };
-        let (actions, ()) = tokio::join!(
+        let (actions, _) = tokio::join!(
             backend.code_action(params),
             answer(&rust_analyzer, &mut sent, actions)
         );
@@ -3462,6 +3463,46 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(titles, ["Add explicit type"], "{actions:?}");
+    }
+
+    #[tokio::test]
+    async fn shuts_down_each_rust_analyzer_once_and_tells_it_to_exit() {
+        let (service, _socket) = LspService::new(Backend::new);
+        let backend = service.inner();
+        // The workspace rust-analyzer also has an open module, and a script has its own.
+        let (workspace, mut workspace_sent) =
+            open_module(backend, &module_uri("src/main.rk"), "").await;
+        backend
+            .rust_analyzer
+            .write()
+            .await
+            .replace(workspace.clone());
+        let (script, mut script_sent) = rust_analyzer_client();
+        backend.opened.write().await.insert(
+            module_uri("tool.rk"),
+            (script.clone(), module_uri("target/tool.rs")),
+        );
+
+        let null = serde_json::Value::Null;
+        let shutdown = tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::join!(
+                backend.shutdown(),
+                answer(&workspace, &mut workspace_sent, null.clone()),
+                answer(&script, &mut script_sent, null.clone()),
+            )
+        })
+        .await;
+        let Ok((Ok(()), workspace_request, script_request)) = shutdown else {
+            panic!("a rust-analyzer got no shutdown: {shutdown:?}");
+        };
+        for (request, mut sent) in [
+            (workspace_request, workspace_sent),
+            (script_request, script_sent),
+        ] {
+            assert_eq!(request["method"], "shutdown");
+            assert_eq!(sent.try_recv().unwrap()["method"], "exit");
+            assert!(sent.try_recv().is_err());
+        }
     }
 
     /// The outline of `source` as a module in this crate.
