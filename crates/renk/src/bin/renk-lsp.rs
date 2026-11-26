@@ -2919,6 +2919,20 @@ mod tests {
     }
 
     #[test]
+    fn script_dependency_paths_resolve_against_the_script_folder() {
+        let dir = std::env::temp_dir().join("renk-lsp-script-paths");
+        let uri = Url::from_file_path(dir.join("tool.rk")).unwrap();
+        let script = "#!/usr/bin/env -S renk script\n---\n[dependencies]\nshared = { path = \"shared\" } # local\nfar = { path = \"/opt/far\" }\n---\nprintln!(\"hi\")\n";
+        let rust = generated(&uri, script).unwrap().rust;
+        let shared = dir.join("shared");
+        let manifest = format!(
+            "---\n[dependencies]\nshared = {{ path = \"{}\" }} # local\nfar = {{ path = \"/opt/far\" }}\n---\n",
+            shared.display()
+        );
+        assert!(rust.contains(&manifest), "{rust}");
+    }
+
+    #[test]
     fn scripts_are_documents_with_a_header_or_outside_a_cargo_package() {
         let temp = std::env::temp_dir().join(format!("renk-lsp-scripts-{}", std::process::id()));
         let _ = fs::remove_dir_all(&temp);
