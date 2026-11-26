@@ -121,6 +121,34 @@ fn writes_output_and_a_json_source_map() {
 }
 
 #[test]
+fn refuses_to_write_the_output_of_transpile_and_from_rust_over_the_input() {
+    let dir = temp_dir("output-is-input");
+    let renk_source = "fn main():\n    println!(\"hi\")\n";
+    let rust_source = "fn main() {\n    println!(\"hi\");\n}\n";
+    fs::write(dir.join("x.rk"), renk_source).unwrap();
+    fs::write(dir.join("x.rs"), rust_source).unwrap();
+    for (args, file) in [
+        (["transpile", "x.rk", "-o", "x.rk"], "x.rk"),
+        (["transpile", "x.rk", "-o", "./x.rk"], "x.rk"),
+        (["from-rust", "x.rs", "-o", "x.rs"], "x.rs"),
+    ] {
+        let output = renk(&args, "", &dir);
+        assert_eq!(output.status.code(), Some(1), "{args:?}");
+        assert_eq!(
+            text(&output.stderr),
+            format!("renk: {file}: refusing to write the output over the input file\n")
+        );
+    }
+    assert_eq!(fs::read_to_string(dir.join("x.rk")).unwrap(), renk_source);
+    assert_eq!(fs::read_to_string(dir.join("x.rs")).unwrap(), rust_source);
+
+    let output = renk(&["fmt", "x.rk", "-o", "x.rk"], "", &dir);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
+    assert_eq!(fs::read_to_string(dir.join("x.rk")).unwrap(), renk_source);
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
 fn reports_errors_on_stderr_with_exit_code_one() {
     let dir = temp_dir("errors");
     fs::write(dir.join("bad.rk"), "fn main():\n\tx\n").unwrap();
