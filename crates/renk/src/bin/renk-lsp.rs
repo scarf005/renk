@@ -1669,7 +1669,15 @@ struct Generated {
     source_lines: Vec<(usize, bool)>,
 }
 
+#[cfg(test)]
+thread_local! {
+    /// How many times this thread transpiled a document.
+    static TRANSPILES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 fn generated(uri: &Url, text: &str) -> std::result::Result<Generated, TranspileError> {
+    #[cfg(test)]
+    TRANSPILES.with(|transpiles| transpiles.set(transpiles.get() + 1));
     if is_script(uri, text) {
         let package = script_rust_path(uri)
             .map_or_else(|| "script".to_string(), |path| script_package(&path));
@@ -3565,6 +3573,48 @@ mod tests {
             assert_eq!(sent.try_recv().unwrap()["method"], "exit");
             assert!(sent.try_recv().is_err());
         }
+    }
+
+    #[tokio::test]
+    async fn transpiles_each_version_of_a_document_once() {
+        let (service, _socket) = LspService::new(Backend::new);
+        let backend = service.inner();
+        let uri = module_uri("src/counted.rk");
+        let (rust_analyzer, mut sent) =
+            open_module(backend, &uri, "fn main():\n    let 값 = 1\n").await;
+        let hover = || HoverParams {
+            text_document_position_params: TextDocumentPositionParams::new(
+                TextDocumentIdentifier::new(uri.clone()),
+                Position::new(1, 8),
+            ),
+            work_done_progress_params: Default::default(),
+        };
+        let found = serde_json::json!({"contents": "i32"});
+        let transpiles = || TRANSPILES.with(std::cell::Cell::get);
+
+        let before = transpiles();
+        for _ in 0..2 {
+            let (hovered, _) = tokio::join!(
+                backend.hover(hover()),
+                answer(&rust_analyzer, &mut sent, found.clone())
+            );
+            assert!(hovered.unwrap().is_some());
+        }
+        backend.publish_diagnostics(uri.clone()).await;
+        assert_eq!(transpiles() - before, 1);
+
+        backend
+            .documents
+            .write()
+            .await
+            .insert(uri.clone(), "fn main():\n    let 값 = 2\n".to_string());
+        let (hovered, _) = tokio::join!(
+            backend.hover(hover()),
+            answer(&rust_analyzer, &mut sent, found.clone())
+        );
+        assert!(hovered.unwrap().is_some());
+        backend.publish_diagnostics(uri.clone()).await;
+        assert_eq!(transpiles() - before, 2);
     }
 
     /// The outline of `source` as a module in this crate.
