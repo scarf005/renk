@@ -8,8 +8,9 @@
 - hover, go to definition, and completion. Without `rust-analyzer` they answer from the
   declarations, keywords, and builtin types of the open file,
 - from `rust-analyzer` on the generated Rust, when `rust-analyzer` is on `PATH`: its
-  diagnostics, including type errors from its `cargo check` on save; and richer hover, go to
-  definition, and completion. Find references, rename, code actions, and inlay hints need it.
+  diagnostics, including type errors from its `cargo check` on save; hover with types; go to
+  definition into other files and crates; and completion of methods and names in scope. Find
+  references, rename, code actions, and inlay hints need it.
 
 Positions map back to the `.rk` file. A rename fails when it would change Renk text that
 differs from the generated Rust, and a code action is left out when its edit does not map to
