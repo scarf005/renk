@@ -15,6 +15,6 @@ name = "Renk LSP"
 languages = ["Renk"]
 
 [grammars.renk]
-repository = "file:///run/media/home/scarf/repo/etc/renk"
-rev = "main"
+repository = "https://github.com/scarf005/renk"
+rev = "19ec887926c5cf07eb4ef6be287fb934bfbf6d3c"
 path = "editors/zed/tree-sitter-renk"
