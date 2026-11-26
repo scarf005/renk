@@ -4,7 +4,10 @@ use std::{
     net::SocketAddr,
     path::{Component, Path, PathBuf},
     process::{Command, Stdio},
-    sync::atomic::{AtomicU64, AtomicUsize, Ordering},
+    sync::{
+        Mutex, PoisonError,
+        atomic::{AtomicU64, AtomicUsize, Ordering},
+    },
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -53,6 +56,9 @@ static ACTIVE_REQUESTS: AtomicUsize = AtomicUsize::new(0);
 static ACTIVE_RUNS: AtomicUsize = AtomicUsize::new(0);
 static RUN_RATE_WINDOW_MS: AtomicU64 = AtomicU64::new(0);
 static RUN_RATE_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Process IDs of the steps that `run_command` runs now. Every other child of the server is a
+/// process that a step left behind.
+static ACTIVE_CHILDREN: Mutex<Vec<u32>> = Mutex::new(Vec::new());
 
 #[derive(Clone, Debug)]
 struct AppState {
@@ -156,6 +162,7 @@ async fn main() -> std::io::Result<()> {
             &env::var("RENK_WEB_HOSTS").unwrap_or_default(),
         ),
     };
+    become_child_subreaper();
     log_namespace_support(state.config.sandbox)?;
     eprintln!("renk-web listening on http://{addr}");
     axum::serve(listener, router(state))
@@ -544,7 +551,17 @@ fn run_command(command: &str, args: &[&str], cwd: &Path, options: ChildOptions) 
         .stdout(Stdio::from(stdout_file))
         .stderr(Stdio::from(stderr_file));
     configure_child_process(&mut command, options);
-    let child = command.spawn();
+    let child = {
+        // Keep the lock until the new step is in the list, or `kill_orphans` can kill it.
+        let mut active = ACTIVE_CHILDREN
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let child = command.spawn();
+        if let Ok(child) = &child {
+            active.push(child.id());
+        }
+        child
+    };
     let Ok(mut child) = child else {
         // A failed sandbox step writes its name to the stderr file before `spawn` fails.
         let (step, _) = read_limited_utf8(&stderr_path, MAX_OUTPUT_BYTES);
@@ -574,7 +591,7 @@ fn run_command(command: &str, args: &[&str], cwd: &Path, options: ChildOptions) 
             }
             Ok(None) => thread::sleep(Duration::from_millis(10)),
             Err(error) => {
-                kill_process_tree(child_pid);
+                kill_orphans(child_pid);
                 let _ = fs::remove_file(stdout_path);
                 let _ = fs::remove_file(stderr_path);
                 return CommandResult {
@@ -590,8 +607,9 @@ fn run_command(command: &str, args: &[&str], cwd: &Path, options: ChildOptions) 
         }
     }
 
-    kill_process_tree(child_pid);
+    let _ = unsafe { libc::kill(-(child_pid as i32), libc::SIGKILL) };
     let status = child.wait().map(|status| status.code());
+    kill_orphans(child_pid);
     let (stdout, stdout_truncated) = read_limited_utf8(&stdout_path, MAX_OUTPUT_BYTES);
     let (mut stderr, stderr_truncated) = read_limited_utf8(&stderr_path, MAX_OUTPUT_BYTES);
     let _ = fs::remove_file(stdout_path);
@@ -658,10 +676,12 @@ fn configure_child_process(command: &mut Command, options: ChildOptions) {
                 "no_new_privs",
                 libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) == 0,
             )?;
-            if let Some((uid_map, gid_map)) = &id_maps {
-                enter_namespaces(uid_map, gid_map)?;
+            // Set the limits before `enter_namespaces` forks, so both processes get them.
+            apply_child_limits(cpu_seconds)?;
+            match &id_maps {
+                Some((uid_map, gid_map)) => enter_namespaces(uid_map, gid_map),
+                None => Ok(()),
             }
-            apply_child_limits(cpu_seconds)
         });
     }
 }
@@ -681,11 +701,59 @@ fn create_child_process_group() -> std::io::Result<()> {
 /// Runs between `fork` and `exec`, so it makes only async-signal-safe calls.
 #[cfg(target_os = "linux")]
 fn enter_namespaces(uid_map: &str, gid_map: &str) -> std::io::Result<()> {
-    let flags = libc::CLONE_NEWUSER | libc::CLONE_NEWNET | libc::CLONE_NEWIPC | libc::CLONE_NEWUTS;
+    let flags = libc::CLONE_NEWUSER
+        | libc::CLONE_NEWNET
+        | libc::CLONE_NEWIPC
+        | libc::CLONE_NEWUTS
+        | libc::CLONE_NEWPID;
     sandbox_step("unshare", unsafe { libc::unshare(flags) } == 0)?;
     write_proc_file("setgroups", c"/proc/self/setgroups", b"deny")?;
     write_proc_file("uid_map", c"/proc/self/uid_map", uid_map.as_bytes())?;
-    write_proc_file("gid_map", c"/proc/self/gid_map", gid_map.as_bytes())
+    write_proc_file("gid_map", c"/proc/self/gid_map", gid_map.as_bytes())?;
+    fork_pid_one()
+}
+
+/// Forks PID 1 of the new PID namespace, which goes on to `exec` the step. This process stays
+/// outside the namespace, waits for PID 1 and exits with its status. When the server kills this
+/// process, `PR_SET_PDEATHSIG` kills PID 1, and the kernel then kills the whole namespace.
+#[cfg(target_os = "linux")]
+fn fork_pid_one() -> std::io::Result<()> {
+    let parent = unsafe { libc::syscall(libc::SYS_pidfd_open, libc::getpid(), 0) } as libc::c_int;
+    sandbox_step("pidfd_open", parent >= 0)?;
+    let pid = unsafe { libc::fork() };
+    sandbox_step("fork", pid >= 0)?;
+    if pid == 0 {
+        let pdeathsig = unsafe { libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) };
+        sandbox_step("pdeathsig", pdeathsig == 0)?;
+        // The parent can exit before `PR_SET_PDEATHSIG`. `getppid` returns 0 for a parent in
+        // another PID namespace, so ask the pidfd, which turns readable when the parent exits.
+        let mut poll = libc::pollfd {
+            fd: parent,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        if unsafe { libc::poll(&mut poll, 1, 0) } != 0 {
+            unsafe { libc::_exit(1) };
+        }
+        unsafe { libc::close(parent) };
+        return Ok(());
+    }
+    // `spawn` waits until every copy of its `exec` error pipe is closed. Only PID 1 calls
+    // `exec`, so close the copy of this process.
+    unsafe { libc::syscall(libc::SYS_close_range, 3, libc::c_uint::MAX, 0) };
+    let mut status = 0;
+    while unsafe { libc::waitpid(pid, &mut status, 0) } == -1
+        && std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR)
+    {}
+    unsafe {
+        if libc::WIFSIGNALED(status) {
+            let signal = libc::WTERMSIG(status);
+            libc::signal(signal, libc::SIG_DFL);
+            libc::kill(libc::getpid(), signal);
+            libc::_exit(128 + signal);
+        }
+        libc::_exit(libc::WEXITSTATUS(status))
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -737,14 +805,59 @@ fn set_limit(resource: libc::__rlimit_resource_t, soft: u64, hard: u64) -> std::
     }
 }
 
-#[cfg(unix)]
-fn kill_process_tree(pid: u32) {
-    let pgid = -(pid as i32);
-    let _ = unsafe { libc::kill(pgid, libc::SIGKILL) };
+/// Marks the server as a child subreaper: the kernel makes it the parent of every process that
+/// a step leaves behind, so `kill_orphans` can find them.
+fn become_child_subreaper() {
+    let _ = unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) };
 }
 
-#[cfg(not(unix))]
-fn kill_process_tree(_pid: u32) {}
+/// Removes `finished` from the active steps, then kills and reaps every other child of the
+/// server with its descendants, until none is left.
+fn kill_orphans(finished: u32) {
+    let mut active = ACTIVE_CHILDREN
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    active.retain(|pid| *pid != finished);
+    loop {
+        let orphans = child_processes(std::process::id())
+            .into_iter()
+            .filter(|pid| !active.contains(pid))
+            .collect::<Vec<_>>();
+        if orphans.is_empty() {
+            return;
+        }
+        for pid in orphans {
+            kill_process_tree(pid);
+            let _ = unsafe { libc::waitpid(pid as i32, std::ptr::null_mut(), 0) };
+        }
+    }
+}
+
+/// Call only for a process that is not reaped yet, or its ID can belong to another process.
+/// `SIGSTOP` comes first, so the process cannot fork while its children are read.
+fn kill_process_tree(pid: u32) {
+    let _ = unsafe { libc::kill(pid as i32, libc::SIGSTOP) };
+    for child in child_processes(pid) {
+        kill_process_tree(child);
+    }
+    let _ = unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+    let _ = unsafe { libc::kill(-(pid as i32), libc::SIGKILL) };
+}
+
+fn child_processes(parent: u32) -> Vec<u32> {
+    let Ok(entries) = fs::read_dir("/proc") else {
+        return Vec::new();
+    };
+    entries
+        .filter_map(|entry| {
+            let pid = entry.ok()?.file_name().to_str()?.parse::<u32>().ok()?;
+            let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+            // The command name in parentheses can hold spaces, so count fields after the last `)`.
+            let ppid = stat.rsplit_once(')')?.1.split_whitespace().nth(1)?;
+            (ppid.parse() == Ok(parent)).then_some(pid)
+        })
+        .collect()
+}
 
 fn elapsed_ms(started: Instant) -> f64 {
     started.elapsed().as_secs_f64() * 1000.0
