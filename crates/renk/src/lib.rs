@@ -2451,9 +2451,9 @@ fn opens_operand_block(code: &str, in_parentheses: bool) -> bool {
 }
 
 /// Whether the next line with code, after any blank or comment lines, continues the line at
-/// `indent`: with a binary operator at that indent, as `+ b` or `== b`, or with a match arm's
-/// guard on a more indented line, as `if a => b`. `|| f()` is a closure and `> Type` closes
-/// generic parameters instead.
+/// `indent`: with a binary operator at that indent, as `+ b` or `== b`, or on a more indented
+/// line with a match arm's guard, as `if a => b`, or a signature's return type, as `-> u8;`.
+/// `|| f()` is a closure and `> Type` closes generic parameters instead.
 fn continues_line<'a>(mut lines: impl Iterator<Item = (usize, &'a str)>, indent: usize) -> bool {
     lines
         .find(|(_, line)| code_len(line.trim_start()) > 0)
@@ -2464,8 +2464,9 @@ fn continues_line<'a>(mut lines: impl Iterator<Item = (usize, &'a str)>, indent:
                 && !code.starts_with("|| ")
                 && !code.starts_with("> "))
                 || (raw_indent(line) > indent
-                    && code.starts_with("if ")
-                    && find_top_level_keyword(&code[..code_len(code)], "=>").is_some())
+                    && (code.starts_with("-> ")
+                        || (code.starts_with("if ")
+                            && find_top_level_keyword(&code[..code_len(code)], "=>").is_some())))
         })
 }
 
