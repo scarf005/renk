@@ -38,3 +38,22 @@ impl Stream {
             7).join().unwrap() + add(bits[0], 1)
     }
 }
+
+pub fn value_lines(limit: u32) -> u32 {
+    let first =
+        Some(limit).map(|value| {
+            let doubled = value * 2;
+            doubled
+        });
+    let mut second =
+        std::convert::identity(first.unwrap_or_else(|| {
+            limit
+        }));
+    second =
+        [second].iter().fold(0, |sum, value| {
+            sum + value
+        });
+    let plain =
+        second + 1;
+    plain
+}
