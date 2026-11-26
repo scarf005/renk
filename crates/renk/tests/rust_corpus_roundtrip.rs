@@ -93,6 +93,10 @@ const CORPUS: &[(&str, &str)] = &[
         "condition_blocks",
         include_str!("rust_corpus/condition_blocks.rs"),
     ),
+    (
+        "qualified_turbofish",
+        include_str!("rust_corpus/qualified_turbofish.rs"),
+    ),
 ];
 
 const RENK_CORPUS: &[(&str, &str)] = &[
