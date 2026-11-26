@@ -2883,13 +2883,13 @@ fn with_pipe_patterns(
             && raw_indent(lines[index + 1]) == raw_indent(lines[index])
     };
     // The last `| B` line in the run of blank, comment, and `| B` lines at one indent starting
-    // at each line, found in one backward pass.
+    // at each line, found in one backward pass. A `| B => b` line ends its run.
     let mut run_ends = vec![None; lines.len()];
     for index in (0..lines.len()).rev() {
         let code = lines[index].trim();
         let pipe = code.starts_with("| ");
         if pipe || code.is_empty() || is_comment(code) {
-            run_ends[index] = continued(index)
+            run_ends[index] = (continued(index) && !(pipe && has_top_level_arrow(code)))
                 .then(|| run_ends[index + 1])
                 .flatten()
                 .or(pipe.then_some(index));
@@ -2899,7 +2899,14 @@ fn with_pipe_patterns(
         if lines[start].trim().is_empty() || (start > 0 && in_literal[start - 1]) {
             continue;
         }
-        let end = continued(start).then(|| run_ends[start + 1]).flatten();
+        // After a whole arm, as `a => 1`, a run ending in `| B => b` is an arm with a leading `|`.
+        let end = continued(start)
+            .then(|| run_ends[start + 1])
+            .flatten()
+            .filter(|&end| {
+                !(has_top_level_arrow(lines[end].trim())
+                    && has_top_level_arrow(lines[start].trim()))
+            });
         heads[start] = heads[start].max(end);
     }
     heads
