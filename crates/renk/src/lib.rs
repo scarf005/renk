@@ -2719,9 +2719,10 @@ fn joins_next_line(
     // The line that decides is the last one with code, so a blank or comment line after `=` waits
     // too.
     let code = without_trailing_line_comment(delimiters.last_code_line(text));
-    let Some(open) = delimiters.update(text) else {
+    if delimiters.update(text).is_none() {
         return true;
-    };
+    }
+    let open = &delimiters.open;
     if *group == Some('<') {
         // Generic parameters over several lines, closed by a `>` line at the head's indent.
         if !code.trim_start().starts_with('>') {
@@ -2758,7 +2759,9 @@ fn joins_next_line(
                 && !is_trailing_match(strip_open_brace(code))
                 && !is_trailing_if(strip_open_brace(code)))
                 || opens_operand_block(code, open.contains(&'('))))
-        || (!open.is_empty() && opens_macro_braces(text))
+        // A macro invocation's delimiter left open, as in `quote_spanned! {span=>` or
+        // `Some(quote! {`, whose token tree continues on the next lines.
+        || delimiters.macro_open.contains(&true)
     {
         *group = open.first().copied();
         return true;
@@ -2838,32 +2841,6 @@ fn ends_with_binary_operator(code: &str) -> bool {
                 && !(operator.ends_with('|')
                     && is_closure_start(&chars, chars.len() - operator.len()))
         })
-}
-
-/// Whether `text` leaves a macro invocation's delimiter open, as in `quote_spanned! {span=>` or
-/// `Some(quote! {`, whose token tree continues on the next lines.
-fn opens_macro_braces(text: &str) -> bool {
-    let chars = text.chars().collect::<Vec<_>>();
-    let mut open = Vec::new();
-    let mut index = 0;
-    while index < chars.len() {
-        if let Some(end) = opaque_span_end(&chars, index) {
-            index = end + 1;
-            continue;
-        }
-        match chars[index] {
-            '(' | '[' | '{' => open.push(index),
-            ')' | ']' | '}' => {
-                open.pop();
-            }
-            _ => {}
-        }
-        index += 1;
-    }
-    open.iter().any(|&at| {
-        let mut before = chars[..at].iter().rev().skip_while(|c| c.is_whitespace());
-        before.next() == Some(&'!') && before.next().is_some_and(|c| is_ident_continue(*c))
-    })
 }
 
 /// For each line heading a multi-line header, such as a long `if` condition, the index of the line
@@ -3510,6 +3487,8 @@ fn open_delimiters(text: &str) -> Option<Vec<char>> {
 #[derive(Default)]
 struct OpenDelimiters {
     open: Vec<char>,
+    /// For each open delimiter, whether it follows a macro name and `!`, as in `m!(`.
+    macro_open: Vec<bool>,
     /// Bytes of the text already scanned; a literal or comment left open is rescanned.
     scanned: usize,
     /// Bytes of the text already searched for lines with code, and the last such line.
@@ -3599,9 +3578,19 @@ impl OpenDelimiters {
                 continue;
             }
             match chars[index] {
-                delimiter @ ('(' | '[' | '{') => self.open.push(delimiter),
+                delimiter @ ('(' | '[' | '{') => {
+                    let mut before = text[..self.scanned]
+                        .chars()
+                        .rev()
+                        .skip_while(|c| c.is_whitespace());
+                    self.macro_open.push(
+                        before.next() == Some('!') && before.next().is_some_and(is_ident_continue),
+                    );
+                    self.open.push(delimiter);
+                }
                 ')' | ']' | '}' => {
                     self.open.pop();
+                    self.macro_open.pop();
                 }
                 _ => {}
             }
