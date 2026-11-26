@@ -1,0 +1,42 @@
+name: container
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions: { contents: read }
+
+concurrency: { group: "container-${{ github.head_ref || github.ref_name }}", cancel-in-progress: true }
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+      # Ubuntu 24.04 restricts unprivileged user namespaces through AppArmor.
+      - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - run: sudo apt-get install -y podman-compose
+      - run: podman-compose up --build -d
+      - name: Wait for the server
+        run: |
+          container=$(podman ps --quiet --filter ancestor=localhost/renk-web:latest)
+          echo "container=$container" >> "$GITHUB_ENV"
+          for _ in $(seq 60); do
+            [ "$(podman inspect --format '{{.State.Health.Status}}' "$container")" = healthy ] && exit 0
+            sleep 5
+          done
+          podman logs "$container"
+          exit 1
+      - name: Check the sandbox and run a program
+        run: |
+          podman logs "$container" 2>&1 | tee log.txt
+          grep -q '^renk-web: namespaces work' log.txt
+          body='{"rust":"fn main() { println!(\"hello\") }"}'
+          # The compose network is internal, so the request starts inside the container.
+          answer=$(podman exec "$container" bash -c 'body=$0; exec 3<>/dev/tcp/127.0.0.1/8080; printf "POST /api/run HTTP/1.1\r\nHost: localhost:8080\r\nContent-Type: application/json\r\nContent-Length: %s\r\nConnection: close\r\n\r\n%s" "${#body}" "$body" >&3; cat <&3' "$body" 2>&1) || echo "exec failed with status $?"
+          echo "$answer"
+          grep -qF 'hello\n' <<<"$answer"
+      - if: always()
+        run: podman-compose down
