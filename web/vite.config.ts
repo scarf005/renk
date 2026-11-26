@@ -26,9 +26,7 @@ const WASMBUILD_ARGS = [
   "web/src/wasm",
 ]
 
-const isExampleRoute = (url?: string) =>
-  url?.startsWith("/examples/") ||
-  url?.startsWith("/rust-examples/") || false
+const isExampleRoute = (url?: string) => url?.startsWith("/examples/") ?? false
 
 const exampleRouteFallback = (): Plugin => ({
   name: "example-route-fallback",
