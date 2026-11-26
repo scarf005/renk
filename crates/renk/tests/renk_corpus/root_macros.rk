@@ -1,0 +1,31 @@
+macro_rules! make:
+    ($name:ident) => pub fn $name() -> i32 { 1 }
+
+macro_rules! method:
+    ($name:ident) => pub fn $name(&self) -> i32 { 2 }
+
+macro_rules! value:
+    () => 3
+
+pub struct Holder
+
+impl Holder:
+    method!(first)
+    method![second]
+
+mod inner:
+    make! { alpha }
+    make!(beta)
+
+make! { gamma }
+
+pub fn total(holder: &Holder) -> i32:
+    let sum = holder.first() + holder.second() + inner::alpha() + inner::beta()
+    sum + gamma() + delta() + epsilon() + value!()
+
+make![delta]
+make!(
+    epsilon
+) // make!(x)
+
+
