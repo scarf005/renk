@@ -41,7 +41,7 @@ const MAX_OUTPUT_BYTES: usize = MAX_OUTPUT_KIB * BYTES_PER_KIB;
 const MAX_BODY_BYTES: usize = MAX_RUN_SOURCE_BYTES * JSON_BODY_SIZE_MULTIPLIER;
 const DEFAULT_ADDR: &str = "0.0.0.0:8080";
 const DEFAULT_DIST: &str = "/app/web/dist";
-const DEFAULT_RUN_DEPS: &str = "/app/trpl-runtime/release/deps";
+const DEFAULT_RUN_DEPS: &str = "/app/runner/target/release/deps";
 const DEFAULT_TIMEOUT_MS: u64 = 5_000;
 const DEFAULT_REQUEST_TIMEOUT_MS: u64 = 10_000;
 const DEFAULT_MAX_REQUESTS: usize = 64;
@@ -997,7 +997,7 @@ fn route_path(path: &str) -> String {
 }
 
 fn is_app_route(path: &str) -> bool {
-    matches!(path, "/") || path.starts_with("/examples/") || path.starts_with("/rust-examples/")
+    matches!(path, "/") || path.starts_with("/examples/")
 }
 
 fn safe_join(root: &Path, relative: &str) -> Option<PathBuf> {
