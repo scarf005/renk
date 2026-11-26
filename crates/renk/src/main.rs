@@ -144,11 +144,15 @@ struct Script {
     /// Rebuild through cargo to pick up dependency and toolchain updates
     #[arg(long)]
     cargo: bool,
-    /// Script file
-    path: PathBuf,
-    /// Arguments passed to the script
-    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-    args: Vec<OsString>,
+    /// Script file, then the arguments passed to the script
+    // One list from the path on: with the path as its own argument, clap swallows a `--` after it.
+    #[arg(
+        required = true,
+        value_names = ["PATH", "ARGS"],
+        trailing_var_arg = true,
+        allow_hyphen_values = true
+    )]
+    command: Vec<OsString>,
 }
 
 #[derive(clap::Args)]
@@ -198,16 +202,12 @@ fn run(cli: Cli) -> CliResult<i32> {
         Some(Subcmd::Script(args)) => run_script(args),
         Some(Subcmd::Add(args)) => run_add(args),
         Some(Subcmd::Cargo(Cargo { args })) => run_cargo_wrapper(args),
-        Some(Subcmd::External(mut args)) => {
-            let name = args.remove(0);
-            if CARGO_WRAPPER_COMMANDS
-                .iter()
-                .any(|command| *command == name)
-            {
-                args.insert(0, name);
+        Some(Subcmd::External(args)) => {
+            let name = &args[0];
+            if CARGO_WRAPPER_COMMANDS.iter().any(|command| command == name) {
                 return run_cargo_wrapper(args);
             }
-            if !Path::new(&name).is_file() {
+            if !Path::new(name).is_file() {
                 return Err(format!(
                     "not a subcommand or script file: {}",
                     name.to_string_lossy()
@@ -216,8 +216,7 @@ fn run(cli: Cli) -> CliResult<i32> {
             }
             run_script(Script {
                 cargo: false,
-                path: name.into(),
-                args,
+                command: args,
             })
         }
     }
@@ -584,13 +583,9 @@ fn message_format(
     (format, args)
 }
 
-fn run_script(
-    Script {
-        cargo,
-        path: script_path,
-        args,
-    }: Script,
-) -> CliResult<i32> {
+fn run_script(Script { cargo, command }: Script) -> CliResult<i32> {
+    let mut args = command.into_iter();
+    let script_path = PathBuf::from(args.next().unwrap_or_default());
     let source = read_source(Some(&script_path))?;
     let cache_root = cache_root().ok_or("script requires XDG_CACHE_HOME or HOME")?;
     let source_path = fs::canonicalize(&script_path)?;
