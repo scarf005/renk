@@ -2412,7 +2412,29 @@ fn joins_next_line(
                 .iter()
                 .any(|operator| trimmed.ends_with(operator)))
             || ends_with_binary_operator(trimmed)
+            || (trimmed.ends_with(',') && ends_in_closure_parameters(trimmed))
             || next.is_some_and(|next| continues_where_clause(text, next, indent)))
+}
+
+/// Whether `code` ends inside the parameters of a closure, as `let f = |a: u8,` before
+/// `b: u8| {`.
+fn ends_in_closure_parameters(code: &str) -> bool {
+    let chars = code.chars().collect::<Vec<_>>();
+    let mut index = 0;
+    while index < chars.len() {
+        if let Some(end) = opaque_span_end(&chars, index) {
+            index = end + 1;
+            continue;
+        }
+        if chars[index] == '|' && is_closure_start(&chars, index) {
+            match top_level_position(&chars, index + 1, |at| chars[at] == '|') {
+                Some(close) => index = close,
+                None => return true,
+            }
+        }
+        index += 1;
+    }
+    false
 }
 
 /// Whether the `{` ending `code` opens a block operand: on a line continuing an expression with

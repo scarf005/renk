@@ -41,10 +41,9 @@ pub fn parameter_lines(limit: u8) -> u8 {
         first * second + third
     };
     let text = "|a,";
-    let picked = match limit {
-        0 | 1 => 1,
-        | 2 => 2,
-        _ => 3,
+    let step: fn(u8) -> u8 = match limit {
+        0 | 1 => |a| a,
+        _ => |a| a + 1,
     };
-    start(add(1, 2), pair((3, 4), picked)) + text.len() as u8
+    start(add(1, 2), pair((3, 4), step(limit))) + text.len() as u8
 }
