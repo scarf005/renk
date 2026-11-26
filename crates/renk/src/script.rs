@@ -493,7 +493,10 @@ mod tests {
                 .to_string()
         };
 
-        assert_eq!(main("anyhow = \"1\"\n"), "fn main() -> anyhow::Result<()> {");
+        assert_eq!(
+            main("anyhow = \"1\"\n"),
+            "fn main() -> anyhow::Result<()> {"
+        );
         assert_eq!(main("eyre = \"0.6\"\n"), "fn main() -> eyre::Result<()> {");
         assert_eq!(
             main("color-eyre = \"0.6\"\n"),
@@ -519,7 +522,10 @@ mod tests {
         let script = script_rust(source, SourceSyntax::Renk, "tool").unwrap();
         assert!(script.rust.contains("Ok(())"), "{}", script.rust);
         assert!(
-            script.source_lines.iter().all(|&(line, _)| (1..=3).contains(&line)),
+            script
+                .source_lines
+                .iter()
+                .all(|&(line, _)| (1..=3).contains(&line)),
             "{:?}",
             script.source_lines
         );
@@ -527,7 +533,8 @@ mod tests {
 
     #[test]
     fn script_rust_treats_inner_attributes_and_later_dashes_as_body() {
-        let source = "#![allow(unused)]\nfn main():\n    let s = \"\n---\n\"\n    print!(\"{s}\")\n";
+        let source =
+            "#![allow(unused)]\nfn main():\n    let s = \"\n---\n\"\n    print!(\"{s}\")\n";
 
         let rust = script_rust(source, SourceSyntax::Renk, "tool")
             .unwrap()
@@ -563,7 +570,8 @@ mod tests {
 
     #[test]
     fn script_errors_report_the_physical_script_line() {
-        let source = "#!/usr/bin/env -S renk script\n---\n[package]\n---\nfn main():\n\tprintln!(\"tab\")\n";
+        let source =
+            "#!/usr/bin/env -S renk script\n---\n[package]\n---\nfn main():\n\tprintln!(\"tab\")\n";
 
         let error = script_rust(source, SourceSyntax::Renk, "tool")
             .unwrap_err()

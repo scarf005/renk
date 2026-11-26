@@ -11,7 +11,9 @@ fn fastest(run: impl Fn() -> std::time::Duration) -> std::time::Duration {
 
 #[test]
 fn long_groups_convert_in_linear_time() {
-    let _serial = SERIAL.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _serial = SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let convert = |rows: usize| {
         let rows = (0..rows)
             .map(|n| format!("    ({n}, {n}),\n"))
@@ -28,7 +30,9 @@ fn long_groups_convert_in_linear_time() {
 
 #[test]
 fn long_block_argument_chains_convert_in_linear_time() {
-    let _serial = SERIAL.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _serial = SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let convert = |links: usize| {
         let links = (0..links)
             .map(|n| format!("        .a(|y| {{\n            y + {n}\n        }})\n"))
@@ -45,12 +49,15 @@ fn long_block_argument_chains_convert_in_linear_time() {
 
 #[test]
 fn long_view_chains_of_struct_literals_transpile_in_linear_time() {
-    let _serial = SERIAL.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _serial = SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let convert = |links: usize| {
         let links = (0..links)
             .map(|_| "            .map(|x| Foo { a: x })\n")
             .collect::<String>();
-        let renk = format!("fn f():\n    view! {{\n        <s value=items\n{links}        />\n    }}\n");
+        let renk =
+            format!("fn f():\n    view! {{\n        <s value=items\n{links}        />\n    }}\n");
         let start = std::time::Instant::now();
         transpile(&renk).unwrap();
         start.elapsed()
@@ -62,10 +69,13 @@ fn long_view_chains_of_struct_literals_transpile_in_linear_time() {
 
 #[test]
 fn long_view_lists_of_multi_line_literals_transpile_in_linear_time() {
-    let _serial = SERIAL.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _serial = SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let convert = |items: usize| {
         let items = "            Foo {\n            },\n".repeat(items);
-        let renk = format!("fn f():\n    view! {{\n        <s value=[\n{items}        ] />\n    }}\n");
+        let renk =
+            format!("fn f():\n    view! {{\n        <s value=[\n{items}        ] />\n    }}\n");
         let start = std::time::Instant::now();
         transpile(&renk).unwrap();
         start.elapsed()
@@ -77,7 +87,9 @@ fn long_view_lists_of_multi_line_literals_transpile_in_linear_time() {
 
 #[test]
 fn long_view_lines_of_keyword_tags_transpile_in_linear_time() {
-    let _serial = SERIAL.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _serial = SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let convert = |tags: usize| {
         let tags = "match>".repeat(tags);
         let renk = format!("fn f():\n    view! {{\n        <p>{tags}</p>\n    }}\n");
@@ -92,7 +104,9 @@ fn long_view_lines_of_keyword_tags_transpile_in_linear_time() {
 
 #[test]
 fn deep_closures_convert_in_time_linear_in_their_text() {
-    let _serial = SERIAL.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _serial = SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let convert = |depth: usize| {
         let closures = (0..depth).fold("1".to_string(), |body, level| {
             let indent = "    ".repeat(depth - level);
@@ -111,7 +125,9 @@ fn deep_closures_convert_in_time_linear_in_their_text() {
 
 #[test]
 fn long_view_blocks_convert_in_linear_time() {
-    let _serial = SERIAL.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _serial = SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let convert = |statements: usize| {
         let statements = (0..statements)
             .map(|n| format!("            n.set({n});\n"))
@@ -132,7 +148,9 @@ fn long_view_blocks_convert_in_linear_time() {
 
 #[test]
 fn view_blocks_with_a_kept_last_semicolon_convert_about_as_fast_as_others() {
-    let _serial = SERIAL.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _serial = SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let convert = |last: &str| {
         let statements = (0..200)
             .map(|n| format!("            n.set({n});\n"))
@@ -144,7 +162,10 @@ fn view_blocks_with_a_kept_last_semicolon_convert_about_as_fast_as_others() {
         rust_to_renk(&rust).unwrap();
         start.elapsed()
     };
-    let (value, statement) = (fastest(|| convert("n.get()")), fastest(|| convert("n.set(0);")));
+    let (value, statement) = (
+        fastest(|| convert("n.get()")),
+        fastest(|| convert("n.set(0);")),
+    );
     // The last `n.set(0);` keeps its `;`, as without it the block returns a value. Finding that
     // line takes one more lowering of the block, not one per halving of its 201 lines.
     assert!(statement < value * 2, "{value:?} {statement:?}");
@@ -152,7 +173,9 @@ fn view_blocks_with_a_kept_last_semicolon_convert_about_as_fast_as_others() {
 
 #[test]
 fn many_view_blocks_with_colon_paths_convert_in_linear_time() {
-    let _serial = SERIAL.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _serial = SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let convert = |views: usize| {
         // In each `view!`, `fs::read` keeps its `::`, as `fs` is a parameter, and the
         // `std::mem::drop` paths around it become `std.mem.drop`.
@@ -167,7 +190,10 @@ fn many_view_blocks_with_colon_paths_convert_in_linear_time() {
         let start = std::time::Instant::now();
         let renk = rust_to_renk(&rust).unwrap();
         let elapsed = start.elapsed();
-        assert!(renk.contains("            std.mem.drop(0)\n            fs::read(fs)\n"), "{renk}");
+        assert!(
+            renk.contains("            std.mem.drop(0)\n            fs::read(fs)\n"),
+            "{renk}"
+        );
         elapsed
     };
     let (short, long) = (fastest(|| convert(25)), fastest(|| convert(100)));
@@ -192,7 +218,9 @@ fn convert_view_tags(tag: &str, count: usize) -> std::time::Duration {
 
 #[test]
 fn long_view_bodies_of_closure_attributes_convert_in_linear_time() {
-    let _serial = SERIAL.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _serial = SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     // Each `move |_| a` body ends at the next `,`, `;`, or closing bracket, and markup has none.
     let tag = "<b on:click=move |_| a></b>";
     let (short, long) = (
@@ -205,7 +233,9 @@ fn long_view_bodies_of_closure_attributes_convert_in_linear_time() {
 
 #[test]
 fn long_view_bodies_of_nested_elements_convert_in_linear_time() {
-    let _serial = SERIAL.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _serial = SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let tag = "<p><i><b>x</b></i></p>";
     let (short, long) = (
         fastest(|| convert_view_tags(tag, 100)),
@@ -217,7 +247,9 @@ fn long_view_bodies_of_nested_elements_convert_in_linear_time() {
 
 #[test]
 fn long_view_bodies_of_spaced_tag_ends_convert_in_linear_time() {
-    let _serial = SERIAL.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _serial = SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     // Each tag ends at the spaced `>` after its closure value, and the text after it holds a
     // bare `>`.
     let tag = "<b on:click=move |_| go() > Count > more </b>";
@@ -231,7 +263,9 @@ fn long_view_bodies_of_spaced_tag_ends_convert_in_linear_time() {
 
 #[test]
 fn long_view_bodies_of_closures_starting_with_literals_convert_in_linear_time() {
-    let _serial = SERIAL.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _serial = SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     // Each body of `move ||"a"` starts with a string. The body scan skips the string and tests
     // no index inside it, so a scan from an earlier body must find a memo past the string.
     let tag = "<b class=move ||\"a\"></b>";

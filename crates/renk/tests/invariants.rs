@@ -149,7 +149,10 @@ fn source_tree_nodes_start_at_their_source_text() {
             let line = lines[node.source_line - 1];
             let text = node.source_text.lines().next().unwrap_or_default().trim();
             let at = String::from_utf16_lossy(
-                &line.encode_utf16().skip(node.source_column).collect::<Vec<_>>(),
+                &line
+                    .encode_utf16()
+                    .skip(node.source_column)
+                    .collect::<Vec<_>>(),
             );
             assert!(
                 !text.is_empty() && at.starts_with(text),
@@ -200,7 +203,11 @@ fn source_tree_columns_are_where_the_source_text_starts() {
     let mut stack = output.source_tree.iter().collect::<Vec<_>>();
     let mut columns = Vec::new();
     while let Some(node) = stack.pop() {
-        columns.push((node.source_line, node.source_text.as_str(), node.source_column));
+        columns.push((
+            node.source_line,
+            node.source_text.as_str(),
+            node.source_column,
+        ));
         stack.extend(&node.children);
     }
     for expected in [
@@ -215,7 +222,10 @@ fn source_tree_columns_are_where_the_source_text_starts() {
         (20, "else:", 7),
         (25, ", |b|:", 5),
     ] {
-        assert!(columns.contains(&expected), "{expected:?} not in {columns:?}");
+        assert!(
+            columns.contains(&expected),
+            "{expected:?} not in {columns:?}"
+        );
     }
 }
 

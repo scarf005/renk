@@ -234,7 +234,8 @@ async fn handle_run_request(State(state): State<AppState>, body: Bytes) -> Respo
     let rust = rust.to_string();
     let timeout = state.config.run_timeout;
     let run_deps = state.run_deps.clone();
-    match tokio::task::spawn_blocking(move || compile_and_run_rust(&rust, timeout, &run_deps)).await {
+    match tokio::task::spawn_blocking(move || compile_and_run_rust(&rust, timeout, &run_deps)).await
+    {
         Ok(Ok(response)) => json_response(StatusCode::OK, run_response_json(response)),
         Ok(Err(error)) => json_response(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -304,10 +305,7 @@ fn compile_and_run_rust(
         format!("trpl={}", trpl.display()),
     ]);
     for native in native_dependency_dirs(run_deps) {
-        compile_args.extend([
-            "-L".to_string(),
-            format!("native={}", native.display()),
-        ]);
+        compile_args.extend(["-L".to_string(), format!("native={}", native.display())]);
     }
     let compile_args = compile_args.iter().map(String::as_str).collect::<Vec<_>>();
     let compile = run_command("rustc", &compile_args, &dir, timeout);
@@ -659,9 +657,7 @@ fn route_path(path: &str) -> String {
 }
 
 fn is_app_route(path: &str) -> bool {
-    matches!(path, "/")
-        || path.starts_with("/examples/")
-        || path.starts_with("/rust-examples/")
+    matches!(path, "/") || path.starts_with("/examples/") || path.starts_with("/rust-examples/")
 }
 
 fn safe_join(root: &Path, relative: &str) -> Option<PathBuf> {
@@ -791,7 +787,11 @@ mod tests {
     }
 
     fn get(method: Method, path: &str) -> Request<Body> {
-        Request::builder().method(method).uri(path).body(Body::empty()).unwrap()
+        Request::builder()
+            .method(method)
+            .uri(path)
+            .body(Body::empty())
+            .unwrap()
     }
 
     fn run(body: impl Into<Body>) -> Request<Body> {
@@ -805,8 +805,16 @@ mod tests {
     #[test]
     fn safe_join_rejects_every_non_normal_component() {
         let root = Path::new("/srv/dist");
-        assert_eq!(safe_join(root, "assets/app.js"), Some(root.join("assets/app.js")));
-        for relative in ["../etc/passwd", "assets/../../x", "/etc/passwd", "./index.html"] {
+        assert_eq!(
+            safe_join(root, "assets/app.js"),
+            Some(root.join("assets/app.js"))
+        );
+        for relative in [
+            "../etc/passwd",
+            "assets/../../x",
+            "/etc/passwd",
+            "./index.html",
+        ] {
             assert_eq!(safe_join(root, relative), None, "{relative}");
         }
         assert_eq!(safe_join(root, "%2e%2e/x"), Some(root.join("%2e%2e/x")));
@@ -833,22 +841,42 @@ mod tests {
         assert_eq!(read_limited_utf8(&path, 4), ("1234".to_string(), true));
         fs::write(&path, "é").unwrap();
         assert_eq!(read_limited_utf8(&path, 1), ("\u{fffd}".to_string(), true));
-        assert_eq!(read_limited_utf8(&dir.join("missing"), 4), (String::new(), false));
+        assert_eq!(
+            read_limited_utf8(&dir.join("missing"), 4),
+            (String::new(), false)
+        );
         let _ = fs::remove_dir_all(dir);
     }
 
     #[test]
     fn commands_report_status_output_and_spawn_failures() {
         let dir = temp_dir("command");
-        let result = run_command("sh", &["-c", "echo out; echo err >&2; exit 3"], &dir, Duration::from_secs(5));
+        let result = run_command(
+            "sh",
+            &["-c", "echo out; echo err >&2; exit 3"],
+            &dir,
+            Duration::from_secs(5),
+        );
         assert_eq!(result.status, Some(3));
-        assert_eq!((result.stdout.as_str(), result.stderr.as_str()), ("out\n", "err\n"));
+        assert_eq!(
+            (result.stdout.as_str(), result.stderr.as_str()),
+            ("out\n", "err\n")
+        );
         assert!(!result.timed_out);
 
-        let result = run_command("/nonexistent/renk-binary", &[], &dir, Duration::from_secs(5));
+        let result = run_command(
+            "/nonexistent/renk-binary",
+            &[],
+            &dir,
+            Duration::from_secs(5),
+        );
         assert_eq!(result.status, None);
         assert!(!result.stderr.is_empty());
-        assert_eq!(fs::read_dir(&dir).unwrap().count(), 0, "output files must be removed");
+        assert_eq!(
+            fs::read_dir(&dir).unwrap().count(),
+            0,
+            "output files must be removed"
+        );
         let _ = fs::remove_dir_all(dir);
     }
 
@@ -864,7 +892,11 @@ mod tests {
             Duration::from_millis(300),
         );
         assert!(result.timed_out);
-        assert!(started.elapsed() < Duration::from_secs(5), "{:?}", started.elapsed());
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "{:?}",
+            started.elapsed()
+        );
         let pid = fs::read_to_string(dir.join("child.pid")).unwrap();
         // SIGKILL is delivered asynchronously; a killed child may linger briefly or as a zombie.
         let alive = || {
@@ -884,7 +916,10 @@ mod tests {
         let dir = temp_dir("cap");
         let result = run_command(
             "sh",
-            &["-c", &format!("head -c {} /dev/zero | tr '\\\\0' x", MAX_OUTPUT_BYTES + 10)],
+            &[
+                "-c",
+                &format!("head -c {} /dev/zero | tr '\\\\0' x", MAX_OUTPUT_BYTES + 10),
+            ],
             &dir,
             Duration::from_secs(5),
         );
@@ -908,14 +943,21 @@ mod tests {
         assert_eq!(body, [0, 97, 115, 109]);
 
         let (status, _, body) = send(&app, get(Method::GET, "/examples/hello")).await;
-        assert_eq!((status, body.as_slice()), (StatusCode::OK, b"<p>app</p>".as_slice()));
+        assert_eq!(
+            (status, body.as_slice()),
+            (StatusCode::OK, b"<p>app</p>".as_slice())
+        );
 
         let (status, headers, body) = send(&app, get(Method::HEAD, "/")).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(headers[CONTENT_LENGTH], "10");
         assert!(body.is_empty());
 
-        for path in ["/../renk-web-secret.txt", "/assets/../../renk-web-secret.txt", "/missing.js"] {
+        for path in [
+            "/../renk-web-secret.txt",
+            "/assets/../../renk-web-secret.txt",
+            "/missing.js",
+        ] {
             let (status, _, body) = send(&app, get(Method::GET, path)).await;
             assert_eq!(status, StatusCode::NOT_FOUND, "{path}");
             assert!(!String::from_utf8_lossy(&body).contains("secret"), "{path}");
@@ -930,7 +972,10 @@ mod tests {
     async fn every_response_carries_the_security_headers() {
         let dist = temp_dir("headers");
         let app = router(state(&dist, 100));
-        for request in [get(Method::GET, "/missing"), get(Method::POST, "/index.html")] {
+        for request in [
+            get(Method::GET, "/missing"),
+            get(Method::POST, "/index.html"),
+        ] {
             let (_, headers, _) = send(&app, request).await;
             for name in [
                 "content-security-policy",
@@ -955,15 +1000,26 @@ mod tests {
         let error = |body: &[u8]| serde_json::from_slice::<Value>(body).unwrap()["error"].clone();
 
         let (status, _, body) = send(&app, run("not json")).await;
-        assert_eq!((status, error(&body)), (StatusCode::BAD_REQUEST, json!("invalid json")));
+        assert_eq!(
+            (status, error(&body)),
+            (StatusCode::BAD_REQUEST, json!("invalid json"))
+        );
         let (status, _, body) = send(&app, run(r#"{"rust": 1}"#)).await;
-        assert_eq!((status, error(&body)), (StatusCode::BAD_REQUEST, json!("rust must be a string")));
+        assert_eq!(
+            (status, error(&body)),
+            (StatusCode::BAD_REQUEST, json!("rust must be a string"))
+        );
         let source = "x".repeat(MAX_RUN_SOURCE_BYTES + 1);
         let (status, _, _) = send(&app, run(json!({ "rust": source }).to_string())).await;
         assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
         let (status, _, body) = send(&app, run(r#"{"rust": "fn main() {}"}"#)).await;
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
-        assert!(error(&body).as_str().unwrap().contains("runner dependency `trpl` not found"));
+        assert!(
+            error(&body)
+                .as_str()
+                .unwrap()
+                .contains("runner dependency `trpl` not found")
+        );
 
         // Bodies over the transport limit are rejected before they count against the rate limit.
         let (status, _, _) = send(&app, run("x".repeat(MAX_BODY_BYTES + 1))).await;
@@ -971,7 +1027,13 @@ mod tests {
         let (status, _, _) = send(&app, run("{}")).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         let (status, _, body) = send(&app, run("{}")).await;
-        assert_eq!((status, error(&body)), (StatusCode::TOO_MANY_REQUESTS, json!("run rate limit exceeded")));
+        assert_eq!(
+            (status, error(&body)),
+            (
+                StatusCode::TOO_MANY_REQUESTS,
+                json!("run rate limit exceeded")
+            )
+        );
         let _ = fs::remove_dir_all(dist);
     }
 }

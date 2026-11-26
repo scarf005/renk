@@ -75,9 +75,7 @@ impl std::error::Error for TranspileError {}
 mod wasm_api {
     use wasm_bindgen::prelude::*;
 
-    use super::{
-        TranspileError, format_source, rust_to_renk, source_map_json, transpile,
-    };
+    use super::{TranspileError, format_source, rust_to_renk, source_map_json, transpile};
 
     #[wasm_bindgen]
     pub fn format_renk(source: &str) -> Result<String, JsValue> {
@@ -724,7 +722,10 @@ fn convert_rust_lines(source: &str, aggressive: bool) -> Result<String, Transpil
             output.push(format!("{indent}{text}{comment}"));
             continue;
         }
-        if stack.last().is_some_and(|block| block.kind == RustBlockKind::Macro) {
+        if stack
+            .last()
+            .is_some_and(|block| block.kind == RustBlockKind::Macro)
+        {
             // Macro arms keep Rust tokens; a multi-line arm becomes `pattern =>:` and its body.
             // A pattern over several lines, such as `(` ... `) => {`, joins up to its arrow.
             let mut arm = text.to_string();
@@ -1060,7 +1061,10 @@ fn equivalent_rewrites(
         .collect::<Vec<_>>();
     let reject = |(rewrite, text): (Rewrite, String)| Rewrite { text, ..rewrite };
     while !trials.is_empty() {
-        let rewrites = trials.iter().map(|(rewrite, _)| rewrite.clone()).collect::<Vec<_>>();
+        let rewrites = trials
+            .iter()
+            .map(|(rewrite, _)| rewrite.clone())
+            .collect::<Vec<_>>();
         let (candidate, origins) = apply_rewrites(lines, &rewrites);
         let differing = match transpile_source(&candidate.join("\n")) {
             Ok(output) => {
@@ -1091,7 +1095,11 @@ fn equivalent_rewrites(
             }
             let original = lines[rewrite.start..rewrite.end].join("\n");
             let original = original.split('\n').collect::<Vec<_>>();
-            let mut text = rewrite.text.split('\n').map(str::to_string).collect::<Vec<_>>();
+            let mut text = rewrite
+                .text
+                .split('\n')
+                .map(str::to_string)
+                .collect::<Vec<_>>();
             let placed = (0..text.len())
                 .filter(|&at| {
                     text.len() == original.len()
@@ -1139,7 +1147,10 @@ fn differing_source_lines(
             let span = node.generated_end_line + 1 - node.generated_start_line;
             let exact = node.children.is_empty() && span == node.source_text.split('\n').count();
             Some(match exact {
-                true => (node.source_line + index + 1 - node.generated_start_line, true),
+                true => (
+                    node.source_line + index + 1 - node.generated_start_line,
+                    true,
+                ),
                 false => (node.source_line, false),
             })
         })
@@ -1283,9 +1294,7 @@ fn expression_body_rewrites(lines: &[String]) -> Vec<Rewrite> {
             && !header.contains("//")
             && raw_indent(body) == indent + 4
             && !body.trim_start().starts_with("//")
-            && !split_trailing_comment(body.trim())
-                .0
-                .ends_with(['{', ';'])
+            && !split_trailing_comment(body.trim()).0.ends_with(['{', ';'])
             && block_ends_at(lines, end(), indent)
             && top_level_statements(
                 &lines[index + 1..end()]
@@ -1723,8 +1732,8 @@ fn replace_rust_turbofish(text: &str) -> String {
     let mut output = String::new();
     let mut index = 0usize;
     while index < chars.len() {
-        if let Some(end) = opaque_span_end(&chars, index)
-            .or_else(|| macro_invocation_end(&chars, index))
+        if let Some(end) =
+            opaque_span_end(&chars, index).or_else(|| macro_invocation_end(&chars, index))
         {
             output.extend(chars[index..=end].iter());
             index = end + 1;
@@ -1770,8 +1779,8 @@ fn replace_angle_generics_with_square(text: &str) -> String {
     let mut output = String::new();
     let mut index = 0usize;
     while index < chars.len() {
-        if let Some(end) = opaque_span_end(&chars, index)
-            .or_else(|| macro_invocation_end(&chars, index))
+        if let Some(end) =
+            opaque_span_end(&chars, index).or_else(|| macro_invocation_end(&chars, index))
         {
             output.extend(chars[index..=end].iter());
             index = end + 1;
@@ -1808,7 +1817,9 @@ fn rust_generic_content(content: &str) -> bool {
     !trimmed.is_empty()
         && (trimmed.contains('\'')
             || trimmed.contains(',')
-            || trimmed.chars().all(|character| matches!(character, '(' | ')' | ' '))
+            || trimmed
+                .chars()
+                .all(|character| matches!(character, '(' | ')' | ' '))
             || type_like_generic(trimmed)
             || generic_tokens(trimmed)
                 .into_iter()
@@ -1864,7 +1875,9 @@ fn absorb_function_branches(nodes: Vec<Node>) -> Vec<Node> {
     let mut absorbed = Vec::new();
     while let Some(mut node) = nodes.next() {
         node.children = absorb_function_branches(std::mem::take(&mut node.children));
-        if !is_function(strip_block_marker(node.text.trim()).0) || inline_block_body(&node).is_none() {
+        if !is_function(strip_block_marker(node.text.trim()).0)
+            || inline_block_body(&node).is_none()
+        {
             absorbed.push(node);
             continue;
         }
@@ -2036,9 +2049,13 @@ fn expand_indent_tabs(source: &str) -> String {
                 return line.to_string();
             }
             let code = line.trim_start();
-            let width = line[..line.len() - code.len()]
-                .chars()
-                .fold(0, |width, c| if c == '\t' { width / 4 * 4 + 4 } else { width + 1 });
+            let width = line[..line.len() - code.len()].chars().fold(0, |width, c| {
+                if c == '\t' {
+                    width / 4 * 4 + 4
+                } else {
+                    width + 1
+                }
+            });
             format!("{}{code}", spaces(width))
         })
         .collect::<Vec<_>>()
@@ -2227,7 +2244,8 @@ fn source_lines(source: &str) -> Result<Vec<SourceLine>, TranspileError> {
         if is_macro_item(&text) {
             macro_indent = Some(indent);
         } else if macro_indent.is_some()
-            && split_arrow(strip_block_marker(&text).0).is_some_and(|(_, body)| body.trim().is_empty())
+            && split_arrow(strip_block_marker(&text).0)
+                .is_some_and(|(_, body)| body.trim().is_empty())
         {
             arm_indent = Some(indent);
         }
@@ -2250,7 +2268,11 @@ fn source_lines(source: &str) -> Result<Vec<SourceLine>, TranspileError> {
                 closed: false,
             });
             let rest = &code[close + 1..];
-            start = text_start(start, code, close + 1 + rest.len() - rest.trim_start().len());
+            start = text_start(
+                start,
+                code,
+                close + 1 + rest.len() - rest.trim_start().len(),
+            );
             code = rest.trim_start();
         }
         lines.push(SourceLine {
@@ -2322,8 +2344,7 @@ fn joins_next_line(
         // while a `(` or `[` the closing line opens continues the group.
         return match open.first() {
             Some(first) => {
-                *first == outer
-                    || (matches!(first, '(' | '[') && !code.trim_end().ends_with(':'))
+                *first == outer || (matches!(first, '(' | '[') && !code.trim_end().ends_with(':'))
             }
             None => next.is_some_and(|next| {
                 continues_chain(next, indent) || continues_where_clause(text, next, indent)
@@ -2587,14 +2608,14 @@ fn split_function_body(text: &str) -> Option<(&str, &str)> {
 /// `{` on a line of its own, as in `if a` / `    && b:`.
 fn opens_on_own_line(node: &Node) -> bool {
     let first = node.text.lines().next().unwrap_or_default().trim();
-    let guarded_arm = node
-        .text
-        .lines()
-        .nth(1)
-        .is_some_and(|guard| guard.trim_start().starts_with("if "))
-        && node.text.lines().last().is_some_and(|last| {
-            find_top_level_keyword(&last[..code_len(last)], "=>").is_some()
-        });
+    let guarded_arm =
+        node.text
+            .lines()
+            .nth(1)
+            .is_some_and(|guard| guard.trim_start().starts_with("if "))
+            && node.text.lines().last().is_some_and(|last| {
+                find_top_level_keyword(&last[..code_len(last)], "=>").is_some()
+            });
     let last = node.text.lines().last().unwrap_or_default();
     // The value after a pattern over several lines, as in `if let S {` / `    a,` / `} = s:` or
     // `if let Some(` / `    a,` / `) = s:`.
@@ -2711,9 +2732,10 @@ fn continues_where_clause(text: &str, next: &str, indent: usize) -> bool {
     {
         return false;
     }
-    let in_where = text.lines().map(code).any(|line| {
-        starts_where(&line) || line.ends_with(" where") || line.contains(" where ")
-    });
+    let in_where = text
+        .lines()
+        .map(code)
+        .any(|line| starts_where(&line) || line.ends_with(" where") || line.contains(" where "));
     if !in_where {
         return raw_indent(next) == indent && starts_where(&next_code);
     }
@@ -2747,7 +2769,14 @@ fn has_control_operand(text: &str) -> bool {
                 // Skip other words before the scans below, which read to the end of `text`.
                 if !matches!(
                     &*word,
-                    "else" | "if" | "match" | "while" | "for" | "loop" | "unsafe" | "async"
+                    "else"
+                        | "if"
+                        | "match"
+                        | "while"
+                        | "for"
+                        | "loop"
+                        | "unsafe"
+                        | "async"
                         | "const"
                 ) {
                     index += word.chars().count();
@@ -2815,7 +2844,12 @@ fn has_control_operand(text: &str) -> bool {
                     && (word == "else"
                         || matches!(
                             &*word,
-                            "if" | "match" | "while" | "for" | "loop" | "unsafe" | "async"
+                            "if" | "match"
+                                | "while"
+                                | "for"
+                                | "loop"
+                                | "unsafe"
+                                | "async"
                                 | "const"
                         ) && operand)
                 {
@@ -2867,7 +2901,10 @@ fn without_trailing_line_comment(text: &str) -> &str {
     while index < chars.len() {
         if let Some(end) = opaque_span_end(&chars, index) {
             if chars[index..].starts_with(&['/', '/']) && end + 1 == chars.len() {
-                let at = text.char_indices().nth(index).map_or(text.len(), |(at, _)| at);
+                let at = text
+                    .char_indices()
+                    .nth(index)
+                    .map_or(text.len(), |(at, _)| at);
                 return &text[..at];
             }
             index = end + 1;
@@ -3021,7 +3058,10 @@ impl OpenDelimiters {
                 if !opaque_span_is_closed(&chars, index, end) {
                     return None;
                 }
-                self.scanned += chars[index..=end].iter().map(|c| c.len_utf8()).sum::<usize>();
+                self.scanned += chars[index..=end]
+                    .iter()
+                    .map(|c| c.len_utf8())
+                    .sum::<usize>();
                 index = end + 1;
                 continue;
             }
@@ -3058,7 +3098,9 @@ fn opaque_span_is_closed(chars: &[char], start: usize, end: usize) -> bool {
             let raw = raw_string_span_end(chars, start).is_some();
             closing > quote
                 && chars[closing] == '"'
-                && chars[closing + 1..=end].iter().all(|character| *character == '#')
+                && chars[closing + 1..=end]
+                    .iter()
+                    .all(|character| *character == '#')
                 && (raw || escapes % 2 == 0)
         }
     }
@@ -3364,7 +3406,11 @@ fn inline_block_body(node: &Node) -> Option<Vec<Node>> {
     let body = body.trim();
     let at = (body.as_ptr() as usize)
         .checked_sub(node.text.as_ptr() as usize)
-        .filter(|&at| node.text.get(at..).is_some_and(|rest| rest.starts_with(body)))
+        .filter(|&at| {
+            node.text
+                .get(at..)
+                .is_some_and(|rest| rest.starts_with(body))
+        })
         .unwrap_or_default();
     let start = text_start(node.start, &node.text, at);
     // Children at the function's indent are the body's `else` branches.
@@ -3374,23 +3420,25 @@ fn inline_block_body(node: &Node) -> Option<Vec<Node>> {
         .position(|child| child.indent == node.indent)
         .unwrap_or(node.children.len());
     let (children, branches) = node.children.split_at(split);
-    (has_block && !body.is_empty() && !children.is_empty() && !are_continuations(children)).then(|| {
-        std::iter::once(Node {
-            line: node.line,
-            indent: node.indent + 4,
-            start,
-            text: format!("{body}:"),
-            children: children
-                .iter()
-                .map(|child| offset_node_indent(child, 4))
-                .collect(),
-            closing: node.closing.clone(),
-            comment: None,
-            closing_comment: None,
-        })
-        .chain(branches.iter().map(|branch| offset_node_indent(branch, 4)))
-        .collect()
-    })
+    (has_block && !body.is_empty() && !children.is_empty() && !are_continuations(children)).then(
+        || {
+            std::iter::once(Node {
+                line: node.line,
+                indent: node.indent + 4,
+                start,
+                text: format!("{body}:"),
+                children: children
+                    .iter()
+                    .map(|child| offset_node_indent(child, 4))
+                    .collect(),
+                closing: node.closing.clone(),
+                comment: None,
+                closing_comment: None,
+            })
+            .chain(branches.iter().map(|branch| offset_node_indent(branch, 4)))
+            .collect()
+        },
+    )
 }
 
 fn validate_function_node(node: &Node) -> Result<(), TranspileError> {
@@ -3683,7 +3731,9 @@ fn emit_scoped_sequence(
         let brace = closing
             .find('}')
             .filter(|brace| closing[..*brace].trim().is_empty());
-        let end = brace.map_or(closing.trim_end().trim_end_matches(';').len(), |brace| brace + 1);
+        let end = brace.map_or(closing.trim_end().trim_end_matches(';').len(), |brace| {
+            brace + 1
+        });
         if continues {
             let suffix = closing.split_off(end);
             if chain.is_none() {
@@ -3911,7 +3961,10 @@ fn emit_general(node: &Node, context: Context, is_last: bool, emitter: &mut Emit
     {
         // A module declared in its own file.
         let (text, _) = strip_explicit_semicolon(text);
-        emitter.push(node, format!("{}{};", spaces(node.indent), lower_signature(text)));
+        emitter.push(
+            node,
+            format!("{}{};", spaces(node.indent), lower_signature(text)),
+        );
     } else if is_impl_or_mod_item(block_text) {
         emit_braced_item(node, Context::Block, emitter, lower_signature(block_text));
     } else {
@@ -4598,14 +4651,19 @@ fn emit_struct_literal_expr(node: &Node, text: &str, emitter: &mut Emitter, is_l
     let head = (0..chars.len())
         .find(|&open| {
             chars[open] == '['
-                && matching_bracket(&chars, open, '[', ']').is_some_and(|close| close + 1 == chars.len())
+                && matching_bracket(&chars, open, '[', ']')
+                    .is_some_and(|close| close + 1 == chars.len())
         })
         .map_or_else(
             || lower_expr(text),
             |open| {
                 let name = chars[..open].iter().collect::<String>();
                 let content = chars[open + 1..chars.len() - 1].iter().collect::<String>();
-                format!("{}::<{}>", lower_expr(&name), lower_generic_content(&content))
+                format!(
+                    "{}::<{}>",
+                    lower_expr(&name),
+                    lower_generic_content(&content)
+                )
             },
         );
     emitter.push(node, format!("{indent}{head} {{"));
@@ -4645,7 +4703,10 @@ fn split_arrow(text: &str) -> Option<(&str, &str)> {
     let at = top_level_position(&chars, 0, |at| chars[at..].starts_with(&['=', '>']));
     match at {
         Some(at) => {
-            let at = text.char_indices().nth(at).map_or(text.len(), |(byte, _)| byte);
+            let at = text
+                .char_indices()
+                .nth(at)
+                .map_or(text.len(), |(byte, _)| byte);
             Some((&text[..at], &text[at + 2..]))
         }
         None => text.split_once("=>"),
@@ -4813,7 +4874,10 @@ fn extract_argument_inline_ifs(text: &str) -> (String, Vec<String>) {
                 // A closure body, as in `.map(|x| if c then a else b)`, or an operand, as in
                 // `n + if c then a else b`, too.
                 .is_some_and(|character| {
-                    matches!(character, '(' | '[' | ',' | '|' | '+' | '-' | '*' | '/' | '%' | '&' | '^' | '!' | '<')
+                    matches!(
+                        character,
+                        '(' | '[' | ',' | '|' | '+' | '-' | '*' | '/' | '%' | '&' | '^' | '!' | '<'
+                    )
                 });
         if is_argument {
             let end = argument_end(&chars, index);
@@ -5348,11 +5412,7 @@ fn map_view_blocks(text: &str, block: &dyn Fn(&str, Vec<String>) -> String) -> S
 /// A `view!` body with its multi-line `{` blocks and nested `view!` invocations mapped as
 /// [`map_view_blocks`] says. `markup` is false for the Rust code in braces in such a body, which
 /// has no tags.
-fn map_view_body(
-    body: &str,
-    markup: bool,
-    block: &dyn Fn(&str, Vec<String>) -> String,
-) -> String {
+fn map_view_body(body: &str, markup: bool, block: &dyn Fn(&str, Vec<String>) -> String) -> String {
     let chars = body.chars().collect::<Vec<_>>();
     let closures = closures(&chars);
     let mut output = String::new();
@@ -5403,7 +5463,9 @@ fn map_view_body(
                 .iter()
                 .filter(|closure| {
                     closure.body.start <= index
-                        && chars[closure.body.start..index].iter().all(|c| c.is_whitespace())
+                        && chars[closure.body.start..index]
+                            .iter()
+                            .all(|c| c.is_whitespace())
                 })
                 .flat_map(|closure| closure.parameters.clone())
                 .collect();
@@ -5428,7 +5490,9 @@ fn map_view_body(
         {
             let end = read_ident(&chars, index);
             let word = chars[index..end].iter().collect::<String>();
-            let keywords = ["if", "while", "for", "else", "async", "unsafe", "loop", "match"];
+            let keywords = [
+                "if", "while", "for", "else", "async", "unsafe", "loop", "match",
+            ];
             // Text, as `match` in `<p>Find a match</p>`, or an attribute name, as `for` in
             // `<label for>` or `<label class={a} for>`, and not a value, as `if` in
             // `on:click=move |_| if`, or the `else` of an `if` value.
@@ -5449,7 +5513,10 @@ fn map_view_body(
                 (Some("if"), "let") => Some("if let"),
                 (Some("while"), "let") => Some("while let"),
                 (Some("for"), "in") => Some("for in"),
-                (head, word) => keywords.into_iter().find(|keyword| *keyword == word).or(head),
+                (head, word) => keywords
+                    .into_iter()
+                    .find(|keyword| *keyword == word)
+                    .or(head),
             };
             output.extend(&chars[index..end]);
             previous = Some((chars[end - 1], end - 1));
@@ -5469,7 +5536,9 @@ fn map_view_body(
                     Some("if" | "if let" | "while" | "while let" | "for in" | "match")
                 );
                 let ends = previous.is_some_and(|(c, last)| {
-                    let pair = chars[last.saturating_sub(1)..=last].iter().collect::<String>();
+                    let pair = chars[last.saturating_sub(1)..=last]
+                        .iter()
+                        .collect::<String>();
                     matches!(c, '+' | '-' | '*' | '/' | '%' | '=')
                         || ["&&", "||", "!=", "<=", ">="].contains(&pair.as_str())
                         || condition && [" <", " >"].contains(&pair.as_str())
@@ -5512,7 +5581,8 @@ fn map_view_body(
                 // A generic, as `Vec<u8>`, or a qualified path in one, as the second `<` of
                 // `Vec::<<T as Tr>::X>`.
                 '<' if at > 0
-                    && (after_path(at - 1) || at > 1 && chars[at - 1] == '<' && after_path(at - 2))
+                    && (after_path(at - 1)
+                        || at > 1 && chars[at - 1] == '<' && after_path(at - 2))
                     && !matches!(next, Some('/' | '='))
                     && (tag != Some(true) || top > 0 || angles[top] > 0 || at == name_end) =>
                 {
@@ -5581,8 +5651,13 @@ fn view_block_opens(
     };
     let follows_closure = |closure: &Closure| {
         let start = closure.body.start;
-        let mut head = chars[start.min(open)..open].iter().skip_while(|c| c.is_whitespace());
-        start <= open && head.next().is_none_or(|&c| c == '-' && head.next() == Some(&'>'))
+        let mut head = chars[start.min(open)..open]
+            .iter()
+            .skip_while(|c| c.is_whitespace());
+        start <= open
+            && head
+                .next()
+                .is_none_or(|&c| c == '-' && head.next() == Some(&'>'))
     };
     let child = match previous {
         None => true,
@@ -5726,7 +5801,11 @@ fn lower_view_block(inner: &str, names: Vec<String>) -> String {
         return std::iter::once(first)
             .chain(lines[1..1 + leading].iter().map(|line| line.to_string()))
             .chain(body.iter().cloned())
-            .chain(lines[lines.len() - trailing..].iter().map(|line| line.to_string()))
+            .chain(
+                lines[lines.len() - trailing..]
+                    .iter()
+                    .map(|line| line.to_string()),
+            )
             .collect::<Vec<_>>()
             .join("\n");
     }
@@ -6445,7 +6524,10 @@ fn lower_if_then_else(text: &str) -> Option<String> {
 
 fn find_else_for_then_body(text: &str) -> Option<usize> {
     let chars = text.chars().collect::<Vec<_>>();
-    let byte_offsets = text.char_indices().map(|(offset, _)| offset).collect::<Vec<_>>();
+    let byte_offsets = text
+        .char_indices()
+        .map(|(offset, _)| offset)
+        .collect::<Vec<_>>();
     let mut round = 0usize;
     let mut square = 0usize;
     let mut curly = 0usize;
@@ -6453,8 +6535,8 @@ fn find_else_for_then_body(text: &str) -> Option<usize> {
     let mut index = 0usize;
 
     while index < chars.len() {
-        if let Some(end) = opaque_span_end(&chars, index)
-            .or_else(|| macro_invocation_end(&chars, index))
+        if let Some(end) =
+            opaque_span_end(&chars, index).or_else(|| macro_invocation_end(&chars, index))
         {
             index = end + 1;
             continue;
@@ -6490,15 +6572,18 @@ fn find_else_for_then_body(text: &str) -> Option<usize> {
 
 fn find_top_level_keyword(text: &str, keyword: &str) -> Option<usize> {
     let chars = text.chars().collect::<Vec<_>>();
-    let byte_offsets = text.char_indices().map(|(offset, _)| offset).collect::<Vec<_>>();
+    let byte_offsets = text
+        .char_indices()
+        .map(|(offset, _)| offset)
+        .collect::<Vec<_>>();
     let mut round = 0usize;
     let mut square = 0usize;
     let mut curly = 0usize;
     let mut index = 0usize;
 
     while index < chars.len() {
-        if let Some(end) = opaque_span_end(&chars, index)
-            .or_else(|| macro_invocation_end(&chars, index))
+        if let Some(end) =
+            opaque_span_end(&chars, index).or_else(|| macro_invocation_end(&chars, index))
         {
             index = end + 1;
             continue;
@@ -6543,7 +6628,6 @@ fn keyword_at(chars: &[char], index: usize, keyword: &str) -> bool {
             .is_none_or(|character| !is_ident_continue(*character))
 }
 
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum GenericMode {
     Type,
@@ -6563,8 +6647,8 @@ fn replace_square_generics(text: &str, mode: GenericMode) -> String {
     let mut square_const = Vec::<bool>::new();
     let mut curly_depth = 0usize;
     while index < chars.len() {
-        if let Some(end) = opaque_span_end(&chars, index)
-            .or_else(|| macro_invocation_end(&chars, index))
+        if let Some(end) =
+            opaque_span_end(&chars, index).or_else(|| macro_invocation_end(&chars, index))
         {
             output.extend(chars[index..=end].iter());
             index = end + 1;
@@ -6684,8 +6768,8 @@ fn replace_dotted_paths(text: &str, mode: PathMode) -> String {
     let mut square_const = Vec::<bool>::new();
     let mut curly_depth = 0usize;
     while index < chars.len() {
-        if let Some(end) = opaque_span_end(&chars, index)
-            .or_else(|| macro_invocation_end(&chars, index))
+        if let Some(end) =
+            opaque_span_end(&chars, index).or_else(|| macro_invocation_end(&chars, index))
         {
             output.extend(chars[index..=end].iter());
             index = end + 1;
@@ -6886,7 +6970,10 @@ fn raw_literal_end(text: &str, index: usize) -> Option<usize> {
     let prefix = usize::from(matches!(rest.first(), Some(b'b' | b'c')));
     if rest.get(prefix) != Some(&b'r')
         || !matches!(rest.get(prefix + 1), Some(b'#' | b'"'))
-        || text[..index].chars().next_back().is_some_and(is_ident_continue)
+        || text[..index]
+            .chars()
+            .next_back()
+            .is_some_and(is_ident_continue)
     {
         return None;
     }
@@ -6981,14 +7068,20 @@ fn macro_invocation_end(chars: &[char], start: usize) -> Option<usize> {
             break;
         }
     }
-    while chars.get(cursor).is_some_and(|character| character.is_whitespace()) {
+    while chars
+        .get(cursor)
+        .is_some_and(|character| character.is_whitespace())
+    {
         cursor += 1;
     }
     if chars.get(cursor) != Some(&'!') {
         return None;
     }
     cursor += 1;
-    while chars.get(cursor).is_some_and(|character| character.is_whitespace()) {
+    while chars
+        .get(cursor)
+        .is_some_and(|character| character.is_whitespace())
+    {
         cursor += 1;
     }
     let open = *chars.get(cursor)?;
@@ -7433,7 +7526,9 @@ fn format_placeholder_bindings(chars: &[char]) -> Vec<String> {
         };
         if chars[index] == '"' {
             let content = chars[index + 1..end].iter().collect::<String>();
-            for expression in lower_format_string(&content, true, true).map_or(Vec::new(), |(_, e)| e) {
+            for expression in
+                lower_format_string(&content, true, true).map_or(Vec::new(), |(_, e)| e)
+            {
                 names.extend(closure_parameter_bindings(
                     &expression.chars().collect::<Vec<_>>(),
                 ));
@@ -7839,8 +7934,8 @@ fn are_continuations(nodes: &[Node]) -> bool {
 
 fn is_expression_continuation(text: &str) -> bool {
     [
-        ".", "::", "(", "[", "?", "+", "-", "*", "/", "%", "&&", "||", "&",
-        "|", "^", "<<", ">>", "==", "!=", "<=", ">=", "<", ">",
+        ".", "::", "(", "[", "?", "+", "-", "*", "/", "%", "&&", "||", "&", "|", "^", "<<", ">>",
+        "==", "!=", "<=", ">=", "<", ">",
     ]
     .iter()
     .any(|prefix| text.starts_with(prefix))
@@ -8630,14 +8725,8 @@ pub fn normalized_names(lines: Vec<String>) -> Vec<String> {
         let inline = "pub fn even_squares(values: Vec[i32]) -> Vec[i32]:\n    values.into_iter().filter(|value| value % 2 == 0).map(|value| value * value).collect[Vec[i32]]()\n";
         let broken = "pub fn even_squares(values: Vec[i32]) -> Vec[i32] = values\n    .into_iter()\n    .filter(|value| value % 2 == 0)\n    .map(|value| value * value)\n    .collect[Vec[i32]]()\n";
 
-        assert_eq!(
-            format_source(inline).unwrap(),
-            inline
-        );
-        assert_eq!(
-            format_source(broken).unwrap(),
-            broken
-        );
+        assert_eq!(format_source(inline).unwrap(), inline);
+        assert_eq!(format_source(broken).unwrap(), broken);
     }
 
     #[test]
@@ -8736,10 +8825,9 @@ pub fn normalized_names(lines: Vec<String>) -> Vec<String> {
 
     #[test]
     fn format_rejects_unsupported_blocks() {
-        let error = format_source(
-            "fn main():\n    println!(\"first\")\n        println!(\"nested\")\n",
-        )
-        .unwrap_err();
+        let error =
+            format_source("fn main():\n    println!(\"first\")\n        println!(\"nested\")\n")
+                .unwrap_err();
         assert_eq!(error.line, 2);
     }
 

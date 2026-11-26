@@ -229,11 +229,7 @@ fn subcommands_dispatch_on_the_input_extension() {
         "fn f(c: bool) -> i32 {\n    if c {\n        1\n    } else {\n        2\n    }\n}\n",
     )
     .unwrap();
-    fs::write(
-        dir.join("a.rk"),
-        "fn f() -> i32:\n    let x = 1  \n    x\n",
-    )
-    .unwrap();
+    fs::write(dir.join("a.rk"), "fn f() -> i32:\n    let x = 1  \n    x\n").unwrap();
     let cases: [(&[&str], &str); 3] = [
         (
             &["from-rust", "a.rs"],

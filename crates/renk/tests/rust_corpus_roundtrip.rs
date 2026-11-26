@@ -23,26 +23,62 @@ const CORPUS: &[(&str, &str)] = &[
         "macros_closures",
         include_str!("rust_corpus/macros_closures.rs"),
     ),
-    ("wrapped_lines", include_str!("rust_corpus/wrapped_lines.rs")),
+    (
+        "wrapped_lines",
+        include_str!("rust_corpus/wrapped_lines.rs"),
+    ),
     ("edge_cases", include_str!("rust_corpus/edge_cases.rs")),
     ("macro_rules", include_str!("rust_corpus/macro_rules.rs")),
     ("value_blocks", include_str!("rust_corpus/value_blocks.rs")),
     ("idiomatic", include_str!("rust_corpus/idiomatic.rs")),
     ("format_args", include_str!("rust_corpus/format_args.rs")),
-    ("where_clauses", include_str!("rust_corpus/where_clauses.rs")),
-    ("long_conditions", include_str!("rust_corpus/long_conditions.rs")),
-    ("match_arm_blocks", include_str!("rust_corpus/match_arm_blocks.rs")),
+    (
+        "where_clauses",
+        include_str!("rust_corpus/where_clauses.rs"),
+    ),
+    (
+        "long_conditions",
+        include_str!("rust_corpus/long_conditions.rs"),
+    ),
+    (
+        "match_arm_blocks",
+        include_str!("rust_corpus/match_arm_blocks.rs"),
+    ),
     ("bare_blocks", include_str!("rust_corpus/bare_blocks.rs")),
-    ("wrapped_groups", include_str!("rust_corpus/wrapped_groups.rs")),
+    (
+        "wrapped_groups",
+        include_str!("rust_corpus/wrapped_groups.rs"),
+    ),
     ("item_tails", include_str!("rust_corpus/item_tails.rs")),
-    ("block_comments", include_str!("rust_corpus/block_comments.rs")),
-    ("one_line_items", include_str!("rust_corpus/one_line_items.rs")),
-    ("split_continuations", include_str!("rust_corpus/split_continuations.rs")),
-    ("real_crate_forms", include_str!("rust_corpus/real_crate_forms.rs")),
-    ("nested_blocks", include_str!("rust_corpus/nested_blocks.rs")),
-    ("macro_matchers", include_str!("rust_corpus/macro_matchers.rs")),
+    (
+        "block_comments",
+        include_str!("rust_corpus/block_comments.rs"),
+    ),
+    (
+        "one_line_items",
+        include_str!("rust_corpus/one_line_items.rs"),
+    ),
+    (
+        "split_continuations",
+        include_str!("rust_corpus/split_continuations.rs"),
+    ),
+    (
+        "real_crate_forms",
+        include_str!("rust_corpus/real_crate_forms.rs"),
+    ),
+    (
+        "nested_blocks",
+        include_str!("rust_corpus/nested_blocks.rs"),
+    ),
+    (
+        "macro_matchers",
+        include_str!("rust_corpus/macro_matchers.rs"),
+    ),
     ("casts", include_str!("rust_corpus/casts.rs")),
-    ("one_line_control", include_str!("rust_corpus/one_line_control.rs")),
+    (
+        "one_line_control",
+        include_str!("rust_corpus/one_line_control.rs"),
+    ),
     ("exact_text", include_str!("rust_corpus/exact_text.rs")),
 ];
 
@@ -67,11 +103,20 @@ const RENK_CORPUS: &[(&str, &str)] = &[
     ),
     ("headers", include_str!("renk_corpus/headers.rk")),
     ("if_let_then", include_str!("renk_corpus/if_let_then.rk")),
-    ("format_quotes", include_str!("renk_corpus/format_quotes.rk")),
-    ("struct_literal_heads", include_str!("renk_corpus/struct_literal_heads.rk")),
+    (
+        "format_quotes",
+        include_str!("renk_corpus/format_quotes.rk"),
+    ),
+    (
+        "struct_literal_heads",
+        include_str!("renk_corpus/struct_literal_heads.rk"),
+    ),
     ("view_blocks", include_str!("renk_corpus/view_blocks.rk")),
     ("view_braces", include_str!("renk_corpus/view_braces.rk")),
-    ("view_tag_ends", include_str!("renk_corpus/view_tag_ends.rk")),
+    (
+        "view_tag_ends",
+        include_str!("renk_corpus/view_tag_ends.rk"),
+    ),
 ];
 
 #[test]
@@ -89,7 +134,11 @@ fn rust_corpus_roundtrips_to_compilable_rust() {
             panic!("failed to convert corpus case {name} back to Rust: {error}\nRenk:\n{renk}")
         });
         compile_rust(&out_dir, name, "roundtrip", &roundtripped);
-        assert_eq!(multiline_literals(&roundtripped), multiline_literals(rust), "{name}");
+        assert_eq!(
+            multiline_literals(&roundtripped),
+            multiline_literals(rust),
+            "{name}"
+        );
 
         let second_renk = rust_to_renk(&roundtripped).unwrap_or_else(|error| {
             panic!("failed to convert roundtripped corpus case {name} to Renk: {error}")
@@ -132,7 +181,11 @@ fn rust_conversion_emits_idiomatic_renk() {
 fn rust_conversions_keep_the_text_of_rustfmt_shaped_rust() {
     let rust = include_str!("rust_corpus/exact_text.rs");
     let renk = rust_to_renk(rust).unwrap();
-    assert_eq!(to_rust(&renk, SourceSyntax::Renk).unwrap(), rust, "via Renk:\n{renk}");
+    assert_eq!(
+        to_rust(&renk, SourceSyntax::Renk).unwrap(),
+        rust,
+        "via Renk:\n{renk}"
+    );
 }
 
 fn tokens(rust: &str) -> String {
@@ -160,7 +213,11 @@ fn renk_corpus_transpiles_to_compilable_rust() {
             panic!("failed second Rust conversion for Renk corpus case {name}: {error}\nRenk:\n{second_renk}")
         });
         compile_rust(&out_dir, name, "renk-roundtrip", &roundtripped);
-        assert_eq!(multiline_literals(&roundtripped), multiline_literals(&rust), "{name}");
+        assert_eq!(
+            multiline_literals(&roundtripped),
+            multiline_literals(&rust),
+            "{name}"
+        );
     }
 
     let _ = fs::remove_dir_all(out_dir);

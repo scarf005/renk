@@ -10,14 +10,26 @@ fn bracket_calls_and_uppercase_paths_are_generic_application() {
         "fn demo(xs: &[fn() -> i32], i: usize, raw: &str):\n    let called = (xs[i])()\n    let parsed = raw.parse[i32]()\n    let size = size_of[u8]()\n    let value = serde_json::from_str[Config](raw)\n    let length = xs[i].len()\n    let row = (TABLE)[i].len()\n    let rows = TABLE[i][0].len()\n    let item = (config::TABLE)[i].len()\n    let made = config::Type[u8].new()\n",
     );
     assert!(output.contains("let called = (xs[i])();"), "{output}");
-    assert!(output.contains("let parsed = raw.parse::<i32>();"), "{output}");
+    assert!(
+        output.contains("let parsed = raw.parse::<i32>();"),
+        "{output}"
+    );
     assert!(output.contains("let size = size_of::<u8>();"), "{output}");
-    assert!(output.contains("serde_json::from_str::<Config>(raw);"), "{output}");
+    assert!(
+        output.contains("serde_json::from_str::<Config>(raw);"),
+        "{output}"
+    );
     assert!(output.contains("let length = xs[i].len();"), "{output}");
     assert!(output.contains("let row = TABLE[i].len();"), "{output}");
     assert!(output.contains("let rows = TABLE[i][0].len();"), "{output}");
-    assert!(output.contains("let item = config::TABLE[i].len();"), "{output}");
-    assert!(output.contains("let made = config::Type::<u8>::new();"), "{output}");
+    assert!(
+        output.contains("let item = config::TABLE[i].len();"),
+        "{output}"
+    );
+    assert!(
+        output.contains("let made = config::Type::<u8>::new();"),
+        "{output}"
+    );
 
     let output = rust(
         "fn make() -> Vec[String] = Vec[String].new()\nfn empty() -> Vec[u8] = Vec[u8]::new()\nfn collect(iter: Iter) = iter.collect[Vec[String]]()\n",
@@ -95,9 +107,8 @@ fn demo():
 
 #[test]
 fn macro_rules_bodies_use_rust_tokens() {
-    let output = rust(
-        "macro_rules! make_message:\n    ($name:expr) => format!(\"hello {}\", $name)\n",
-    );
+    let output =
+        rust("macro_rules! make_message:\n    ($name:expr) => format!(\"hello {}\", $name)\n");
     assert!(output.contains("($name:expr) => { format!(\"hello {}\", $name) };"));
 }
 
@@ -106,8 +117,14 @@ fn type_lowering_reenters_expression_context_for_consts() {
     let output = rust(
         "fn bytes() -> [u8; (TABLE)[N].len()] = todo!()\nfn array() -> Array[u8, { size_of[T]() }] = todo!()\n",
     );
-    assert!(output.contains("fn bytes() -> [u8; TABLE[N].len()]"), "{output}");
-    assert!(output.contains("fn array() -> Array<u8, { size_of::<T>() }>"), "{output}");
+    assert!(
+        output.contains("fn bytes() -> [u8; TABLE[N].len()]"),
+        "{output}"
+    );
+    assert!(
+        output.contains("fn array() -> Array<u8, { size_of::<T>() }>"),
+        "{output}"
+    );
     assert!(!output.contains("TABLE<N>"));
     assert!(!output.contains("TABLE::"));
 }
@@ -118,7 +135,10 @@ fn rust_conversion_dots_paths_and_marks_generic_application() {
         "fn id<T>(x: Vec<T>) -> Option<T> {\n    std::mem::drop(x);\n    None\n}\n\nfn parse(value: &str) {\n    let _ = value.parse::<i32>();\n    let _ = std::mem::size_of::<Vec<u8>>();\n    let _ = Vec::<String>::new();\n    let _ = serde_json::from_str::<Config>(value);\n    let _ = [\"1\"].map(str::parse::<Vec<i32>>);\n    let _ = TABLE[0].len();\n    let _ = crate::config::TABLE[0].len();\n}\n",
     )
     .unwrap();
-    assert!(output.contains("fn id[T](x: Vec[T]) -> Option[T]:"), "{output}");
+    assert!(
+        output.contains("fn id[T](x: Vec[T]) -> Option[T]:"),
+        "{output}"
+    );
     assert!(output.contains("std.mem.drop(x)"), "{output}");
     assert!(output.contains("value.parse[i32]()"), "{output}");
     assert!(output.contains("std.mem.size_of[Vec[u8]]()"), "{output}");
@@ -190,14 +210,23 @@ fn method_brackets_before_a_call_are_generic_application() {
     let output = rust(
         "fn demo(iter: I, raw: &str, h: H, xs: X, i: usize, pair: P, 목록: L):\n    let a = iter.collect[Vec[i32]]()\n    let b = raw.parse[i32]()\n    let c = (h.handlers[i])()\n    let d = (xs[i])()\n    let e = h.handlers[i]\n    let f = 목록.변환[Vec[문자열]]()\n    let g = pair.0[i]()\n    let h = iter.map[u8, _](f).sum[u8]()\n",
     );
-    assert!(output.contains("let a = iter.collect::<Vec<i32>>();"), "{output}");
+    assert!(
+        output.contains("let a = iter.collect::<Vec<i32>>();"),
+        "{output}"
+    );
     assert!(output.contains("let b = raw.parse::<i32>();"), "{output}");
     assert!(output.contains("let c = (h.handlers[i])();"), "{output}");
     assert!(output.contains("let d = (xs[i])();"), "{output}");
     assert!(output.contains("let e = h.handlers[i];"), "{output}");
-    assert!(output.contains("let f = 목록.변환::<Vec<문자열>>();"), "{output}");
+    assert!(
+        output.contains("let f = 목록.변환::<Vec<문자열>>();"),
+        "{output}"
+    );
     assert!(output.contains("let g = pair.0[i]();"), "{output}");
-    assert!(output.contains("let h = iter.map::<u8, _>(f).sum::<u8>();"), "{output}");
+    assert!(
+        output.contains("let h = iter.map::<u8, _>(f).sum::<u8>();"),
+        "{output}"
+    );
 }
 
 #[test]
@@ -232,7 +261,8 @@ fn tab_errors_report_the_physical_line() {
 
 #[test]
 fn only_indentation_tabs_are_rejected_and_rust_indentation_tabs_expand() {
-    let output = rust("fn f() -> &'static str:\n    // a\tb\n    let s = \"x\ty\"\n    \"\n\tz\"\n");
+    let output =
+        rust("fn f() -> &'static str:\n    // a\tb\n    let s = \"x\ty\"\n    \"\n\tz\"\n");
     assert!(output.contains("// a\tb"), "{output}");
     assert!(output.contains("\"x\ty\""), "{output}");
     assert!(output.contains("\"\n\tz\""), "{output}");
@@ -247,7 +277,10 @@ fn rust_conversion_keeps_arrows_inside_generic_arguments() {
         "pub struct Handlers {\n    pub list: Vec<fn(i32) -> i32>,\n    pub named: HashMap<String, Box<dyn Fn(&str) -> Option<usize>>>,\n}\n",
     )
     .unwrap();
-    assert!(output.contains("pub list: Vec[fn(i32) -> i32]\n"), "{output}");
+    assert!(
+        output.contains("pub list: Vec[fn(i32) -> i32]\n"),
+        "{output}"
+    );
     assert!(
         output.contains("pub named: HashMap[String, Box[dyn Fn(&str) -> Option[usize]]]\n"),
         "{output}"
@@ -256,7 +289,8 @@ fn rust_conversion_keeps_arrows_inside_generic_arguments() {
 
 #[test]
 fn non_ascii_text_before_a_brace_does_not_panic() {
-    let output = rust("fn f(참: bool) -> i32:\n    if 참 {\n        1\n    } else {\n        2\n    }\n");
+    let output =
+        rust("fn f(참: bool) -> i32:\n    if 참 {\n        1\n    } else {\n        2\n    }\n");
     assert!(output.contains("    if 참 {\n"), "{output}");
     let _ = transpile("⳥{");
     assert!(rust_to_renk("fn f() {\n    let 값 = é {\n    };\n}\n").is_ok());
@@ -264,13 +298,20 @@ fn non_ascii_text_before_a_brace_does_not_panic() {
 
 #[test]
 fn rust_brace_else_lines_continue_the_brace_chain() {
-    let output = rust("fn pick(a: bool, b: bool) -> i32:\n    if a {\n        1\n    } else if b {\n        2\n    } else {\n        3\n    }\n");
+    let output = rust(
+        "fn pick(a: bool, b: bool) -> i32:\n    if a {\n        1\n    } else if b {\n        2\n    } else {\n        3\n    }\n",
+    );
     assert_eq!(
         output,
         "fn pick(a: bool, b: bool) -> i32 {\n    if a {\n        1\n    } else if b {\n        2\n    } else {\n        3\n    }\n}\n"
     );
-    let output = rust("fn pick(a: bool) -> usize:\n    let v = if a {\n        vec![1]\n    } else {\n        vec![]\n    }\n    v.len()\n");
-    assert!(output.contains("    } else {\n        vec![]\n    };\n"), "{output}");
+    let output = rust(
+        "fn pick(a: bool) -> usize:\n    let v = if a {\n        vec![1]\n    } else {\n        vec![]\n    }\n    v.len()\n",
+    );
+    assert!(
+        output.contains("    } else {\n        vec![]\n    };\n"),
+        "{output}"
+    );
 }
 
 #[test]
@@ -304,7 +345,10 @@ fn unclosed_groups_and_literals_at_end_of_file_are_errors() {
 #[test]
 fn block_headers_without_a_body_emit_an_empty_block() {
     assert_eq!(rust("fn main():\n"), "fn main() {\n}\n");
-    assert_eq!(rust("impl A:\n    fn f(&self):\n"), "impl A {\n    fn f(&self) {\n    }\n}\n");
+    assert_eq!(
+        rust("impl A:\n    fn f(&self):\n"),
+        "impl A {\n    fn f(&self) {\n    }\n}\n"
+    );
 }
 
 #[test]
@@ -318,7 +362,11 @@ fn formatting_drops_trailing_blank_lines() {
 fn raw_strings_stay_open_until_their_closing_hashes() {
     let source = "fn main():\n    let s = r#\"say \"\" \nhi\"#\n    print!(\"{s}\")\n";
     assert_eq!(format_source(source).unwrap(), source);
-    assert!(rust(source).contains("r#\"say \"\" \nhi\"#;"), "{}", rust(source));
+    assert!(
+        rust(source).contains("r#\"say \"\" \nhi\"#;"),
+        "{}",
+        rust(source)
+    );
 }
 
 #[test]
@@ -332,7 +380,10 @@ fn use_trees_lower_globs_and_groups() {
         "{output}"
     );
     assert!(output.contains("pub(crate) use crate::a::B;\n"), "{output}");
-    assert!(output.contains("const R: std::ops::Range<usize> = 0..2;"), "{output}");
+    assert!(
+        output.contains("const R: std::ops::Range<usize> = 0..2;"),
+        "{output}"
+    );
     assert!(output.contains("    x.len()\n"), "{output}");
 }
 
@@ -341,10 +392,7 @@ fn inline_function_bodies_can_open_a_block() {
     let inline = "impl A:\n    fn f(x: i32) -> i32 = match x:\n        1 => 2\n        _ =>:\n            let y = x\n            y * 3\n";
     let block = "impl A:\n    fn f(x: i32) -> i32:\n        match x:\n            1 => 2\n            _ =>:\n                let y = x\n                y * 3\n";
     assert_eq!(rust(inline), rust(block));
-    assert_eq!(
-        format_source(inline).unwrap(),
-        inline
-    );
+    assert_eq!(format_source(inline).unwrap(), inline);
 }
 
 #[test]
@@ -546,7 +594,6 @@ fn unused_block_values_end_with_statements() {
     ] {
         assert!(output.contains(expected), "missing {expected:?}\n{output}");
     }
-
 }
 
 #[test]
@@ -583,7 +630,10 @@ fn rust_conversion_keeps_std_macro_argument_receivers() {
         "vec![(xs[0])()];",
         "dbg!(std::cmp::Ordering::Less.reverse());",
     ] {
-        assert!(output.contains(expected), "missing {expected}\nRenk:\n{renk}\n{output}");
+        assert!(
+            output.contains(expected),
+            "missing {expected}\nRenk:\n{renk}\n{output}"
+        );
     }
 }
 
@@ -622,7 +672,10 @@ fn rust_conversion_keeps_bound_receivers_and_dots_paths() {
         "let re = regex::Regex::new(\"a\");",
         "env.len() + count + guid.Data1 as usize + TABLE[0].len()",
     ] {
-        assert!(output.contains(expected), "missing {expected}\nRenk:\n{renk}\n{output}");
+        assert!(
+            output.contains(expected),
+            "missing {expected}\nRenk:\n{renk}\n{output}"
+        );
     }
     for expected in [
         "env::args().count()",
@@ -821,7 +874,8 @@ fn empty_loop_bodies_stay_empty() {
 
 #[test]
 fn module_declarations_keep_their_semicolon() {
-    let renk = rust_to_renk("#[macro_use]\nmod backtrace;\npub(crate) mod chain;\nmod inline {}\n").unwrap();
+    let renk = rust_to_renk("#[macro_use]\nmod backtrace;\npub(crate) mod chain;\nmod inline {}\n")
+        .unwrap();
     let output = rust(&renk);
     assert_lines(&output, &["mod backtrace;\n", "pub(crate) mod chain;\n"]);
     assert!(!output.contains("; {"), "{output}");
@@ -855,7 +909,8 @@ fn comments_keep_format_arguments() {
 
 #[test]
 fn macro_rules_comments_keep_their_semicolons() {
-    let renk = rust_to_renk("macro_rules! m {\n    // m!(a);\n    ($a:expr) => { $a };\n}\n").unwrap();
+    let renk =
+        rust_to_renk("macro_rules! m {\n    // m!(a);\n    ($a:expr) => { $a };\n}\n").unwrap();
     assert_lines(&renk, &["    // m!(a);\n"]);
 }
 
@@ -957,7 +1012,10 @@ fn matches_whose_arms_end_with_values_end_with_a_semicolon() {
     );
     assert_lines(
         &output,
-        &["            } else {\n                2\n            }\n", "    };\n    g();\n"],
+        &[
+            "            } else {\n                2\n            }\n",
+            "    };\n    g();\n",
+        ],
     );
 }
 
@@ -1031,14 +1089,35 @@ fn blocks_opened_inside_groups_without_a_closing_line_are_errors() {
             "fn f(xs: &[i32]) -> usize:\n    xs\n        .iter()\n        .filter(|x|:\n            **x > 0\n        .count()\n",
             4,
         ),
-        ("fn f() -> usize:\n    xs.map(|x|:\n        1\n    ]\n    2\n", 4),
-        ("fn f() -> usize:\n    xs.map(|x|:\n        1\n    }\n    2\n", 4),
-        ("fn f() -> usize:\n    xs.map(|x|:\n        1\n    ))\n    2\n", 4),
-        ("fn f() -> usize:\n    xs.map(|x| {\n        1\n    }\n    2\n", 4),
-        ("fn f() -> u8:\n    let s = S { a: g(|x| {\n        x\n    })\n    s.a\n", 4),
+        (
+            "fn f() -> usize:\n    xs.map(|x|:\n        1\n    ]\n    2\n",
+            4,
+        ),
+        (
+            "fn f() -> usize:\n    xs.map(|x|:\n        1\n    }\n    2\n",
+            4,
+        ),
+        (
+            "fn f() -> usize:\n    xs.map(|x|:\n        1\n    ))\n    2\n",
+            4,
+        ),
+        (
+            "fn f() -> usize:\n    xs.map(|x| {\n        1\n    }\n    2\n",
+            4,
+        ),
+        (
+            "fn f() -> u8:\n    let s = S { a: g(|x| {\n        x\n    })\n    s.a\n",
+            4,
+        ),
         ("fn f() -> u8:\n    let x = 1\n    , |y|:\n        y\n", 3),
-        ("fn f(c: bool) -> u8:\n    if c:\n        1;\n    , |y|:\n        y\n    0\n", 4),
-        ("fn f(c: bool) -> u8:\n    if c {\n        1;\n    }, |y| {\n        y\n    }\n    0\n", 4),
+        (
+            "fn f(c: bool) -> u8:\n    if c:\n        1;\n    , |y|:\n        y\n    0\n",
+            4,
+        ),
+        (
+            "fn f(c: bool) -> u8:\n    if c {\n        1;\n    }, |y| {\n        y\n    }\n    0\n",
+            4,
+        ),
     ] {
         let error = transpile(source).expect_err(source);
         assert_eq!(error.line, line, "{source:?}: {error}");
@@ -1077,7 +1156,9 @@ fn multi_line_headers_end_with_a_colon_on_their_last_line() {
         "trait Show {\n    fn show<T>(&self, value: T)\n    where\n        T: Copy;\n    fn name(&self) -> String;\n}\n"
     );
     assert_eq!(
-        rust("fn f(b: bool) -> u8:\n    let y =\n        if b:\n            1\n        else:\n            2\n    y\n"),
+        rust(
+            "fn f(b: bool) -> u8:\n    let y =\n        if b:\n            1\n        else:\n            2\n    y\n"
+        ),
         "fn f(b: bool) -> u8 {\n    let y =\n        if b {\n            1\n        } else {\n            2\n        };\n    y\n}\n"
     );
     assert_eq!(
@@ -1097,13 +1178,20 @@ fn multi_line_headers_end_with_a_colon_on_their_last_line() {
         "fn h<T>(t: T)\n    -> u8\nwhere T: Into<Result<u8, ()>>,\n{\n    0\n}\n"
     );
     assert_eq!(
-        rust("fn f(b: &str) -> u8:\n    let y =\n        if b == \"=>\":\n            1\n        else:\n            2\n    y\n"),
+        rust(
+            "fn f(b: &str) -> u8:\n    let y =\n        if b == \"=>\":\n            1\n        else:\n            2\n    y\n"
+        ),
         "fn f(b: &str) -> u8 {\n    let y =\n        if b == \"=>\" {\n            1\n        } else {\n            2\n        };\n    y\n}\n"
     );
     let raw = "fn s() -> usize:\n    let c = vec![\n        {\n        },\n    ]\n    c.len()\n";
-    assert!(rust(raw).contains("        {\n        },\n"), "{}", rust(raw));
+    assert!(
+        rust(raw).contains("        {\n        },\n"),
+        "{}",
+        rust(raw)
+    );
     assert_eq!(
-        rust_to_renk("pub trait Bits:\n    Clone\n    + Copy\n{\n    const ONE: Self;\n}\n").unwrap(),
+        rust_to_renk("pub trait Bits:\n    Clone\n    + Copy\n{\n    const ONE: Self;\n}\n")
+            .unwrap(),
         "pub trait Bits: Clone + Copy:\n    const ONE: Self;\n"
     );
     for source in [
@@ -1152,7 +1240,9 @@ fn equals_signs_inside_signature_generics_do_not_start_a_body() {
         "fn f() -> impl Fn(u8) -> Box<dyn Iterator<Item = u8>> {\n    |x| g(x >= 1)\n}\n"
     );
     assert_eq!(
-        rust("pub trait Items:\n    fn items(&self) -> Box<dyn Iterator<Item = u8>>\n    fn one(&self) -> u8 = 1\n"),
+        rust(
+            "pub trait Items:\n    fn items(&self) -> Box<dyn Iterator<Item = u8>>\n    fn one(&self) -> u8 = 1\n"
+        ),
         "pub trait Items {\n    fn items(&self) -> Box<dyn Iterator<Item = u8>>;\n    fn one(&self) -> u8 {\n        1\n    }\n}\n"
     );
 }
@@ -1230,7 +1320,9 @@ fn closing_lines_continue_after_closing_braces_opened_in_the_head() {
         "fn f() -> u8 {\n    S { a: g(|x| {\n        x\n    })}.a\n}\n"
     );
     assert_eq!(
-        rust("fn f(xs: &[u8]) -> Vec[P]:\n    xs.iter().map(|x| P { v: x.min(match x:\n        0 => &1\n        _ => x\n    })}).collect()\n"),
+        rust(
+            "fn f(xs: &[u8]) -> Vec[P]:\n    xs.iter().map(|x| P { v: x.min(match x:\n        0 => &1\n        _ => x\n    })}).collect()\n"
+        ),
         "fn f(xs: &[u8]) -> Vec<P> {\n    xs.iter().map(|x| P { v: x.min(match x {\n        0 => &1,\n        _ => x,\n    })}).collect()\n}\n"
     );
 }
@@ -1246,7 +1338,9 @@ fn if_and_match_heads_inside_open_groups_own_their_blocks() {
         "fn f(a: u8) -> [u8; 1] {\n    [match a {\n        0 => 1,\n        _ => 2,\n    }]\n}\n"
     );
     assert_eq!(
-        rust("fn f(c: bool) -> u8:\n    let v = g(1, if c:\n        1\n    else:\n        2\n    )\n    v\n"),
+        rust(
+            "fn f(c: bool) -> u8:\n    let v = g(1, if c:\n        1\n    else:\n        2\n    )\n    v\n"
+        ),
         "fn f(c: bool) -> u8 {\n    let v = g(1, if c {\n        1\n    } else {\n        2\n    });\n    v\n}\n"
     );
 }
@@ -1272,7 +1366,9 @@ fn one_line_else_branches_close_what_their_chain_head_opened() {
         "fn f(c: bool) -> u8 {\n    max(if c {\n        1\n    } else { 2 }, 3) // )\n}\n"
     );
     assert_eq!(
-        rust("fn f(c: bool) -> u8:\n    let v = g(if c:\n        1\n    else if C then 3 else 2).min(X)\n    v\n"),
+        rust(
+            "fn f(c: bool) -> u8:\n    let v = g(if c:\n        1\n    else if C then 3 else 2).min(X)\n    v\n"
+        ),
         "fn f(c: bool) -> u8 {\n    let v = g(if c {\n        1\n    } else if C { 3 } else { 2 }).min(X);\n    v\n}\n"
     );
 }
@@ -1280,11 +1376,15 @@ fn one_line_else_branches_close_what_their_chain_head_opened() {
 #[test]
 fn closure_bodies_take_if_heads_and_inline_ifs() {
     assert_eq!(
-        rust("fn f(xs: &[u8]) -> Vec[u8]:\n    xs.iter().map(|x| if *x > 0:\n        1\n    else { 2 }).collect()\n"),
+        rust(
+            "fn f(xs: &[u8]) -> Vec[u8]:\n    xs.iter().map(|x| if *x > 0:\n        1\n    else { 2 }).collect()\n"
+        ),
         "fn f(xs: &[u8]) -> Vec<u8> {\n    xs.iter().map(|x| if *x > 0 {\n        1\n    } else { 2 }).collect()\n}\n"
     );
     assert_eq!(
-        rust("fn f(xs: &[u8]) -> Vec[u8]:\n    xs.iter().map(|X| if X > &0 then 1 else 2).collect()\n"),
+        rust(
+            "fn f(xs: &[u8]) -> Vec[u8]:\n    xs.iter().map(|X| if X > &0 then 1 else 2).collect()\n"
+        ),
         "fn f(xs: &[u8]) -> Vec<u8> {\n    xs.iter().map(|X| if X > &0 { 1 } else { 2 }).collect()\n}\n"
     );
 }
@@ -1316,7 +1416,10 @@ fn where_clauses_keep_one_comma_before_a_trailing_block_comment() {
 fn rust_conversion_keeps_unbound_receivers_values() {
     let source = "fn f(point: P) -> u8 {\n    x.y = items.a(|d| d) + point.x;\n    x.y\n}\n";
     let renk = rust_to_renk(source).unwrap();
-    assert!(renk.contains("(x).y = (items).a(|d| d) + point.x"), "{renk}");
+    assert!(
+        renk.contains("(x).y = (items).a(|d| d) + point.x"),
+        "{renk}"
+    );
     assert_eq!(rust(&renk), source, "{renk}");
     // A bound receiver beside a path ending in its name, as in `foo_x::y`, an unbound raw
     // identifier, and a macro body, whose parameters are not bindings, all round-trip as written.
@@ -1638,7 +1741,10 @@ fn view_blocks_keep_their_layout_and_own_closure_parameters() {
         output,
         "use std::fs;\n\nfn f(n: Cell<u8>) {\n    let v = view! {\n        <b on:click=move |fs| fs.get()></b>\n        <i on:click=move |_| { // head\n\n            fs::read(\"y\");\n            n.set(2) }></i>\n        <p>{ n.get()\n            + 1\n\n        }</p>\n    };\n}\n"
     );
-    assert_eq!(rust_to_renk(&output).unwrap().matches('\n').count(), source.matches('\n').count());
+    assert_eq!(
+        rust_to_renk(&output).unwrap().matches('\n').count(),
+        source.matches('\n').count()
+    );
     assert_eq!(format_source(source).unwrap(), source);
 }
 
@@ -1651,7 +1757,9 @@ fn colon_blocks_in_view_blocks_lower_with_their_closing_lines() {
         output,
         "fn f(n: Cell<u8>) {\n    view! {\n        <d on:click=move |_| {\n\n            if n.get() > 1 {\n                n.set(0);\n            }\n            n.set(Cell::new(2).get())\n\n        }></d>\n    }\n}\n"
     );
-    let output = rust("fn f(n: u8):\n    view! {\n        <d>{ if n > 1:\n\n            n.max(0)\n        else:\n            n\n        }</d>\n    }\n");
+    let output = rust(
+        "fn f(n: u8):\n    view! {\n        <d>{ if n > 1:\n\n            n.max(0)\n        else:\n            n\n        }</d>\n    }\n",
+    );
     assert!(
         output.contains("<d>{ if n > 1 {\n\n            n.max(0)\n        } else {\n            n\n        }\n        }</d>"),
         "{output}"
@@ -1660,8 +1768,14 @@ fn colon_blocks_in_view_blocks_lower_with_their_closing_lines() {
     let output = rust(
         "fn f(n: u8):\n    view! {\n        <c>{ n.set(1)\n            n.set(2)\n        }</c>\n        <c>{move || n.get()\n            .max(1)\n        }</c>\n    }\n",
     );
-    assert!(output.contains("<c>{ n.set(1);\n            n.set(2)\n"), "{output}");
-    assert!(output.contains("<c>{move || n.get()\n            .max(1)\n"), "{output}");
+    assert!(
+        output.contains("<c>{ n.set(1);\n            n.set(2)\n"),
+        "{output}"
+    );
+    assert!(
+        output.contains("<c>{move || n.get()\n            .max(1)\n"),
+        "{output}"
+    );
 }
 
 #[test]
