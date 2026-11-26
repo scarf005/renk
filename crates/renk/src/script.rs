@@ -255,19 +255,26 @@ pub fn script_cache_path(cache_root: &Path, source_path: &Path) -> PathBuf {
 
 /// The column of `script` that the character at `column` of `rust` came from: the same character
 /// where the lines match, or where renk inserted or rewrote text, the script column it replaces.
+/// A column at or past the end of `rust` gives the end of the last `script` text that `rust`
+/// matches or rewrites, before text that only `script` has, such as a `;` that renk wrote.
 pub fn script_column(script: &str, rust: &str, column: usize) -> usize {
-    TextDiff::from_chars(script, rust)
+    let ops: Vec<_> = TextDiff::from_chars(script, rust)
         .ops()
         .iter()
         .map(similar::DiffOp::as_tag_tuple)
+        .collect();
+    match ops
+        .iter()
         .find(|(_, _, generated)| generated.contains(&column))
-        .map_or(
-            script.chars().count(),
-            |(tag, written, generated)| match tag {
-                DiffTag::Equal => written.start + column - generated.start,
-                _ => written.start,
-            },
-        )
+    {
+        Some((DiffTag::Equal, written, generated)) => written.start + column - generated.start,
+        Some((_, written, _)) => written.start,
+        None => ops
+            .iter()
+            .rev()
+            .find(|(_, _, generated)| !generated.is_empty())
+            .map_or(0, |(_, written, _)| written.end),
+    }
 }
 
 /// A `.` between two names in Renk code, as in `a.b`, and how renk read it. Ranges count the
