@@ -1,0 +1,86 @@
+========================================
+unicode identifiers
+========================================
+
+let 참 = 목록
+
+----------------------------------------
+
+(source_file
+  (keyword)
+  (identifier)
+  (operator)
+  (identifier))
+
+========================================
+constants and types
+========================================
+
+MAX Some Vec[u8] T MAX_LEN
+
+----------------------------------------
+
+(source_file
+  (constant)
+  (type_identifier)
+  (type_identifier)
+  (bracket_group
+    (builtin_type))
+  (type_identifier)
+  (constant))
+
+========================================
+then is a keyword
+========================================
+
+if a then b else c
+
+----------------------------------------
+
+(source_file
+  (keyword)
+  (identifier)
+  (keyword)
+  (identifier)
+  (keyword)
+  (identifier))
+
+========================================
+union as a method name
+========================================
+
+a.union(b)
+
+----------------------------------------
+
+(source_file
+  (identifier)
+  (operator)
+  (identifier)
+  (paren_group
+    (identifier)))
+
+========================================
+macro names
+========================================
+
+println!("x")
+macro_rules! keep:
+    ($v:expr) => $v
+
+----------------------------------------
+
+(source_file
+  (macro_identifier)
+  (paren_group
+    (string))
+  (macro_header
+    (macro_identifier)
+    (identifier))
+  (operator)
+  (paren_group
+    (macro_variable)
+    (operator)
+    (identifier))
+  (operator)
+  (macro_variable))

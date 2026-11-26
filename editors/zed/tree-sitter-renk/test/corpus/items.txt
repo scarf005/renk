@@ -1,0 +1,167 @@
+========================================
+trait and impl
+========================================
+
+pub trait Named:
+    fn name(&self) -> &str
+
+impl Named for User:
+    fn name(&self) -> &str = &self.name
+
+----------------------------------------
+
+(source_file
+  (keyword)
+  (item_header
+    (keyword)
+    (type_identifier))
+  (operator)
+  (item_header
+    (keyword)
+    (identifier))
+  (paren_group
+    (operator)
+    (keyword))
+  (operator)
+  (operator)
+  (builtin_type)
+  (impl_header
+    (keyword)
+    (type_identifier)
+    (keyword)
+    (type_identifier))
+  (operator)
+  (item_header
+    (keyword)
+    (identifier))
+  (paren_group
+    (operator)
+    (keyword))
+  (operator)
+  (operator)
+  (builtin_type)
+  (operator)
+  (operator)
+  (keyword)
+  (operator)
+  (identifier))
+
+========================================
+item headers
+========================================
+
+struct A:
+enum B:
+union C:
+mod m:
+type T = u8
+const MAX: u8 = 1
+static NAMES: u8 = 1
+macro_rules! keep:
+
+----------------------------------------
+
+(source_file
+  (item_header
+    (keyword)
+    (type_identifier))
+  (operator)
+  (item_header
+    (keyword)
+    (type_identifier))
+  (operator)
+  (item_header
+    (keyword)
+    (type_identifier))
+  (operator)
+  (item_header
+    (keyword)
+    (identifier))
+  (operator)
+  (item_header
+    (keyword)
+    (type_identifier))
+  (operator)
+  (builtin_type)
+  (item_header
+    (keyword)
+    (constant))
+  (operator)
+  (builtin_type)
+  (operator)
+  (number)
+  (item_header
+    (keyword)
+    (constant))
+  (operator)
+  (builtin_type)
+  (operator)
+  (number)
+  (macro_header
+    (macro_identifier)
+    (identifier))
+  (operator))
+
+========================================
+impl with generics
+========================================
+
+impl['a] Borrowed['a]:
+
+----------------------------------------
+
+(source_file
+  (impl_header
+    (keyword)
+    (bracket_group
+      (lifetime))
+    (type_identifier))
+  (bracket_group
+    (lifetime))
+  (operator))
+
+========================================
+impl after an arrow and in parameters is no item
+========================================
+
+fn f(x: &impl Named) -> impl Named:
+    x
+
+----------------------------------------
+
+(source_file
+  (item_header
+    (keyword)
+    (identifier))
+  (paren_group
+    (identifier)
+    (operator)
+    (operator)
+    (keyword)
+    (type_identifier))
+  (return_impl
+    (operator)
+    (keyword))
+  (type_identifier)
+  (operator)
+  (identifier))
+
+========================================
+closure and fn types are no items
+========================================
+
+let f: fn(i32) -> i32 = g
+
+----------------------------------------
+
+(source_file
+  (keyword)
+  (identifier)
+  (operator)
+  (keyword)
+  (paren_group
+    (builtin_type))
+  (operator)
+  (builtin_type)
+  (operator)
+  (identifier))

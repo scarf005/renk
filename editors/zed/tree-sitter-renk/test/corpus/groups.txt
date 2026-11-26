@@ -1,0 +1,58 @@
+========================================
+nested groups
+========================================
+
+f(a, [b, {c}])
+
+----------------------------------------
+
+(source_file
+  (identifier)
+  (paren_group
+    (identifier)
+    (punctuation)
+    (bracket_group
+      (identifier)
+      (punctuation)
+      (brace_group
+        (identifier)))))
+
+========================================
+strings hide brackets
+========================================
+
+f("(", ')', "]")
+
+----------------------------------------
+
+(source_file
+  (identifier)
+  (paren_group
+    (string)
+    (punctuation)
+    (char)
+    (punctuation)
+    (string)))
+
+========================================
+unclosed brace ends at the enclosing group
+========================================
+
+g(if c {
+    1
+else:
+    2
+)
+
+----------------------------------------
+
+(source_file
+  (identifier)
+  (paren_group
+    (keyword)
+    (identifier)
+    (brace_group
+      (number)
+      (keyword)
+      (operator)
+      (number))))

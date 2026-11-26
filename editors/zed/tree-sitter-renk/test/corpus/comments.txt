@@ -1,0 +1,61 @@
+========================================
+line comment
+========================================
+
+// if let match
+let x = 1 // trailing
+
+----------------------------------------
+
+(source_file
+  (line_comment)
+  (keyword)
+  (identifier)
+  (operator)
+  (number)
+  (line_comment))
+
+========================================
+nested block comment
+========================================
+
+/* a /* b */ if let match */
+let x = 1
+
+----------------------------------------
+
+(source_file
+  (block_comment)
+  (keyword)
+  (identifier)
+  (operator)
+  (number))
+
+========================================
+block comment between tokens
+========================================
+
+a /* x */ + b
+
+----------------------------------------
+
+(source_file
+  (identifier)
+  (block_comment)
+  (operator)
+  (identifier))
+
+========================================
+slash operators
+========================================
+
+a / b /= c
+
+----------------------------------------
+
+(source_file
+  (identifier)
+  (operator)
+  (identifier)
+  (operator)
+  (identifier))

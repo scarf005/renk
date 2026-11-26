@@ -1,0 +1,154 @@
+========================================
+string spans lines and keeps keywords inside
+========================================
+
+let s = "tail
+if let match
+  \"quoted\""
+
+----------------------------------------
+
+(source_file
+  (keyword)
+  (identifier)
+  (operator)
+  (string))
+
+========================================
+raw strings with any number of hashes
+========================================
+
+r"a"
+r#"say "hi" "#
+r##"a "# b"##
+r#"two
+lines if"#
+
+----------------------------------------
+
+(source_file
+  (raw_string)
+  (raw_string)
+  (raw_string)
+  (raw_string))
+
+========================================
+byte and C strings
+========================================
+
+b"bytes"
+c"cstr"
+br#"raw"#
+cr"raw"
+
+----------------------------------------
+
+(source_file
+  (string)
+  (string)
+  (raw_string)
+  (raw_string))
+
+========================================
+raw prefix is an identifier when no quote follows
+========================================
+
+let radius = r + br
+
+----------------------------------------
+
+(source_file
+  (keyword)
+  (identifier)
+  (operator)
+  (identifier)
+  (operator)
+  (identifier))
+
+========================================
+char literals
+========================================
+
+'a' '\n' '\u{1F600}' '\'' b'x'
+
+----------------------------------------
+
+(source_file
+  (char)
+  (char)
+  (char)
+  (char)
+  (char))
+
+========================================
+lifetimes and labels
+========================================
+
+&'a str
+&'static str
+'outer: loop:
+    break 'outer
+
+----------------------------------------
+
+(source_file
+  (operator)
+  (lifetime)
+  (builtin_type)
+  (operator)
+  (lifetime)
+  (builtin_type)
+  (lifetime)
+  (operator)
+  (keyword)
+  (operator)
+  (keyword)
+  (lifetime))
+
+========================================
+macro variables
+========================================
+
+($x:expr) => $x + $y
+
+----------------------------------------
+
+(source_file
+  (paren_group
+    (macro_variable)
+    (operator)
+    (identifier))
+  (operator)
+  (macro_variable)
+  (operator)
+  (macro_variable))
+
+========================================
+number suffixes and exponents
+========================================
+
+0xff_u8 1e3 1.5e-3f64 0b1010 0o17 7usize 1_000
+
+----------------------------------------
+
+(source_file
+  (number)
+  (number)
+  (number)
+  (number)
+  (number)
+  (number)
+  (number))
+
+========================================
+range after a number stays split
+========================================
+
+0..2
+
+----------------------------------------
+
+(source_file
+  (number)
+  (operator)
+  (number))
