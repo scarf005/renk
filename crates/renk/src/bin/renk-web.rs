@@ -67,6 +67,8 @@ struct AppState {
     run_deps: PathBuf,
     /// `Host` header values that `/api/run` accepts.
     hosts: Vec<String>,
+    /// The number of runs in progress. Each test server has its own counter.
+    active_runs: &'static AtomicUsize,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -161,6 +163,7 @@ async fn main() -> std::io::Result<()> {
             listener.local_addr()?,
             &env::var("RENK_WEB_HOSTS").unwrap_or_default(),
         ),
+        active_runs: &ACTIVE_RUNS,
     };
     become_child_subreaper();
     log_namespace_support(state.config.sandbox)?;
@@ -321,7 +324,7 @@ async fn handle_run_request(
             json!({ "error": "run rate limit exceeded" }),
         );
     }
-    let Some(_permit) = try_acquire(&ACTIVE_RUNS, state.config.max_concurrent_runs) else {
+    let Some(permit) = try_acquire(state.active_runs, state.config.max_concurrent_runs) else {
         return json_response(
             StatusCode::SERVICE_UNAVAILABLE,
             json!({ "error": "too many active runs" }),
@@ -349,8 +352,13 @@ async fn handle_run_request(
         sandbox: state.config.sandbox,
     };
     let run_deps = state.run_deps.clone();
-    match tokio::task::spawn_blocking(move || compile_and_run_rust(&rust, options, &run_deps)).await
-    {
+    // Axum drops the handler when the client goes away or the request times out. The job keeps
+    // the permit until its programs are gone.
+    let job = move || {
+        let _permit = permit;
+        compile_and_run_rust(&rust, options, &run_deps)
+    };
+    match tokio::task::spawn_blocking(job).await {
         Ok(Ok(response)) => json_response(StatusCode::OK, run_response_json(response)),
         Ok(Err(error)) => json_response(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -1048,6 +1056,7 @@ mod tests {
                 "0.0.0.0:8080".parse().unwrap(),
                 "renk.example.com, Other.example:8443",
             ),
+            active_runs: Box::leak(Box::default()),
         }
     }
 
@@ -1504,9 +1513,10 @@ mod tests {
     #[tokio::test]
     async fn runs_keep_their_permit_after_the_request_is_gone() {
         let dist = temp_dir("permit");
-        let mut state = state(&dist, 10);
+        let mut state = state(&dist, usize::MAX);
         state.run_deps = dist.clone();
         state.config.request_timeout = Duration::from_millis(100);
+        let active_runs = state.active_runs;
         let app = router(state);
         // rustc reads an `--extern` crate only when the code uses it, so an empty file is enough.
         fs::write(dist.join("libtrpl-0.rlib"), "").unwrap();
@@ -1527,7 +1537,7 @@ mod tests {
             )
         );
         let deadline = Instant::now() + Duration::from_secs(30);
-        while ACTIVE_RUNS.load(Ordering::Acquire) > 0 {
+        while active_runs.load(Ordering::Acquire) > 0 {
             assert!(Instant::now() < deadline, "the run kept its permit");
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
