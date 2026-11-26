@@ -122,8 +122,23 @@ impl LanguageServer for Backend {
     }
 
     async fn shutdown(&self) -> Result<()> {
-        if let Some(rust_analyzer) = self.rust_analyzer.read().await.as_ref() {
-            let _ = rust_analyzer.request("shutdown", ()).await;
+        let mut rust_analyzers = self
+            .rust_analyzer
+            .read()
+            .await
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        for (rust_analyzer, _) in self.opened.read().await.values() {
+            if !rust_analyzers
+                .iter()
+                .any(|known| Arc::ptr_eq(known, rust_analyzer))
+            {
+                rust_analyzers.push(rust_analyzer.clone());
+            }
+        }
+        for rust_analyzer in rust_analyzers {
+            rust_analyzer.stop().await;
         }
         Ok(())
     }
@@ -1040,6 +1055,15 @@ impl RustAnalyzerClient {
         let _ = self.child.lock().await.kill().await;
     }
 
+    /// Asks rust-analyzer to shut down and exit, and then stops it, killing it unless it exited
+    /// within a second.
+    async fn stop(&self) {
+        let _ = self.request("shutdown", ()).await;
+        self.notify("exit", ()).await;
+        let _ = tokio::time::timeout(Duration::from_secs(1), self.child.lock().await.wait()).await;
+        self.end().await;
+    }
+
     /// Starts rust-analyzer, which sends its notifications to `notifications`. A rust-analyzer
     /// that does not answer `initialize` within the request timeout is stopped, and kept, so that
     /// [`Self::restarts`] holds back the next start.
@@ -1261,6 +1285,10 @@ async fn read_rust_analyzer_messages(
 async fn read_lsp_message<R: tokio::io::AsyncBufRead + Unpin>(
     reader: &mut R,
 ) -> Option<serde_json::Value> {
+    serde_json::from_slice(&read_lsp_body(reader).await?).ok()
+}
+
+async fn read_lsp_body<R: tokio::io::AsyncBufRead + Unpin>(reader: &mut R) -> Option<Vec<u8>> {
     let mut content_length = None;
     loop {
         let mut line = String::new();
@@ -1278,19 +1306,53 @@ async fn read_lsp_message<R: tokio::io::AsyncBufRead + Unpin>(
 
     let mut body = vec![0; content_length?];
     reader.read_exact(&mut body).await.ok()?;
-    serde_json::from_slice(&body).ok()
+    Some(body)
 }
 
 async fn write_lsp_message<W: tokio::io::AsyncWrite + Unpin>(
     writer: &mut W,
     message: &serde_json::Value,
 ) -> std::io::Result<()> {
-    let body = serde_json::to_vec(message)?;
+    write_lsp_body(writer, &serde_json::to_vec(message)?).await
+}
+
+async fn write_lsp_body<W: tokio::io::AsyncWrite + Unpin>(
+    writer: &mut W,
+    body: &[u8],
+) -> std::io::Result<()> {
     writer
         .write_all(format!("Content-Length: {}\r\n\r\n", body.len()).as_bytes())
         .await?;
-    writer.write_all(&body).await?;
+    writer.write_all(body).await?;
     writer.flush().await
+}
+
+/// Passes the editor's messages from `stdin` on to `server`, tower-lsp's input, and ends that
+/// input after `exit`: tower-lsp stops only when its input ends. A `null` `params` is left out,
+/// because tower-lsp refuses any `params` of a method that takes none, such as `shutdown`.
+async fn forward_editor_messages(
+    stdin: impl tokio::io::AsyncRead + Unpin,
+    mut server: impl tokio::io::AsyncWrite + Unpin,
+) {
+    let mut reader = BufReader::new(stdin);
+    while let Some(body) = read_lsp_body(&mut reader).await {
+        let message = serde_json::from_slice::<serde_json::Value>(&body);
+        let exit = message
+            .as_ref()
+            .is_ok_and(|message| message["method"] == "exit");
+        let body = match message {
+            Ok(serde_json::Value::Object(mut message))
+                if message.get("params") == Some(&serde_json::Value::Null) =>
+            {
+                message.remove("params");
+                serde_json::to_vec(&message).unwrap_or(body)
+            }
+            _ => body,
+        };
+        if write_lsp_body(&mut server, &body).await.is_err() || exit {
+            break;
+        }
+    }
 }
 
 fn source_root_uri(params: &InitializeParams) -> Option<Url> {
@@ -4210,8 +4272,10 @@ mod tests {
 
 #[tokio::main]
 async fn main() {
-    let stdin = tokio::io::stdin();
-    let stdout = tokio::io::stdout();
+    let (input, server_input) = tokio::io::duplex(1 << 16);
+    tokio::spawn(forward_editor_messages(tokio::io::stdin(), input));
     let (service, socket) = LspService::new(Backend::new);
-    Server::new(stdin, stdout, socket).serve(service).await;
+    Server::new(server_input, tokio::io::stdout(), socket)
+        .serve(service)
+        .await;
 }
