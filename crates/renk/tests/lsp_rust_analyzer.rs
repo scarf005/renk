@@ -598,6 +598,35 @@ fn rust_analyzer_diagnostics_go_when_rust_analyzer_dies() {
     session.diagnostics_until(&uri, <[Value]>::is_empty);
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn rust_analyzer_ends_when_the_editor_exits_without_shutdown() {
+    let Some(mut session) = Session::open("lsp-exit", MAIN) else {
+        return;
+    };
+    let main = session.uri("src/main.rk");
+    let hover = json!({"textDocument": {"uri": main}, "position": position(6, 13)});
+    session.request_until("textDocument/hover", hover, |hover| {
+        hover["contents"].to_string().contains("i32")
+    });
+    let children = lsp::rust_analyzer_children(session.server.id());
+    assert_eq!(children.len(), 1, "{children:?}");
+    session.notify("exit", Value::Null);
+    let gone = || {
+        fs::read_to_string(format!("/proc/{}/stat", children[0]))
+            .map_or(true, |stat| stat.contains(") Z "))
+    };
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !(session.server.try_wait().unwrap().is_some() && gone()) && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(100));
+    }
+    assert!(
+        session.server.try_wait().unwrap().is_some(),
+        "renk-lsp runs"
+    );
+    assert!(gone(), "rust-analyzer {} runs", children[0]);
+}
+
 #[test]
 fn rust_analyzer_diagnostics_go_while_the_renk_text_does_not_transpile() {
     let main = format!("{MAIN}    let wrong: u8 = \"text\"\n");
