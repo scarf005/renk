@@ -299,6 +299,19 @@ fn cargo_check_type_errors_appear_at_the_renk_line_after_save() {
 }
 
 #[test]
+fn cargo_check_errors_in_a_one_line_function_cover_the_renk_text() {
+    // Renk writes the body after `=` on a Rust line of its own.
+    let main = format!("{MAIN}fn g(x: i32) -> i32 = x + nope\n");
+    let Some(mut session) = Session::open("lsp-check-one-line", &main) else {
+        return;
+    };
+    let uri = session.uri("src/main.rk");
+    let errors = session.check_errors(&uri, &uri);
+    let error = errors.iter().find(|error| error["code"] == "E0425");
+    assert_eq!(error.unwrap()["range"], range(9, 26, 30), "{errors:?}");
+}
+
+#[test]
 fn cargo_check_on_save_reads_modules_changed_outside_the_editor() {
     let Some(mut session) = Session::open("lsp-check-disk", MAIN) else {
         return;
