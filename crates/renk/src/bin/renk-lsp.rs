@@ -3379,6 +3379,58 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn drops_code_actions_that_change_nothing_or_do_not_transpile_back() {
+        let (service, _socket) = LspService::new(Backend::new);
+        let backend = service.inner();
+        let uri = module_uri("src/act.rk");
+        let source = "fn main():\n    let 값 = 1\n    println!(\"{값} {}\", 값 + 1)\n";
+        let (rust_analyzer, mut sent) = open_module(backend, &uri, source).await;
+        let rust_uri = module_uri("target/renk/open.rs");
+        let action = |title: &str, edits: serde_json::Value| {
+            serde_json::json!({
+                "title": title,
+                "edit": {"documentChanges": [{"textDocument": {"uri": rust_uri, "version": null}, "edits": edits}]},
+            })
+        };
+        let edit = |line, start, end, text: &str| serde_json::json!({"range": Range::new(Position::new(line, start), Position::new(line, end)), "newText": text});
+        let actions = serde_json::json!([
+            action(
+                "Add explicit type",
+                serde_json::json!([edit(2, 9, 9, ": i32")])
+            ),
+            action("Extract format expressions", serde_json::json!([])),
+            // rust-analyzer's expansion of `println!` converts to a block whose `}` renk drops.
+            action(
+                "Inline macro",
+                serde_json::json!([{
+                    "range": Range::new(Position::new(3, 0), Position::new(4, 0)),
+                    "newText": "    {\n        std::io::_print(std::format_args_nl!(\"{값} {}\", 값 + 1));\n    };\n",
+                }]),
+            ),
+        ]);
+        let params = CodeActionParams {
+            text_document: TextDocumentIdentifier::new(uri.clone()),
+            range: Range::new(Position::new(2, 4), Position::new(2, 4)),
+            context: Default::default(),
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+        };
+        let (actions, ()) = tokio::join!(
+            backend.code_action(params),
+            answer(&rust_analyzer, &mut sent, actions)
+        );
+        let actions = actions.unwrap().unwrap();
+        let titles = actions
+            .iter()
+            .map(|action| match action {
+                CodeActionOrCommand::CodeAction(action) => action.title.as_str(),
+                CodeActionOrCommand::Command(command) => command.title.as_str(),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(titles, ["Add explicit type"], "{actions:?}");
+    }
+
     /// The outline of `source` as a module in this crate.
     async fn document_symbols(source: &str) -> Vec<DocumentSymbol> {
         let (service, _socket) = LspService::new(Backend::new);

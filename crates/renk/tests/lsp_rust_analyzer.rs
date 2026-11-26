@@ -549,3 +549,40 @@ fn rust_analyzer_diagnostics_go_while_the_renk_text_does_not_transpile() {
         "{fixed:?}"
     );
 }
+
+#[test]
+fn leaves_out_code_actions_that_change_nothing_or_do_not_transpile_back() {
+    let main = "fn main():\n    let a = 1\n    println!(\"{a} {}\", a + 1)\n";
+    let Some(mut session) = Session::open("lsp-dropped-code-actions", main) else {
+        return;
+    };
+    let uri = session.uri("src/main.rk");
+    let titles = |actions: &Value| {
+        actions.as_array().map_or_else(Vec::new, |actions| {
+            actions
+                .iter()
+                .map(|action| action["title"].as_str().unwrap().to_string())
+                .collect()
+        })
+    };
+    // rust-analyzer offers the macro actions once it has expanded `println!`.
+    session.request_until(
+        "textDocument/hover",
+        json!({"textDocument": {"uri": uri}, "position": position(2, 6)}),
+        |hover| {
+            hover["contents"]
+                .to_string()
+                .contains("macro_rules! println")
+        },
+    );
+    let actions = session.request_until(
+        "textDocument/codeAction",
+        json!({
+            "textDocument": {"uri": uri},
+            "range": range(2, 14, 14),
+            "context": {"diagnostics": []},
+        }),
+        |actions| titles(actions).contains(&"Rewrite as raw string".to_string()),
+    );
+    assert_eq!(titles(&actions), ["Rewrite as raw string"], "{actions}");
+}
