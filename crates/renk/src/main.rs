@@ -1608,6 +1608,7 @@ fn splice_frontmatter(source: &str, frontmatter: &str) -> Result<String, Transpi
 
 /// The frontmatter of a script with its fences, or an empty one.
 fn script_frontmatter(source: &str) -> Result<String, TranspileError> {
+    let source = source.strip_prefix('\u{feff}').unwrap_or(source);
     let lines = source.split_inclusive('\n').collect::<Vec<_>>();
     Ok(script_parts(source)?
         .frontmatter

@@ -10,7 +10,8 @@ use similar::{DiffTag, TextDiff};
 
 use crate::{
     SourceSyntax, TranspileError, is_ident_continue, is_ident_start, opaque_span_end, read_ident,
-    rust_to_renk, to_rust, transpile, unwrap_script_statements, wrap_script_statements,
+    rust_to_renk, to_rust, transpile, unwrap_script_statements, without_bom,
+    wrap_script_statements,
 };
 
 /// The 0-based line indices of a script's parts: an optional `#!` line, the optional `---`
@@ -24,7 +25,7 @@ pub struct ScriptParts {
 
 /// Finds the parts of a script; a frontmatter fence without its closing line is an error.
 pub fn script_parts(source: &str) -> Result<ScriptParts, TranspileError> {
-    let lines = source.split_inclusive('\n').collect::<Vec<_>>();
+    let lines = without_bom(source).split_inclusive('\n').collect::<Vec<_>>();
     let shebang = usize::from(
         lines
             .first()
@@ -52,6 +53,7 @@ pub fn script_parts(source: &str) -> Result<ScriptParts, TranspileError> {
 
 /// The script with its `#!` and frontmatter lines blanked, so items keep their script lines.
 pub fn script_body(source: &str) -> Result<String, TranspileError> {
+    let source = without_bom(source);
     let parts = script_parts(source)?;
     let lines = source.split_inclusive('\n').collect::<Vec<_>>();
     Ok("\n".repeat(parts.body_start) + &lines[parts.body_start..].concat())
@@ -75,6 +77,7 @@ pub fn script_rust(
     syntax: SourceSyntax,
     package: &str,
 ) -> Result<ScriptRust, TranspileError> {
+    let source = without_bom(source);
     let lines = source.split_inclusive('\n').collect::<Vec<_>>();
     let parts = script_parts(source)?;
     let (manifest, mut named_package, mut package_name) = with_package_defaults("", package);
