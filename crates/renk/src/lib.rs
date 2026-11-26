@@ -1474,6 +1474,15 @@ fn convert_rust_statement(text: &str, parent: Option<RustBlockKind>) -> Converte
             opens: None,
         };
     }
+    // Renk writes attributes back unchanged, so they keep their Rust tokens.
+    let rest = without_attributes(text);
+    if rest.len() < text.len() {
+        let converted = convert_rust_statement(rest, parent);
+        return ConvertedRustStatement {
+            text: format!("{}{}", &text[..text.len() - rest.len()], converted.text),
+            ..converted
+        };
+    }
     // An empty body on its own line, as in `while a` / `    && b` / `{}`, is a `:` with no block;
     // after a `where` clause, which also reads a `{}` line, the line stays.
     if let Some(header) = text.strip_suffix("{}")
@@ -7743,8 +7752,10 @@ fn is_macro_item(text: &str) -> bool {
 /// `text` after the attributes on its line, as `pub fn get(&self)` in
 /// `#[inline] pub fn get(&self)`.
 fn without_attributes(mut text: &str) -> &str {
-    while text.starts_with("#[")
-        && let Some(close) = matching_delimiter(text, 1, '[', ']', false)
+    while let Some(open) = ["#[", "#!["]
+        .iter()
+        .find_map(|start| text.starts_with(start).then_some(start.len() - 1))
+        && let Some(close) = matching_delimiter(text, open, '[', ']', false)
     {
         text = text[close + 1..].trim_start();
     }
