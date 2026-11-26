@@ -41,7 +41,7 @@ use tower_lsp::{
 };
 
 use renk::{
-    SourceMapNode, SourceSyntax, TranspileError, rust_to_renk,
+    SourceMapNode, SourceSyntax, TranspileError, TranspileOutput, rust_to_renk,
     script::{
         RESOLUTION_ERRORS, cache_root, dot_hint, script_body, script_cache_path, script_column,
         script_package, script_parts, script_renk, script_rust,
@@ -263,12 +263,13 @@ impl LanguageServer for Backend {
         let Ok(output) = body.and_then(|body| transpile(&body)) else {
             return Ok(None);
         };
+        let lines = text.lines().collect::<Vec<_>>();
 
         Ok(Some(DocumentSymbolResponse::Nested(
             output
                 .source_tree
                 .iter()
-                .filter_map(symbol_from_node)
+                .filter_map(|node| symbol_from_node(node, &output, &lines))
                 .collect(),
         )))
     }
@@ -2238,18 +2239,51 @@ impl Origins {
     }
 }
 
+/// The symbol of the item `node`. Its range ends with the last of the document's `lines` that the
+/// source map of `output` gives the item's Rust.
 #[allow(deprecated)]
-fn symbol_from_node(node: &SourceMapNode) -> Option<DocumentSymbol> {
+fn symbol_from_node(
+    node: &SourceMapNode,
+    output: &TranspileOutput,
+    lines: &[&str],
+) -> Option<DocumentSymbol> {
     let kind = symbol_kind(&node.kind)?;
+    let (name, offset) = symbol_name(node);
+    let first_line = node.source_text.lines().next().unwrap_or_default();
+    let line = node.source_line.saturating_sub(1) as u32;
+    let start = node.source_column as u32;
+    let name_start = start + utf16_len(&first_line[..offset]);
+    let last_line = output
+        .source_map
+        .iter()
+        .filter(|entry| {
+            (node.generated_start_line..=node.generated_end_line).contains(&entry.generated_line)
+        })
+        .map(|entry| entry.source_line)
+        .fold(node.source_line, usize::max);
     Some(DocumentSymbol {
-        name: symbol_name(node),
         detail: Some(node.kind.clone()),
         kind,
         tags: None,
         deprecated: None,
-        range: node_range(node),
-        selection_range: node_range(node),
-        children: Some(node.children.iter().filter_map(symbol_from_node).collect()),
+        range: Range::new(
+            Position::new(line, start),
+            Position::new(
+                last_line as u32 - 1,
+                lines.get(last_line - 1).map_or(0, |line| utf16_len(line)),
+            ),
+        ),
+        selection_range: Range::new(
+            Position::new(line, name_start),
+            Position::new(line, name_start + utf16_len(&name)),
+        ),
+        name,
+        children: Some(
+            node.children
+                .iter()
+                .filter_map(|child| symbol_from_node(child, output, lines))
+                .collect(),
+        ),
     })
 }
 
@@ -2266,46 +2300,52 @@ fn symbol_kind(kind: &str) -> Option<SymbolKind> {
     }
 }
 
-fn symbol_name(node: &SourceMapNode) -> String {
-    let text = node.source_text.trim();
-    if let Some(name) = item_name(text, "struct")
-        .or_else(|| item_name(text, "enum"))
-        .or_else(|| item_name(text, "trait"))
-        .or_else(|| item_name(text, "mod"))
-        .or_else(|| item_name(text, "fn"))
-    {
-        name
-    } else if let Some(rest) = text.strip_prefix("impl") {
-        format!("impl{}", rest)
-    } else {
-        text.split([':', '=', '(', ' '])
-            .next()
-            .unwrap_or(text)
-            .to_string()
-    }
-}
-
-fn item_name(text: &str, keyword: &str) -> Option<String> {
-    let index = text.find(keyword)? + keyword.len();
-    let rest = text[index..].trim_start();
+/// The name of the item `node` starts, and its byte offset in the node's first line: the head
+/// of an `impl` without its `:`, the word after an item's keyword, or a member's first word after
+/// its visibility.
+fn symbol_name(node: &SourceMapNode) -> (String, usize) {
+    let text = node.source_text.lines().next().unwrap_or_default();
+    let keyword = match node.kind.as_str() {
+        "impl" => {
+            return (
+                text.trim_end().trim_end_matches(':').trim_end().to_string(),
+                0,
+            );
+        }
+        "struct" | "enum" | "trait" => node.kind.as_str(),
+        "module" => "mod",
+        "function" => "fn",
+        _ => "",
+    };
+    let keyword_end = text.match_indices(keyword).find_map(|(index, _)| {
+        let end = index + keyword.len();
+        (!keyword.is_empty()
+            && !text[..index].ends_with(is_identifier_continue)
+            && text[end..].starts_with(char::is_whitespace))
+        .then_some(end)
+    });
+    let after = keyword_end.unwrap_or_else(|| {
+        let rest = text.strip_prefix("pub").unwrap_or(text);
+        let rest = rest
+            .strip_prefix('(')
+            .and_then(|group| group.split_once(')'))
+            .map_or(rest, |(_, rest)| rest);
+        if rest.starts_with(char::is_whitespace) {
+            text.len() - rest.len()
+        } else {
+            0
+        }
+    });
+    let rest = text[after..].trim_start();
+    let offset = text.len() - rest.len();
     let name = rest
         .split(|character: char| !is_identifier_continue(character))
-        .find(|part| !part.is_empty())?;
-    Some(name.to_string())
-}
-
-fn node_range(node: &SourceMapNode) -> Range {
-    let line = node.source_line.saturating_sub(1) as u32;
-    let first_line = node.source_text.lines().next().unwrap_or_default();
-    Range {
-        start: Position {
-            line,
-            character: node.source_column as u32,
-        },
-        end: Position {
-            line,
-            character: node.source_column as u32 + utf16_len(first_line),
-        },
+        .next()
+        .unwrap_or_default();
+    if name.is_empty() {
+        (text.trim_end().to_string(), 0)
+    } else {
+        (name.to_string(), offset)
     }
 }
 
@@ -3339,12 +3379,11 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn outlines_each_item_with_its_body_and_its_name() {
+    /// The outline of `source` as a module in this crate.
+    async fn document_symbols(source: &str) -> Vec<DocumentSymbol> {
         let (service, _socket) = LspService::new(Backend::new);
         let backend = service.inner();
         let uri = module_uri("src/outline.rk");
-        let source = "pub struct 사용자:\n    pub 이름: String\n\nimpl Named for 사용자:\n    fn name(&self) -> &str:\n        &self.이름\n\npub fn destructure():\n    println!(\"{}\", 1)\n";
         backend
             .documents
             .write()
@@ -3355,11 +3394,15 @@ mod tests {
             work_done_progress_params: Default::default(),
             partial_result_params: Default::default(),
         };
-        let Some(DocumentSymbolResponse::Nested(symbols)) =
-            backend.document_symbol(params).await.unwrap()
-        else {
-            panic!("no nested symbols");
-        };
+        match backend.document_symbol(params).await.unwrap() {
+            Some(DocumentSymbolResponse::Nested(symbols)) => symbols,
+            symbols => panic!("no nested symbols: {symbols:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn outlines_each_item_with_its_body_and_its_name() {
+        let symbols = document_symbols("pub struct 사용자:\n    pub 이름: String\n\nimpl Named for 사용자:\n    fn name(&self) -> &str:\n        &self.이름\n\npub fn destructure():\n    println!(\"{}\", 1)\n").await;
         fn outline(symbols: &[DocumentSymbol]) -> Vec<(String, [u32; 4], [u32; 4], Vec<String>)> {
             let span = |range: Range| {
                 [
@@ -3403,6 +3446,31 @@ mod tests {
                 item("destructure", [7, 0, 8, 21], [7, 7, 7, 18], &[]),
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn keeps_each_example_symbol_and_its_name_inside_its_parent() {
+        fn check(parent: Range, symbols: &[DocumentSymbol]) {
+            let inside = |outer: Range, inner: Range| {
+                let key = |position: Position| (position.line, position.character);
+                key(outer.start) <= key(inner.start) && key(inner.end) <= key(outer.end)
+            };
+            for symbol in symbols {
+                assert!(inside(parent, symbol.range), "{symbol:?} leaves {parent:?}");
+                assert!(inside(symbol.range, symbol.selection_range), "{symbol:?}");
+                assert!(!symbol.name.is_empty() && !symbol.name.ends_with(':'));
+                check(symbol.range, symbol.children.as_deref().unwrap_or_default());
+            }
+        }
+        let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
+        for entry in std::fs::read_dir(examples).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_some_and(|extension| extension == "rk") {
+                let source = std::fs::read_to_string(&path).unwrap();
+                let whole = Range::new(Position::new(0, 0), Position::new(u32::MAX, 0));
+                check(whole, &document_symbols(&source).await);
+            }
+        }
     }
 
     #[test]
