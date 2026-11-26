@@ -393,7 +393,7 @@ fn fmt_check_prints_a_diff_and_fails_for_unformatted_files() {
     assert_eq!(output.status.code(), Some(1));
     assert_eq!(
         text(&output.stderr),
-        "renk: formatting more than one file needs --check\n"
+        "renk: formatting more than one file needs --check or --write\n"
     );
     let output = renk(&["fmt", "--check", "good.rk", "-o", "out.rk"], "", &dir);
     assert_eq!(output.status.code(), Some(2));
@@ -409,6 +409,92 @@ fn fmt_check_prints_a_diff_and_fails_for_unformatted_files() {
         text(&output.stderr).starts_with("renk: cannot run rustfmt"),
         "{}",
         text(&output.stderr)
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn fmt_write_formats_files_and_directories_in_place() {
+    let dir = temp_dir("fmt-write");
+    let formatted = "fn main():\n    let x = 1\n";
+    let unformatted = "fn main():\n  let  x = 1\n";
+    write_files(
+        &dir,
+        &[
+            ("a.rk", unformatted),
+            ("sub/b.rk", unformatted),
+            ("sub/c.rk", formatted),
+            ("sub/note.txt", unformatted),
+            ("sub/target/skip.rk", unformatted),
+            ("sub/.hidden/skip.rk", unformatted),
+        ],
+    );
+
+    let output = renk(&["fmt", "--check", "sub"], "", &dir);
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output.stderr));
+    assert!(
+        text(&output.stdout).starts_with("--- sub/b.rk\n"),
+        "{}",
+        text(&output.stdout)
+    );
+    assert!(!text(&output.stdout).contains("skip.rk"));
+
+    let output = renk(&["fmt", "sub"], "", &dir);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(
+        text(&output.stderr),
+        "renk: formatting more than one file needs --check or --write\n"
+    );
+    for args in [
+        &["fmt", "--write"][..],
+        &["fmt", "-w", "a.rk", "--check"],
+        &["fmt", "-w", "a.rk", "-o", "out.rk"],
+    ] {
+        assert_eq!(renk(args, "", &dir).status.code(), Some(2), "{args:?}");
+    }
+
+    let output = renk(&["fmt", "-w", "a.rk", "sub"], "", &dir);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
+    assert!(output.stdout.is_empty(), "{}", text(&output.stdout));
+    for path in ["a.rk", "sub/b.rk", "sub/c.rk"] {
+        assert_eq!(fs::read_to_string(dir.join(path)).unwrap(), formatted);
+    }
+    for path in ["sub/note.txt", "sub/target/skip.rk", "sub/.hidden/skip.rk"] {
+        assert_eq!(fs::read_to_string(dir.join(path)).unwrap(), unformatted);
+    }
+    let output = renk(&["fmt", "--check", "--write", "a.rk"], "", &dir);
+    assert_eq!(output.status.code(), Some(2));
+    let output = renk(&["fmt", "--check", "a.rk", "sub"], "", &dir);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout));
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn fmt_keeps_an_empty_file_empty_and_turns_crlf_into_lf() {
+    let dir = temp_dir("fmt-edges");
+    fs::write(dir.join("empty.rk"), "").unwrap();
+    fs::write(dir.join("crlf.rk"), "fn main():\r\n    let x = 1\r\n").unwrap();
+
+    let output = renk(&["fmt", "empty.rk"], "", &dir);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
+    assert_eq!(text(&output.stdout), "");
+    let output = renk(&["fmt", "--check", "empty.rk"], "", &dir);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout));
+
+    let output = renk(&["fmt", "crlf.rk"], "", &dir);
+    assert_eq!(text(&output.stdout), "fn main():\n    let x = 1\n");
+    let output = renk(&["fmt", "--check", "crlf.rk"], "", &dir);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        text(&output.stdout).starts_with("crlf.rk: CRLF line endings\n--- crlf.rk\n"),
+        "{}",
+        text(&output.stdout)
+    );
+    let output = renk(&["fmt", "-w", "crlf.rk"], "", &dir);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
+    assert_eq!(
+        fs::read_to_string(dir.join("crlf.rk")).unwrap(),
+        "fn main():\n    let x = 1\n"
     );
     let _ = fs::remove_dir_all(dir);
 }
