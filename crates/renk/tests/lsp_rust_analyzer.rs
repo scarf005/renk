@@ -796,17 +796,41 @@ fn semantic_tokens_lie_only_on_renk_text_that_is_the_same_in_the_rust() {
         return;
     };
     let params = json!({"textDocument": {"uri": session.uri("src/main.rk")}});
+    let types = session.capabilities["semanticTokensProvider"]["legend"]["tokenTypes"].clone();
+    let named = [
+        (0, "add", "function"),
+        (0, "a", "parameter"),
+        (3, "\"hi\"", "string"),
+    ];
+    // rust-analyzer names more tokens once it has loaded the crate.
     let tokens = session.request_until("textDocument/semanticTokens/full", params, |tokens| {
-        tokens["data"]
-            .as_array()
-            .is_some_and(|data| !data.is_empty())
+        let tokens = decode_tokens(main, &types, tokens);
+        named.iter().all(|token| tokens.contains(token))
     });
-    let types = &session.capabilities["semanticTokensProvider"]["legend"]["tokenTypes"];
+    let tokens = decode_tokens(main, &types, &tokens);
+    for token in named {
+        assert!(tokens.contains(&token), "{token:?} in {tokens:?}");
+    }
+    // The arguments in the format string move behind it in the Rust.
+    let rust = "println!(\"{} {}\", s, add(1));";
+    let differing: Vec<_> = (tokens.iter())
+        .filter(|(line, text, _)| *line == 4 && !rust.contains(text))
+        .collect();
+    assert!(differing.is_empty(), "{differing:?}");
+}
+
+/// The line, text and type of each semantic token in `tokens` of `text`, with the token types
+/// `types`.
+fn decode_tokens<'a>(
+    text: &'a str,
+    types: &'a Value,
+    tokens: &Value,
+) -> Vec<(usize, &'a str, &'a str)> {
     let data: Vec<_> = (tokens["data"].as_array().into_iter().flatten())
         .map(|number| number.as_u64().unwrap() as usize)
         .collect();
     let (mut line, mut start) = (0, 0);
-    let tokens: Vec<_> = (data.chunks(5))
+    (data.chunks(5))
         .map(|token| {
             start = if token[0] == 0 {
                 start + token[1]
@@ -814,23 +838,10 @@ fn semantic_tokens_lie_only_on_renk_text_that_is_the_same_in_the_rust() {
                 token[1]
             };
             line += token[0];
-            let text = &main.lines().nth(line).unwrap()[start..start + token[2]];
+            let text = &text.lines().nth(line).unwrap()[start..start + token[2]];
             (line, text, types[token[3]].as_str().unwrap())
         })
-        .collect();
-    for token in [
-        (0, "add", "function"),
-        (0, "a", "parameter"),
-        (3, "\"hi\"", "string"),
-    ] {
-        assert!(tokens.contains(&token), "{token:?} in {tokens:?}");
-    }
-    // The Rust is `println!("{} {}", s, add(1));`.
-    let rust: Vec<_> = "println ! ( ) , ; s add 1 {}".split(' ').collect();
-    let differing: Vec<_> = (tokens.iter())
-        .filter(|(line, text, _)| *line == 4 && !rust.contains(text))
-        .collect();
-    assert!(differing.is_empty(), "{differing:?}");
+        .collect()
 }
 
 #[test]
