@@ -3,13 +3,14 @@
 ## Format strings
 
 The std format macros take inline expressions. `{expr}` and `{expr:spec}` become positional
-arguments. A string inside a placeholder uses the literal's escapes, as in
-`"{tags.join(\", \")}"`; in a raw literal its quotes are plain, as in `r#"{v.join("-")}"#`.
+arguments. A string inside a placeholder can keep its quotes, as in `"{tags.join(", ")}"`, or
+use the literal's escapes, as in `"{tags.join(\", \")}"`.
 
 ```rk
 pub fn report(name: &str, values: &[i32], tags: &[&str]):
     println!("{name} has {values.len()} values")
     println!("{tags.join(\", \")}")
+    println!("{tags.join(", ")} end")
     assert!(!values.is_empty(), "{values.len():>4}")
 ```
 
@@ -19,6 +20,7 @@ becomes
 pub fn report(name: &str, values: &[i32], tags: &[&str]) {
     println!("{} has {} values", name, values.len());
     println!("{}", tags.join(", "));
+    println!("{} end", tags.join(", "));
     assert!(!values.is_empty(), "{:>4}", values.len());
 }
 ```
@@ -43,6 +45,36 @@ need no `;`. These blocks are children and attribute values (`<p>{`, `class={`),
 All other text stays Rust tokens: tags, one-line blocks such as `{count}`, struct literals such
 as `Point {`, `match` arm lists, and element bodies of other `view!` macros, such as Sycamore's
 `div(class="x") {`.
+
+A tag name can carry generics, as in `<Show<u8> ...>`, and a `>` inside an attribute value, such
+as `when=move || n > 1`, does not end the tag.
+
+```rk,ignore
+pub fn counter(n: u8):
+    view! {
+        <Show<u8> when=move || n > 1 on:click=move |_| {
+            go()
+            log::info!("clicked")
+        }>
+            {n}
+        </Show>
+    }
+```
+
+becomes
+
+```rust
+pub fn counter(n: u8) {
+    view! {
+        <Show<u8> when=move || n > 1 on:click=move |_| {
+            go();
+            log::info!("clicked")
+        }>
+            {n}
+        </Show>
+    }
+}
+```
 
 ```rk,ignore
 pub fn counter():

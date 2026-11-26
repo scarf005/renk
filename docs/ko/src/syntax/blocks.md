@@ -52,6 +52,60 @@ pub fn separator() -> char:
 
 이 코드는 `#[cfg(unix)]` / `{ '/' }` / `#[cfg(not(unix))]` / `{ '\\' }`가 된다.
 
+`#[cfg(...)]`는 문장, `let`, `mod`에도 쓸 수 있다:
+
+```rk
+pub fn push(v: &mut Vec[u32]):
+    #[cfg(unix)]
+    let n = 1
+    #[cfg(unix)]
+    v.push(n)
+
+#[cfg(unix)]
+pub mod platform:
+    pub fn one() -> u8 = 1
+```
+
+이 코드는 다음이 된다.
+
+```rust
+pub fn push(v: &mut Vec<u32>) {
+    #[cfg(unix)]
+    let n = 1;
+    #[cfg(unix)]
+    v.push(n);
+}
+
+#[cfg(unix)]
+pub mod platform {
+    pub fn one() -> u8 {
+        1
+    }
+}
+```
+
+`//` 주석은 `:` 머리나 문장 뒤에 올 수 있고 그 줄에 그대로 남는다:
+
+```rk
+pub fn first(xs: Vec[i32]) -> i32: // header
+    let a = xs[0] // value
+    if a > 0: // positive
+        return a // early
+    a
+```
+
+이 코드는 다음이 된다.
+
+```rust
+pub fn first(xs: Vec<i32>) -> i32 { // header
+    let a = xs[0]; // value
+    if a > 0 { // positive
+        return a; // early
+    }
+    a
+}
+```
+
 ## 함수 축약형
 
 `fn name(...) -> T = expr`는 본문이 표현식 하나인 함수다. `= match n:` 뒤에 arm을 들여써 두는

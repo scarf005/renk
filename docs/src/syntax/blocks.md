@@ -53,6 +53,60 @@ pub fn separator() -> char:
 
 becomes `#[cfg(unix)]` / `{ '/' }` / `#[cfg(not(unix))]` / `{ '\\' }`.
 
+`#[cfg(...)]` also works on a statement, a `let`, and a `mod`:
+
+```rk
+pub fn push(v: &mut Vec[u32]):
+    #[cfg(unix)]
+    let n = 1
+    #[cfg(unix)]
+    v.push(n)
+
+#[cfg(unix)]
+pub mod platform:
+    pub fn one() -> u8 = 1
+```
+
+becomes
+
+```rust
+pub fn push(v: &mut Vec<u32>) {
+    #[cfg(unix)]
+    let n = 1;
+    #[cfg(unix)]
+    v.push(n);
+}
+
+#[cfg(unix)]
+pub mod platform {
+    pub fn one() -> u8 {
+        1
+    }
+}
+```
+
+A `//` comment can follow a `:` header or a statement. It stays on that line:
+
+```rk
+pub fn first(xs: Vec[i32]) -> i32: // header
+    let a = xs[0] // value
+    if a > 0: // positive
+        return a // early
+    a
+```
+
+becomes
+
+```rust
+pub fn first(xs: Vec<i32>) -> i32 { // header
+    let a = xs[0]; // value
+    if a > 0 { // positive
+        return a; // early
+    }
+    a
+}
+```
+
 ## Function shorthand
 
 `fn name(...) -> T = expr` is a function whose body is one expression. The expression can open a

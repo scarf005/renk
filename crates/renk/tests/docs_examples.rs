@@ -79,6 +79,6 @@ fn documented_rust_is_the_transpiler_output() {
             }
         }
     }
-    assert!(pairs >= 7, "found only {pairs} pairs");
+    assert!(pairs >= 13, "found only {pairs} pairs");
     assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
 }

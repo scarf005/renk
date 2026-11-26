@@ -3,13 +3,14 @@
 ## 포맷 문자열
 
 std 포맷 매크로에는 인라인 표현식을 쓸 수 있다. `{expr}`와 `{expr:spec}`은 위치 인자가 된다.
-자리표시자 안의 문자열은 `"{tags.join(\", \")}"`처럼 리터럴의 이스케이프로 쓰고, raw 리터럴에서는
-`r#"{v.join("-")}"#`처럼 따옴표를 그대로 쓴다.
+자리표시자 안의 문자열은 `"{tags.join(", ")}"`처럼 따옴표를 그대로 쓰거나
+`"{tags.join(\", \")}"`처럼 리터럴의 이스케이프로 쓴다.
 
 ```rk
 pub fn report(name: &str, values: &[i32], tags: &[&str]):
     println!("{name} has {values.len()} values")
     println!("{tags.join(\", \")}")
+    println!("{tags.join(", ")} end")
     assert!(!values.is_empty(), "{values.len():>4}")
 ```
 
@@ -19,6 +20,7 @@ pub fn report(name: &str, values: &[i32], tags: &[&str]):
 pub fn report(name: &str, values: &[i32], tags: &[&str]) {
     println!("{} has {} values", name, values.len());
     println!("{}", tags.join(", "));
+    println!("{} end", tags.join(", "));
     assert!(!values.is_empty(), "{:>4}", values.len());
 }
 ```
@@ -41,6 +43,36 @@ Leptos `view!` 본문에서 여러 줄에 걸친 `{` 블록은 Renk 문장을 �
 `loop`, `async`, `unsafe`의 본문이 이런 블록이다. 나머지는 Rust 토큰으로 남는다. 태그,
 `{count}` 같은 한 줄 블록, `Point {` 같은 구조체 리터럴, `match` 팔 목록, Sycamore의
 `div(class="x") {` 같은 다른 `view!` 매크로의 요소 본문이 그렇다.
+
+태그 이름에는 `<Show<u8> ...>`처럼 제네릭을 쓸 수 있고, `when=move || n > 1`처럼 속성 값 안에
+있는 `>`는 태그를 끝내지 않는다.
+
+```rk,ignore
+pub fn counter(n: u8):
+    view! {
+        <Show<u8> when=move || n > 1 on:click=move |_| {
+            go()
+            log::info!("clicked")
+        }>
+            {n}
+        </Show>
+    }
+```
+
+이 코드는 다음이 된다.
+
+```rust
+pub fn counter(n: u8) {
+    view! {
+        <Show<u8> when=move || n > 1 on:click=move |_| {
+            go();
+            log::info!("clicked")
+        }>
+            {n}
+        </Show>
+    }
+}
+```
 
 ```rk,ignore
 pub fn counter():

@@ -11,7 +11,7 @@ pub fn clamp(total: i32) -> i32 = if total < 0 then 0 else total
 An `if` that opens blocks can stand where a value goes, as in `let x = if c:`, `x += if c:`,
 `return if c:`, `max(if c:`, or `.map(|x| if c:`, with `else if d:` and `else:` lines at the
 `if`'s indent. So can a `match`, as in `let x = match y:`, `.filter(|v| match v:`, or
-`[match x:`, and `else:` branches after `f(if c {`.
+`[match x:`, and `else:` branches after `let x = if c {` or `f(if c {`.
 
 ```rk
 pub fn sign(value: i32) -> i32:
@@ -22,6 +22,44 @@ pub fn sign(value: i32) -> i32:
     else:
         0
     sign
+```
+
+The condition can be `if let`, and `then` can follow an operator:
+
+```rk
+pub fn first(o: Option[i32], n: i32) -> i32 = n + if let Some(v) = o then v else 0
+```
+
+becomes
+
+```rust
+pub fn first(o: Option<i32>, n: i32) -> i32 {
+    n + if let Some(v) = o { v } else { 0 }
+}
+```
+
+With Rust's `{` kept after the condition, `else:` still follows at the `if`'s indent:
+
+```rk
+pub fn pick(c: bool) -> i32:
+    let x = if c {
+        1
+    else:
+        2
+    x
+```
+
+becomes
+
+```rust
+pub fn pick(c: bool) -> i32 {
+    let x = if c {
+        1
+    } else {
+        2
+    };
+    x
+}
 ```
 
 A `}` line at the head's indent continues the value with an operator:
@@ -102,4 +140,49 @@ pub fn describe(value: Option[i32]) -> &'static str:
 
 ## Struct literals
 
-Struct literals keep Rust syntax: `Self{ id, name }`.
+Struct literals keep Rust syntax: `Self{ id, name }`. A line that ends with `:` can also open
+one. Its lines are `name = value` fields, or `0 = value` for a tuple struct, and `Pair[i32]:`
+is `Pair::<i32> {`. This form is only for a value on a line of its own, such as a function's
+last value. `let p = Point:` and `return Point:` are not accepted: write `let p = Point{ x: 1, y: 2 }`.
+
+```rk
+pub struct Point:
+    pub x: i32
+    pub y: i32
+
+pub struct W(pub i32)
+
+pub fn point() -> Point:
+    Point:
+        x = 1
+        y = 2
+
+pub fn wrapped() -> W:
+    W:
+        0 = 1
+```
+
+becomes
+
+```rust
+pub struct Point {
+    pub x: i32,
+    pub y: i32,
+}
+
+pub struct W(pub i32);
+
+pub fn point() -> Point {
+    Point {
+        x: 1,
+        y: 2,
+    }
+}
+
+pub fn wrapped() -> W {
+    W {
+        0: 1,
+    }
+}
+```
+
