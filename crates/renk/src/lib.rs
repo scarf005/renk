@@ -196,6 +196,19 @@ fn transpile_source(source: &str) -> Result<TranspileOutput, TranspileError> {
     with_value_scopes(|| transpile_lines(source))
 }
 
+#[cfg(test)]
+thread_local! {
+    /// How often [`transpile_file`] ran on this thread.
+    static FILE_TRANSPILES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Transpiles the Renk `lines` of a whole file, which [`idiomatic_renk`] checks rewrites against.
+fn transpile_file(lines: &[String]) -> Result<TranspileOutput, TranspileError> {
+    #[cfg(test)]
+    FILE_TRANSPILES.set(FILE_TRANSPILES.get() + 1);
+    transpile_source(&lines.join("\n"))
+}
+
 /// `convert` run on a thread with a large stack, as the Rust parsers and the Renk block tree
 /// recurse once per nesting level; WebAssembly has no threads and keeps its own stack, and a
 /// process limit that refuses the thread leaves `convert` on the caller's stack.
@@ -824,12 +837,12 @@ struct Rewrite {
 /// still transpiles to the same Rust or, when `aggressive` or inlining format arguments, to the
 /// same Rust tokens; format arguments are compared inlined.
 fn idiomatic_renk(lines: Vec<String>, aggressive: bool) -> Vec<String> {
-    let Ok(mut expected) = transpile_source(&lines.join("\n")) else {
+    let Ok(mut expected) = transpile_file(&lines) else {
         return lines;
     };
     let lines = match parenthesize_path_receivers(&lines, &expected) {
         Some(fixed) => {
-            let Ok(output) = transpile_source(&fixed.join("\n")) else {
+            let Ok(output) = transpile_file(&fixed) else {
                 return fixed;
             };
             expected = output;
@@ -870,7 +883,7 @@ fn idiomatic_renk(lines: Vec<String>, aggressive: bool) -> Vec<String> {
                     let mut trial = accepted.clone();
                     let at = trial.partition_point(|kept| kept.start < rewrite.start);
                     trial.insert(at, rewrite);
-                    let rust = transpile_source(&apply_rewrites(&lines, &trial).0.join("\n"));
+                    let rust = transpile_file(&apply_rewrites(&lines, &trial).0);
                     if rust.is_ok_and(|output| {
                         rust_tokens(&canonical_format_macros(&output.rust)) == expected_tokens
                     }) {
@@ -1086,7 +1099,7 @@ fn equivalent_rewrites(
             .map(|(rewrite, _)| rewrite.clone())
             .collect::<Vec<_>>();
         let (candidate, origins) = apply_rewrites(lines, &rewrites);
-        let differing = match transpile_source(&candidate.join("\n")) {
+        let differing = match transpile_file(&candidate) {
             Ok(output) => {
                 let actual = canonical_format_macros(&output.rust);
                 if actual == expected {
@@ -8400,6 +8413,34 @@ mod tests {
 
     fn rust(source: &str) -> String {
         transpile(source).unwrap().rust
+    }
+
+    #[test]
+    fn whole_file_checks_stay_as_many_for_four_times_the_functions() {
+        // Each function wraps an `assert!` over six lines. Inlining its format arguments puts it
+        // on one line, so the Rust line count changes.
+        let checks = |functions: usize, aggressive: bool| {
+            let rust = (0..functions)
+                .map(|n| {
+                    format!(
+                        "fn check_{n}(cmd: &Command, value: usize) {{\n    assert!(\n        \
+                         value > {n},\n        \"Command {{}}: value {{}} is too small\",\n        \
+                         cmd.get_name(),\n        value,\n    );\n    let total = value + {n};\n    \
+                         println!(\"{{}}\", total);\n}}\n\n"
+                    )
+                })
+                .collect::<String>();
+            FILE_TRANSPILES.set(0);
+            with_value_scopes(|| convert_rust_lines(&rust, aggressive)).unwrap();
+            FILE_TRANSPILES.get()
+        };
+        for aggressive in [false, true] {
+            assert_eq!(
+                checks(10, aggressive),
+                checks(40, aggressive),
+                "{aggressive}"
+            );
+        }
     }
 
     #[test]
