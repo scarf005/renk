@@ -4346,6 +4346,48 @@ mod tests {
         assert!(!manifest.contains("members ="));
         let _ = fs::remove_dir_all(temp);
     }
+
+    /// What `forward_editor_messages` writes to tower-lsp for the editor bytes `input`.
+    async fn forwarded(input: &[u8]) -> String {
+        let mut output = Vec::new();
+        let (writer, mut reader) = tokio::io::duplex(1 << 16);
+        let forward = forward_editor_messages(input, writer);
+        let read = reader.read_to_end(&mut output);
+        let (_, read) = tokio::join!(forward, read);
+        read.unwrap();
+        String::from_utf8(output).unwrap()
+    }
+
+    #[tokio::test]
+    async fn editor_frames_may_write_the_header_without_a_space_or_in_any_case() {
+        let body = r#"{"jsonrpc":"2.0","id":1,"method":"initialize"}"#;
+        let n = body.len();
+        for header in [
+            format!("Content-Length:{n}"),
+            format!("content-length :  {n} "),
+            format!("Content-Type: x\r\nCONTENT-LENGTH: {n}"),
+        ] {
+            let frame = format!("{header}\r\n\r\n{body}");
+            let expected = format!("Content-Length: {n}\r\n\r\n{body}");
+            assert_eq!(forwarded(frame.as_bytes()).await, expected, "{header}");
+        }
+    }
+
+    #[tokio::test]
+    async fn editor_bodies_that_are_not_json_reach_tower_lsp_and_later_frames_follow() {
+        let input = "Content-Length: 3\r\n\r\nabc\
+                     Content-Length: 2\r\n\r\n{}";
+        assert_eq!(
+            forwarded(input.as_bytes()).await,
+            "Content-Length: 3\r\n\r\nabcContent-Length: 2\r\n\r\n{}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_huge_editor_length_ends_the_input_when_the_bytes_stop() {
+        let input = "Content-Length: 99999999999\r\n\r\n{}";
+        assert_eq!(forwarded(input.as_bytes()).await, "");
+    }
 }
 
 #[tokio::main]
