@@ -605,7 +605,7 @@ mod tests {
         let error = script_rust(source, SourceSyntax::Renk, "tool")
             .unwrap_err()
             .to_string();
-        assert!(error.contains("line 6"), "{error}");
+        assert!(error.starts_with("6:1: "), "{error}");
     }
 
     #[test]

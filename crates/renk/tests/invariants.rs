@@ -261,19 +261,28 @@ fn rust_round_trips_reach_a_fixed_point_after_one_pass() {
 }
 
 #[test]
-fn malformed_sources_fail_at_the_offending_line() {
+fn malformed_sources_fail_at_the_offending_line_and_column() {
     let cases = [
-        ("fn main():\n\tlet x = 1\n", 2),
-        ("fn main():\n    let x = 1\n      let y = 2\n", 2),
-        ("struct A:\n    x: i32\n        y: i32\n", 2),
-        ("fn f() = g(x):\n    1\n", 1),
-        ("\u{feff}fn f() = g(x):\n    1\n", 1),
-        ("fn main():\n    let x = (\n", 2),
-        ("fn main():\n    let s = \"open\n", 2),
+        ("fn main():\n\tlet x = 1\n", 2, 1),
+        ("fn main():\n  \tlet x = 1\n", 2, 3),
+        ("fn main():\n    let x = 1\n      let y = 2\n", 2, 5),
+        ("struct A:\n    x: i32\n        y: i32\n", 2, 5),
+        ("fn f() = g(x):\n    1\n", 1, 1),
+        ("\u{feff}fn f() = g(x):\n    1\n", 1, 1),
+        ("fn main():\n    let x = (\n", 2, 13),
+        ("fn main():\n    let s = \"open\n", 2, 13),
+        // The outermost delimiter left open, past a closed group and a `(` in a string.
+        ("fn main():\n    f(a, (b), \"(\", [\n        c,\n", 2, 6),
+        ("fn main():\n    let x = 1 +\n", 2, 5),
+        // The line closing the block, not the head that leaves `(` open.
+        ("fn main():\n    f(|x| {\n        x\n    }\n", 4, 5),
     ];
-    for (source, line) in cases {
+    for (source, line, column) in cases {
         let error = transpile(source).expect_err(source);
-        assert_eq!(error.line, line, "{source:?}: {error}");
+        assert!(
+            error.to_string().starts_with(&format!("{line}:{column}: ")),
+            "{source:?}: {error}"
+        );
         assert!(!error.message.is_empty(), "{source:?}");
         let formatted = format_source(source).expect_err(source);
         assert_eq!(formatted, error, "fmt and transpile disagree on {source:?}");
