@@ -120,14 +120,16 @@ impl Session {
         Some(session)
     }
 
-    /// Hovers `helper` in `HELPER_MAIN` until rust-analyzer names it.
-    fn hover_helper(&mut self, main: &str) -> Value {
+    /// Hovers `helper` in `HELPER_MAIN` until rust-analyzer names it, and fails if it never does.
+    fn assert_hover_names_helper(&mut self, main: &str) {
         let uri = self.uri(main);
-        self.request_until(
+        let names = |hover: &Value| hover["contents"].to_string().contains("fn helper");
+        let hover = self.request_until(
             "textDocument/hover",
             json!({"textDocument": {"uri": uri}, "position": position(3, 13)}),
-            |hover| hover["contents"].to_string().contains("fn helper"),
-        )
+            names,
+        );
+        assert!(names(&hover), "{hover}");
     }
 
     fn uri(&self, path: &str) -> String {
@@ -700,11 +702,7 @@ fn hovers_come_from_rust_analyzer_in_a_virtual_workspace() {
     else {
         return;
     };
-    let hover = session.hover_helper("app/src/main.rk");
-    assert!(
-        hover["contents"].to_string().contains("fn helper"),
-        "{hover}"
-    );
+    session.assert_hover_names_helper("app/src/main.rk");
 }
 
 #[test]
@@ -714,11 +712,7 @@ fn hovers_come_from_rust_analyzer_when_the_editor_opens_a_member_directory() {
     else {
         return;
     };
-    let hover = session.hover_helper("app/src/main.rk");
-    assert!(
-        hover["contents"].to_string().contains("fn helper"),
-        "{hover}"
-    );
+    session.assert_hover_names_helper("app/src/main.rk");
 }
 
 #[test]
@@ -728,11 +722,7 @@ fn hovers_come_from_rust_analyzer_through_a_path_dependency_outside_the_workspac
     else {
         return;
     };
-    let hover = session.hover_helper("app/src/main.rk");
-    assert!(
-        hover["contents"].to_string().contains("fn helper"),
-        "{hover}"
-    );
+    session.assert_hover_names_helper("app/src/main.rk");
 }
 
 /// The package `app`, with a path dependency on the package `shared` beside it.
@@ -750,11 +740,7 @@ fn hovers_come_from_rust_analyzer_in_the_second_workspace_folder() {
     else {
         return;
     };
-    let hover = session.hover_helper("app/src/main.rk");
-    assert!(
-        hover["contents"].to_string().contains("fn helper"),
-        "{hover}"
-    );
+    session.assert_hover_names_helper("app/src/main.rk");
 }
 
 #[test]
@@ -763,11 +749,7 @@ fn hovers_come_from_rust_analyzer_without_a_workspace_folder() {
     let Some(mut session) = Session::start("lsp-no-folder", &files, &[], "app/src/main.rk") else {
         return;
     };
-    let hover = session.hover_helper("app/src/main.rk");
-    assert!(
-        hover["contents"].to_string().contains("fn helper"),
-        "{hover}"
-    );
+    session.assert_hover_names_helper("app/src/main.rk");
 }
 
 #[test]
