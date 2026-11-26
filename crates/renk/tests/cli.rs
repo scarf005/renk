@@ -239,6 +239,8 @@ fn subcommand_help_describes_its_arguments() {
             text(&output.stdout)
         );
     }
+    let cargo = text(&renk(&["help", "cargo"], "", &dir).stdout);
+    assert!(cargo.contains("a .rs file beside each one"), "{cargo}");
     let top = text(&renk(&["--help"], "", &dir).stdout);
     assert!(!top.contains("RENK_SCRIPT"), "{top}");
     assert!(top.lines().count() < 25, "{top}");
