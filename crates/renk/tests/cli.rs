@@ -470,6 +470,30 @@ fn fmt_write_formats_files_and_directories_in_place() {
 }
 
 #[test]
+fn fmt_names_a_byte_order_mark_and_writes_the_file_without_it() {
+    let dir = temp_dir("fmt-bom");
+    let formatted = "fn main():\n    let x = 1\n";
+    fs::write(dir.join("bom.rk"), format!("\u{feff}{formatted}")).unwrap();
+    fs::write(dir.join("both.rk"), "\u{feff}fn main():\n  let  x = 1\n").unwrap();
+
+    let output = renk(&["fmt", "--check", "bom.rk"], "", &dir);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(text(&output.stdout), "bom.rk: byte order mark\n");
+    let output = renk(&["fmt", "--check", "both.rk"], "", &dir);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        text(&output.stdout).starts_with("both.rk: byte order mark\n--- both.rk\n"),
+        "{}",
+        text(&output.stdout)
+    );
+    let output = renk(&["fmt", "--write", "bom.rk", "both.rk"], "", &dir);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
+    assert_eq!(fs::read_to_string(dir.join("bom.rk")).unwrap(), formatted);
+    assert_eq!(fs::read_to_string(dir.join("both.rk")).unwrap(), formatted);
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
 fn fmt_keeps_an_empty_file_empty_and_turns_crlf_into_lf() {
     let dir = temp_dir("fmt-edges");
     fs::write(dir.join("empty.rk"), "").unwrap();
