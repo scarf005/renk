@@ -285,7 +285,24 @@ fn rustfmt(rust: &str) -> Option<String> {
         .flatten()
 }
 
+/// Refuses an output path that names the input file, so the result cannot replace the source.
+fn check_output(Io { input, output }: &Io) -> CliResult<()> {
+    if let (Some(input), Some(output)) = (input, output)
+        && let (Ok(input_file), Ok(output_file)) =
+            (fs::canonicalize(input), fs::canonicalize(output))
+        && input_file == output_file
+    {
+        return Err(format!(
+            "{}: refusing to write the output over the input file",
+            input.display()
+        )
+        .into());
+    }
+    Ok(())
+}
+
 fn run_from_rust(args: FromRust) -> CliResult<i32> {
+    check_output(&args.io)?;
     let source = read_source(args.io.input.as_ref())?;
     let converted = if args.aggressive {
         rust_to_renk_aggressive(&source)?
@@ -297,6 +314,7 @@ fn run_from_rust(args: FromRust) -> CliResult<i32> {
 }
 
 fn run_transpile(args: Transpile) -> CliResult<i32> {
+    check_output(&args.io)?;
     let Transpile {
         io: Io { input, output },
         source_map,
