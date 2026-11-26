@@ -237,7 +237,11 @@ fn line_one_columns_count_a_byte_order_mark() {
     assert_eq!((item.source_line, item.source_column), (1, 1));
     let branch = &item.children[0];
     assert_eq!(
-        (branch.source_line, branch.source_text.as_str(), branch.source_column),
+        (
+            branch.source_line,
+            branch.source_text.as_str(),
+            branch.source_column
+        ),
         (1, "if c:", 24)
     );
 }

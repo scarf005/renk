@@ -25,7 +25,8 @@ pub struct ScriptParts {
 
 /// Finds the parts of a script; a frontmatter fence without its closing line is an error.
 pub fn script_parts(source: &str) -> Result<ScriptParts, TranspileError> {
-    let lines = without_bom(source).split_inclusive('\n').collect::<Vec<_>>();
+    let source = without_bom(source);
+    let lines = source.split_inclusive('\n').collect::<Vec<_>>();
     let shebang = usize::from(
         lines
             .first()
