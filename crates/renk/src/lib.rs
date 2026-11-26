@@ -62,12 +62,14 @@ impl TranspileOutput {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TranspileError {
     pub line: usize,
+    /// The 1-based character column to look at on `line`.
+    pub column: usize,
     pub message: String,
 }
 
 impl fmt::Display for TranspileError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "line {}: {}", self.line, self.message)
+        write!(f, "{}:{}: {}", self.line, self.column, self.message)
     }
 }
 
@@ -2234,6 +2236,7 @@ fn parse_source_tree(lines: &[SourceLine]) -> Result<Vec<Node>, TranspileError> 
     if index != lines.len() {
         return Err(TranspileError {
             line: lines[index].line,
+            column: lines[index].indent + 1,
             message: "unexpected indentation".to_string(),
         });
     }
@@ -2346,13 +2349,15 @@ fn indent_tab_lines(source: &str) -> impl Iterator<Item = usize> {
 
 /// Renk reads structure from indentation, so a tab there is ambiguous.
 fn reject_indent_tabs(source: &str) -> Result<(), TranspileError> {
-    match indent_tab_lines(source).next() {
-        Some(index) => Err(TranspileError {
-            line: index + 1,
-            message: "tabs are not supported; use spaces".to_string(),
-        }),
-        None => Ok(()),
-    }
+    let Some(index) = indent_tab_lines(source).next() else {
+        return Ok(());
+    };
+    let line = source.lines().nth(index).unwrap_or_default();
+    Err(TranspileError {
+        line: index + 1,
+        column: line.chars().take_while(|&c| c != '\t').count() + 1,
+        message: "tabs are not supported; use spaces".to_string(),
+    })
 }
 
 /// Moves an arm starting on its `macro_rules! m {(...) => ({` line, and the `})}` closing both,
@@ -2568,6 +2573,7 @@ fn source_lines(source: &str) -> Result<Vec<SourceLine>, TranspileError> {
                     if code.trim_end_matches([';', ',']).replace(' ', "") != expected {
                         return Err(TranspileError {
                             line,
+                            column: first_column(without_comment),
                             message: format!(
                                 "the line closing this block closes what its head left open, `{}`",
                                 // A `:` head closing a group leaves out the `}`, as in `)`.
@@ -2624,8 +2630,13 @@ fn source_lines(source: &str) -> Result<Vec<SourceLine>, TranspileError> {
             )
         {
             let Some((index, next)) = raw_lines.next() else {
+                let (line, column) = first_unclosed(&physical[line - 1..].join("\n"))
+                    .map_or((line, first_column(without_comment)), |(offset, column)| {
+                        (line + offset, column)
+                    });
                 return Err(TranspileError {
                     line,
+                    column,
                     message: "unclosed delimiter, literal, or `=` continuation at end of file"
                         .to_string(),
                 });
@@ -3473,6 +3484,43 @@ fn lines_ending_in_literal(source: &str) -> Vec<bool> {
         .collect()
 }
 
+/// The 1-based column of the first character of `line` after its indentation.
+fn first_column(line: &str) -> usize {
+    line.chars().take_while(|c| c.is_whitespace()).count() + 1
+}
+
+/// The line offset and 1-based column in `text` of the literal or comment left open, or else of
+/// the outermost delimiter left open.
+fn first_unclosed(text: &str) -> Option<(usize, usize)> {
+    let chars = text.chars().collect::<Vec<_>>();
+    let (mut open, mut index) = (Vec::new(), 0);
+    while index < chars.len() {
+        if let Some(end) = opaque_span_end(&chars, index) {
+            if !opaque_span_is_closed(&chars, index, end) {
+                open = vec![index];
+                break;
+            }
+            index = end + 1;
+            continue;
+        }
+        match chars[index] {
+            '(' | '[' | '{' => open.push(index),
+            ')' | ']' | '}' => {
+                open.pop();
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+    let at = *open.first()?;
+    let line_start = chars[..at]
+        .iter()
+        .rposition(|&c| c == '\n')
+        .map_or(0, |at| at + 1);
+    let offset = chars[..at].iter().filter(|&&c| c == '\n').count();
+    Some((offset, at - line_start + 1))
+}
+
 fn keep_literal_end(line: &str, in_literal: bool) -> &str {
     if in_literal { line } else { line.trim_end() }
 }
@@ -3700,6 +3748,7 @@ fn parse_nodes(
         {
             return Err(TranspileError {
                 line: line.line,
+                column: line.indent + 1,
                 message: "indentation must belong to the previous line".to_string(),
             });
         }
@@ -3716,6 +3765,7 @@ fn parse_nodes(
         if !line.raw && line.text.trim() == ":" {
             return Err(TranspileError {
                 line: line.line,
+                column: line.indent + 1,
                 message: "a multi-line header ends its last line with `:`, as in `    T: Debug:`"
                     .to_string(),
             });
@@ -3734,6 +3784,7 @@ fn parse_nodes(
         if !line.raw && line.text.starts_with([')', ']', ',']) && !argument {
             return Err(TranspileError {
                 line: line.line,
+                column: line.indent + 1,
                 message: "a closing line must follow a block whose head leaves `(` or `[` open, at the head's indent".to_string(),
             });
         }
@@ -3747,6 +3798,7 @@ fn parse_nodes(
             if !accepts_closing_line(&line.text, &nodes) && !opens_group_block(lines, line) {
                 return Err(TranspileError {
                     line: next.line,
+                    column: next.indent + 1,
                     message: "a `}` closing line must follow a line ending with `{`, a trailing `match` head, or the last `else` of a `{` chain".to_string(),
                 });
             }
@@ -3766,6 +3818,7 @@ fn parse_nodes(
         {
             return Err(TranspileError {
                 line: line.line,
+                column: line.indent + 1,
                 message: "a block whose head leaves `(` or `[` open ends with a line closing them at the head's indent, such as `)` or `})`".to_string(),
             });
         }
@@ -3908,6 +3961,7 @@ fn require_block_opener(node: &Node) -> Result<(), TranspileError> {
     } else {
         Err(TranspileError {
             line: node.line,
+            column: node.indent + 1,
             message: "indented blocks require `:`".to_string(),
         })
     }
@@ -3965,7 +4019,11 @@ fn inline_block_body(node: &Node) -> Option<Vec<Node>> {
 
 fn validate_function_node(node: &Node) -> Result<(), TranspileError> {
     if let Some(body) = inline_block_body(node) {
-        return validate_nodes(&body, Context::Block);
+        // The lowered body is indented 4 columns past the function.
+        return validate_nodes(&body, Context::Block).map_err(|error| TranspileError {
+            column: error.column - 4,
+            ..error
+        });
     }
     let (text, _) = strip_block_marker(node.text.trim());
     let Some((_, body)) = split_function_body(text) else {
@@ -3985,6 +4043,7 @@ fn validate_function_node(node: &Node) -> Result<(), TranspileError> {
     }
     Err(TranspileError {
         line: node.line,
+        column: node.indent + 1,
         message: "inline function bodies cannot own indented blocks; move the body below `:` or use method-chain continuations".to_string(),
     })
 }
@@ -4012,11 +4071,13 @@ fn validate_statement_node(node: &Node) -> Result<(), TranspileError> {
     } else if has_block_marker(text) {
         Err(TranspileError {
             line: node.line,
+            column: node.indent + 1,
             message: format!("unsupported indented block after `{block_text}`"),
         })
     } else {
         Err(TranspileError {
             line: node.line,
+            column: node.indent + 1,
             message: "indented blocks require `:`".to_string(),
         })
     }
@@ -4066,6 +4127,7 @@ fn validate_match_arm(node: &Node) -> Result<(), TranspileError> {
         } else {
             Err(TranspileError {
                 line: node.line,
+                column: node.indent + 1,
                 message: "match arms with inline bodies cannot own indented blocks".to_string(),
             })
         }
@@ -4086,6 +4148,7 @@ fn validate_macro_arm(node: &Node) -> Result<(), TranspileError> {
         } else {
             Err(TranspileError {
                 line: node.line,
+                column: node.indent + 1,
                 message: "macro arms with inline bodies cannot own indented blocks".to_string(),
             })
         }
@@ -4104,6 +4167,7 @@ fn reject_children(node: &Node, message: &str) -> Result<(), TranspileError> {
     } else {
         Err(TranspileError {
             line: node.line,
+            column: node.indent + 1,
             message: message.to_string(),
         })
     }

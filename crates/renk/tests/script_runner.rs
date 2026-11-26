@@ -192,7 +192,7 @@ fn script_reports_an_invalid_frontmatter_manifest_at_its_script_line() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert_eq!(output.status.code(), Some(1), "{stderr}");
     assert!(
-        stderr.starts_with(&format!("renk: {}:4: ", script.display())),
+        stderr.starts_with(&format!("renk: {}:4:11: ", script.display())),
         "{stderr}"
     );
     let _ = fs::remove_dir_all(dir);

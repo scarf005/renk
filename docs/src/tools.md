@@ -20,8 +20,8 @@ renk fmt --write src         # rewrites each .rk file under src that is not form
 `--check` and `--write` take files and directories. A directory stands for the `.rk` files
 under it, except in `target`, `node_modules`, and hidden directories. Formatting more than one
 file needs one of the two. `--check` also names a file with CRLF line endings or a byte order
-mark, and `--write` removes the mark. An error starts with the file and line, as in
-`src/main.rk:3: tabs are not supported`, and formatting goes on with the next file.
+mark, and `--write` removes the mark. An error starts with the file, line, and column, as in
+`src/main.rk:3:1: tabs are not supported`, and formatting goes on with the next file.
 
 ## Source maps
 

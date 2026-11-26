@@ -43,6 +43,7 @@ pub fn script_parts(source: &str) -> Result<ScriptParts, TranspileError> {
     let Some(end) = (start + 1..lines.len()).find(|&index| lines[index].trim_end() == fence) else {
         return Err(TranspileError {
             line: start + 1,
+            column: 1,
             message: "unclosed frontmatter".to_string(),
         });
     };
@@ -113,7 +114,15 @@ pub fn script_rust(
         _ => Some(line),
     };
     let error_line = |mut error: TranspileError| {
-        error.line = script_line(error.line).unwrap_or(error.line);
+        if let Some(line) = script_line(error.line) {
+            // Take off the indent that the `fn main` wrapper added to the line.
+            let width = |text: &str| text.trim_end_matches('\n').chars().count();
+            let added = body.lines().nth(error.line - 1).map_or(0, |wrapped| {
+                width(wrapped).saturating_sub(width(lines[line - 1]))
+            });
+            error.column = error.column.saturating_sub(added).max(1);
+            error.line = line;
+        }
         error
     };
     let (rust, body_lines) = if syntax == SourceSyntax::Renk {

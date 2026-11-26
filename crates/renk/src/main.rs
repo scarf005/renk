@@ -1642,6 +1642,7 @@ fn check_manifest(source: &str) -> Result<(), TranspileError> {
     let before = &manifest[..error.span().map_or(0, |span| span.start)];
     Err(TranspileError {
         line: start + 2 + before.matches('\n').count(),
+        column: before.chars().rev().take_while(|&c| c != '\n').count() + 1,
         message: format!("invalid manifest: {}", error.message().trim_end()),
     })
 }
@@ -1734,9 +1735,9 @@ fn input_name(path: Option<&Path>) -> String {
     path.map_or_else(|| "<stdin>".to_string(), |path| path.display().to_string())
 }
 
-/// `error` in the input that `name` shows, as `name:line: message`.
+/// `error` in the input that `name` shows, as `name:line:column: message`.
 fn located(name: impl std::fmt::Display, error: TranspileError) -> String {
-    format!("{name}:{}: {}", error.line, error.message)
+    format!("{name}:{error}")
 }
 
 fn source_syntax(path: Option<&Path>) -> SourceSyntax {

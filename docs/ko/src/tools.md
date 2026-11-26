@@ -18,7 +18,7 @@ renk fmt --write src         # src 아래에서 정리되지 않은 .rk 파일�
 `--check`와 `--write`에는 파일과 디렉터리를 줄 수 있다. 디렉터리를 주면 그 아래의 `.rk` 파일을
 정리하되 `target`, `node_modules`, 숨김 디렉터리는 건너뛴다. 파일을 둘 이상 정리하려면 둘 중
 하나가 필요하다. `--check`는 줄 끝이 CRLF이거나 바이트 순서 표시(BOM)가 있는 파일도 알려
-주고, `--write`는 BOM을 지운다. 오류는 `src/main.rk:3: tabs are not supported`처럼 파일과 줄로
+주고, `--write`는 BOM을 지운다. 오류는 `src/main.rk:3:1: tabs are not supported`처럼 파일, 줄, 열로
 시작하고, 정리는 다음 파일로 넘어간다.
 
 ## 소스 맵

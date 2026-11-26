@@ -1812,7 +1812,7 @@ fn formatted(uri: &Url, text: &str) -> std::result::Result<String, String> {
     };
     format_source_with(text, &rustfmt).map_err(|error| {
         let name = path.map_or_else(|| uri.to_string(), |path| path.display().to_string());
-        format!("{name}:{}: {}", error.line, error.message)
+        format!("{name}:{error}")
     })
 }
 
