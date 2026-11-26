@@ -1,7 +1,8 @@
 //! The Cargo packages that one cargo call can build, and the `.rk` sources in them.
 
 use std::{
-    fs, io,
+    fs,
+    io::{self, Read},
     path::{Path, PathBuf},
 };
 
@@ -150,21 +151,39 @@ fn walk(dir: &Path, visit: &mut dyn FnMut(&Path)) -> io::Result<()> {
     Ok(())
 }
 
-/// The `.rk` files in the source directories of `package`, and its `build.rk`.
+/// The `.rk` files in the source directories of `package`, and its `build.rk`. It deletes each
+/// generated `.rs` file there that has no `.rk` file with the same stem beside it.
 pub fn sources(package: &Path) -> io::Result<Vec<PathBuf>> {
     let mut sources = Vec::new();
+    let mut rust = Vec::new();
+    let mut visit = |path: &Path| match path.extension().and_then(|extension| extension.to_str()) {
+        Some("rk") => sources.push(path.to_path_buf()),
+        Some("rs") => rust.push(path.to_path_buf()),
+        _ => {}
+    };
     for root in SOURCE_ROOTS.map(|root| package.join(root)) {
         if root.is_dir() {
-            walk(&root, &mut |path| {
-                if path.extension().is_some_and(|extension| extension == "rk") {
-                    sources.push(path.to_path_buf());
+            walk(&root, &mut visit)?;
+        } else {
+            for path in [root.with_extension("rs"), root] {
+                if path.is_file() {
+                    visit(&path);
                 }
-            })?;
-        } else if root.is_file() {
-            sources.push(root);
+            }
+        }
+    }
+    for path in rust {
+        if !path.with_extension("rk").exists() && is_generated(&path) {
+            fs::remove_file(path)?;
         }
     }
     Ok(sources)
+}
+
+fn is_generated(path: &Path) -> bool {
+    let mut header = [0; GENERATED_HEADER.len()];
+    fs::File::open(path).is_ok_and(|mut file| file.read_exact(&mut header).is_ok())
+        && header == GENERATED_HEADER.as_bytes()
 }
 
 /// Writes `rust`, which starts with [`GENERATED_HEADER`], to `path`. It refuses to replace a file
