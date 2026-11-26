@@ -68,7 +68,7 @@ const CHILD_ENV: [&str; 4] = ["PATH", "RUSTUP_HOME", "RUSTUP_TOOLCHAIN", "LANG"]
 
 static ACTIVE_REQUESTS: AtomicUsize = AtomicUsize::new(0);
 static ACTIVE_RUNS: AtomicUsize = AtomicUsize::new(0);
-static RUN_RATES: RunRates = Mutex::new(BTreeMap::new());
+static RUN_RATES: RunRates = RunRates::new(MAX_RATE_LIMITED_CLIENTS);
 /// Process IDs of the steps that `run_command` runs now. Every other child of the server is a
 /// process that a step left behind.
 static ACTIVE_CHILDREN: Mutex<Vec<u32>> = Mutex::new(Vec::new());
@@ -85,8 +85,22 @@ struct AppState {
     run_rates: &'static RunRates,
 }
 
-/// The start of the current one-minute window and the runs in it, per client.
-type RunRates = Mutex<BTreeMap<IpAddr, (Instant, usize)>>;
+#[derive(Debug)]
+struct RunRates {
+    /// The most clients that `clients` holds.
+    capacity: usize,
+    /// The start of the current one-minute window and the runs in it, per client.
+    clients: Mutex<BTreeMap<IpAddr, (Instant, usize)>>,
+}
+
+impl RunRates {
+    const fn new(capacity: usize) -> Self {
+        Self {
+            capacity,
+            clients: Mutex::new(BTreeMap::new()),
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug)]
 struct ServerConfig {
@@ -453,10 +467,11 @@ async fn handle_run_request(
 fn try_run_rate_limit(rates: &RunRates, client: IpAddr, max: usize) -> bool {
     let client = rate_limit_client(client);
     let now = Instant::now();
-    let mut rates = rates.lock().unwrap_or_else(PoisonError::into_inner);
-    if rates.len() >= MAX_RATE_LIMITED_CLIENTS && !rates.contains_key(&client) {
+    let capacity = rates.capacity;
+    let mut rates = rates.clients.lock().unwrap_or_else(PoisonError::into_inner);
+    if rates.len() >= capacity && !rates.contains_key(&client) {
         rates.retain(|_, (started, _)| now.duration_since(*started) < RATE_LIMIT_WINDOW);
-        if rates.len() >= MAX_RATE_LIMITED_CLIENTS {
+        if rates.len() >= capacity {
             return false;
         }
     }
@@ -1221,7 +1236,7 @@ mod tests {
                 "renk.example.com, Other.example:8443",
             ),
             active_runs: Box::leak(Box::default()),
-            run_rates: Box::leak(Box::default()),
+            run_rates: Box::leak(Box::new(RunRates::new(MAX_RATE_LIMITED_CLIENTS))),
         }
     }
 
@@ -1953,22 +1968,36 @@ mod tests {
     /// minute of the others is over, and the table then forgets them.
     #[test]
     fn run_rate_table_stays_bounded() {
-        let rates = RunRates::default();
+        let rates = RunRates::new(MAX_RATE_LIMITED_CLIENTS);
         for client in 0..MAX_RATE_LIMITED_CLIENTS as u32 {
             assert!(try_run_rate_limit(&rates, client.to_be_bytes().into(), 1));
         }
         let new = IpAddr::from([255; 4]);
         assert!(!try_run_rate_limit(&rates, new, 1));
-        for (started, _) in rates.lock().unwrap().values_mut() {
+        for (started, _) in rates.clients.lock().unwrap().values_mut() {
             *started = started.checked_sub(RATE_LIMIT_WINDOW).unwrap();
         }
         assert!(try_run_rate_limit(&rates, new, 1));
-        assert_eq!(rates.lock().unwrap().len(), 1);
+        assert_eq!(rates.clients.lock().unwrap().len(), 1);
+    }
+
+    /// Stores at most 2 clients, and each client gets 2 runs. Client 1 runs, client 2 runs and
+    /// client 1 runs again. Client 3 must get a run and replace client 2, the client used
+    /// longest ago. Client 1 keeps its count and gets no third run.
+    #[test]
+    fn run_rate_table_drops_the_client_used_longest_ago() {
+        let rates = RunRates::new(2);
+        let client = |last: u8| IpAddr::from([192, 0, 2, last]);
+        for last in [1, 2, 1, 3] {
+            assert!(try_run_rate_limit(&rates, client(last), 2), "client {last}");
+        }
+        assert!(!rates.clients.lock().unwrap().contains_key(&client(2)));
+        assert!(!try_run_rate_limit(&rates, client(1), 2));
     }
 
     #[test]
     fn run_rate_limit_counts_an_ipv6_network_as_one_client() {
-        let rates = RunRates::default();
+        let rates = RunRates::new(MAX_RATE_LIMITED_CLIENTS);
         let address = |text: &str| text.parse::<IpAddr>().unwrap();
         assert!(try_run_rate_limit(&rates, address("2001:db8::1"), 1));
         assert!(!try_run_rate_limit(&rates, address("2001:db8::ffff:2"), 1));
