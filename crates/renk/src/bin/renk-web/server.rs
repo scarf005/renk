@@ -1509,6 +1509,49 @@ mod tests {
         assert_eq!(body["stdout"], json!("true [\"1\"]\n"), "{body}");
     }
 
+    /// Reserves 64 MiB every 10 ms and never frees it. The address-space limit must stop the
+    /// program before the run timeout of 2 s.
+    #[tokio::test]
+    #[ignore = "needs unprivileged user namespaces"]
+    async fn stops_a_program_that_allocates_without_end() {
+        let body = run_in_namespaces(
+            r#"fn main() {
+                loop {
+                    std::mem::forget(Vec::<u8>::with_capacity(64 << 20));
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+            }"#,
+        )
+        .await;
+        let stderr = body["stderr"].as_str().unwrap();
+        let stopped = body["timedOut"] == json!(false) && stderr.contains("memory allocation of");
+        assert!(stopped, "{body}");
+    }
+
+    /// Starts `sleep 60` every 5 ms until a start fails, then prints the error. The process
+    /// limit must make a start fail before the run timeout of 2 s.
+    #[tokio::test]
+    #[ignore = "needs unprivileged user namespaces"]
+    async fn stops_a_program_that_forks_without_end() {
+        let body = run_in_namespaces(
+            r#"fn main() {
+                let mut children = Vec::new();
+                loop {
+                    match std::process::Command::new("sleep").arg("60").spawn() {
+                        Ok(child) => children.push(child),
+                        Err(error) => return println!("{error}"),
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+            }"#,
+        )
+        .await;
+        let stdout = body["stdout"].as_str().unwrap();
+        let stopped =
+            body["timedOut"] == json!(false) && stdout.contains("temporarily unavailable");
+        assert!(stopped, "{body}");
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn commands_are_killed_with_their_process_group_on_timeout() {
