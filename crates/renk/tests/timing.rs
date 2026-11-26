@@ -355,3 +355,33 @@ fn many_functions_with_wrapped_asserts_convert_in_linear_time() {
     // Four times the functions take about four times as long, not sixteen.
     assert!(long < short * 8, "{short:?} {long:?}");
 }
+
+#[test]
+fn where_clauses_over_many_lines_transpile_in_linear_time() {
+    let _serial = SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    // As many parameter lines as bound lines, so each bound line that searches the header for
+    // its `where` reads every parameter line.
+    let convert = |lines: usize| {
+        let head = format!("fn f[T](\n{})\nwhere\n", "    a: T,\n".repeat(lines));
+        transpile_repeated(&head, "    T: Clone,\n", "    T: Copy:\n    ()\n", lines)
+    };
+    let (short, long) = (fastest(|| convert(1_000)), fastest(|| convert(4_000)));
+    // Four times the lines take about four times as long, not sixteen.
+    assert!(long < short * 8, "{short:?} {long:?}");
+}
+
+#[test]
+fn macro_matchers_over_many_lines_transpile_in_linear_time() {
+    let _serial = SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let convert = |lines| {
+        let head = "macro_rules! m:\n    ($a:ident\n";
+        transpile_repeated(head, "        $b:ident\n", "    ) => 1\n", lines)
+    };
+    let (short, long) = (fastest(|| convert(1_000)), fastest(|| convert(4_000)));
+    // Four times the lines take about four times as long, not sixteen.
+    assert!(long < short * 8, "{short:?} {long:?}");
+}
