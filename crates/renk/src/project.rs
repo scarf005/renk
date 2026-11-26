@@ -124,14 +124,16 @@ fn excluded(dir: &Path, document: &DocumentMut) -> Vec<PathBuf> {
         .collect()
 }
 
-/// Pushes to `found` each directory below `dir` that the path components `parts` name. A
-/// component can hold `*` and `?`, and a `**` component stands for any number of directories.
+/// Pushes to `found` each directory below `dir` that the path components `parts` name, as the
+/// `glob` crate matches them for cargo. A component can hold `*`, `?`, `[abc]`, `[a-z]` and
+/// `[!abc]`, and a `**` component stands for any number of directories. A symlink to a directory
+/// matches a component but is not entered by `**`.
 fn expand(dir: &Path, parts: &[&str], found: &mut Vec<PathBuf>) {
     let Some((part, rest)) = parts.split_first() else {
         found.push(dir.to_path_buf());
         return;
     };
-    if !part.contains(['*', '?']) {
+    if !part.contains(['*', '?', '[']) {
         return expand(&dir.join(part), rest, found);
     }
     if *part == "**" {
@@ -140,29 +142,64 @@ fn expand(dir: &Path, parts: &[&str], found: &mut Vec<PathBuf>) {
     let pattern = part.chars().collect::<Vec<_>>();
     for entry in fs::read_dir(dir).into_iter().flatten().flatten() {
         let name = entry.file_name();
-        let Some(name) = name.to_str().filter(|name| !skipped(name)) else {
+        let Some(name) = name.to_str() else {
             continue;
         };
-        if !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
-            continue;
-        }
         if *part == "**" {
-            expand(&entry.path(), parts, found);
-        } else if wildcard(&pattern, &name.chars().collect::<Vec<_>>()) {
+            if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                expand(&entry.path(), parts, found);
+            }
+        } else if entry.path().is_dir() && wildcard(&pattern, &name.chars().collect::<Vec<_>>()) {
             expand(&entry.path(), rest, found);
         }
     }
 }
 
-/// Whether `name` matches `pattern`, where `*` stands for any characters and `?` for one.
+/// Whether `name` matches `pattern`, where `*` stands for any characters, `?` for one, and
+/// `[abc]`, `[a-z]` and `[!abc]` for one character in or out of a set.
 fn wildcard(pattern: &[char], name: &[char]) -> bool {
-    match pattern.split_first() {
-        None => name.is_empty(),
-        Some(('*', rest)) => (0..=name.len()).any(|skip| wildcard(rest, &name[skip..])),
-        Some((&c, rest)) => {
-            name.first().is_some_and(|&first| c == '?' || c == first) && wildcard(rest, &name[1..])
+    let Some((&c, rest)) = pattern.split_first() else {
+        return name.is_empty();
+    };
+    if c == '*' {
+        return (0..=name.len()).any(|skip| wildcard(rest, &name[skip..]));
+    }
+    let Some((&first, name_rest)) = name.split_first() else {
+        return false;
+    };
+    // The set ends at the first `]` after its first character, so `[]]` holds `]`.
+    let set_end = (c == '[')
+        .then(|| {
+            let start = usize::from(rest.first() == Some(&'!'));
+            let end = rest[start..].iter().skip(1).position(|&c| c == ']');
+            end.map(|end| start + 1 + end)
+        })
+        .flatten();
+    let (matched, rest) = match set_end {
+        Some(end) => (in_set(&rest[..end], first), &rest[end + 1..]),
+        None => (c == '?' || c == first, rest),
+    };
+    matched && wildcard(rest, name_rest)
+}
+
+/// Whether `c` is in the set `body`, the text between `[` and `]`.
+fn in_set(body: &[char], c: char) -> bool {
+    let (negated, body) = match body.split_first() {
+        Some(('!', body)) => (true, body),
+        _ => (false, body),
+    };
+    let mut i = 0;
+    let mut found = false;
+    while i < body.len() {
+        if body.get(i + 1) == Some(&'-') && i + 2 < body.len() {
+            found |= (body[i]..=body[i + 2]).contains(&c);
+            i += 3;
+        } else {
+            found |= body[i] == c;
+            i += 1;
         }
     }
+    found != negated
 }
 
 /// The manifest in `dir`, if it is valid TOML.

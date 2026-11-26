@@ -6,6 +6,10 @@ Cargo 명령을 실행한다. 대상은 루트 패키지, `workspace.exclude`에
 그 패키지들의 `path` 의존성이다. `vendor/dep`나 `tests/fixtures/demo`처럼 루트 아래에 있어도
 그 외의 패키지는 건드리지 않는다.
 
+`workspace.members` 항목은 Cargo처럼 디렉터리와 맞춘다. `*`, `?`, `[abc]`, `[a-z]`, `[!abc]`,
+`**`를 쓸 수 있다. `*`는 숨김 디렉터리에도 맞고, 디렉터리로 가는 심볼릭 링크는 항목에 맞으면
+멤버가 된다.
+
 ```sh
 renk build
 renk check

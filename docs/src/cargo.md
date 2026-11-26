@@ -6,6 +6,10 @@ then run the same Cargo command. That covers the root package, the `workspace.me
 that `workspace.exclude` keeps, and the `path` dependencies of those packages. Other packages
 under the root, such as `vendor/dep` or `tests/fixtures/demo`, are left alone.
 
+A `workspace.members` entry matches directories as Cargo does: `*`, `?`, `[abc]`, `[a-z]`, `[!abc]`,
+and `**`. `*` also matches a hidden directory, and a symlink to a directory is a member when
+an entry matches it.
+
 ```sh
 renk build
 renk check
