@@ -4086,10 +4086,16 @@ fn emit_braced_item_statement(
         && header.ends_with('}')
         && open_delimiters(header).is_some_and(|open| open.is_empty())
     {
-        // The fields of a one-line struct are lowered; the body of a one-line item such as
-        // `impl[T] Sealed for Vec[T] { fn f() {} }` keeps its Rust tokens.
+        // The fields of a one-line struct and the arms of a one-line `match` are lowered; the
+        // body of a one-line item such as `impl[T] Sealed for Vec[T] { fn f() {} }` keeps its
+        // Rust tokens.
         let line = match one_line_body(strip_block_marker(node.text.trim()).0) {
-            Some((head, body)) if !matches!(child_context, Context::Struct | Context::Enum) => {
+            Some((head, body))
+                if !matches!(
+                    child_context,
+                    Context::Struct | Context::Enum | Context::Match
+                ) =>
+            {
                 format!("{}{body}", lower_signature(head))
             }
             _ => header.to_string(),
