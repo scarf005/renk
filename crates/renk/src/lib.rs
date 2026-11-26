@@ -5402,6 +5402,22 @@ fn is_std_expression_macro(name: &str) -> bool {
     format_macro_prefix(name).is_some() || matches!(name, "dbg" | "matches" | "vec")
 }
 
+/// Whether a macro name after `before`, read nearest character first, is a std macro path:
+/// `write`, `std::write`, and `::core::write` are, `defmt::write` is not.
+fn is_std_macro_path(before: impl Iterator<Item = char>) -> bool {
+    let mut before = before.peekable();
+    if before.next_if_eq(&':').is_none() || before.next_if_eq(&':').is_none() {
+        return true;
+    }
+    let root = std::iter::from_fn(|| before.next_if(|character| is_ident_continue(*character)))
+        .collect::<Vec<_>>();
+    // A `::` before the root must not follow another segment, as in `a::std::write`.
+    ["std", "core"]
+        .iter()
+        .any(|name| name.chars().rev().eq(root.iter().copied()))
+        && (before.next() != Some(':') || before.nth(1).is_none_or(|c| !is_ident_continue(c)))
+}
+
 /// Multi-line `{` blocks in a `view!` body, as in a Leptos handler `on:click=move |_| {`, hold
 /// Renk statements; the rest of the body stays Rust tokens.
 fn lower_view_blocks(text: &str) -> String {
@@ -5886,7 +5902,9 @@ fn map_std_macro_arguments(text: &str, lower: &dyn Fn(usize, &str) -> String) ->
         let name = chars[index..name_end].iter().collect::<String>();
         let bang = (name_end..chars.len()).find(|&at| !chars[at].is_whitespace());
         let invocation = macro_invocation_end(&chars, index).filter(|_| {
-            bang.is_some_and(|bang| chars[bang] == '!') && is_std_expression_macro(&name)
+            bang.is_some_and(|bang| chars[bang] == '!')
+                && is_std_expression_macro(&name)
+                && is_std_macro_path(chars[..index].iter().rev().copied())
         });
         let Some(end) = invocation else {
             output.extend(&chars[index..name_end]);
@@ -5983,6 +6001,7 @@ fn rewrite_format_macros(text: &str, rewrite: fn(&str, usize) -> Option<String>)
             let mut cursor = name_end;
             skip_whitespace(text, &mut cursor);
             if let Some(prefix) = format_macro_prefix(name)
+                && is_std_macro_path(text[..index].chars().rev())
                 && text[cursor..].starts_with('!')
             {
                 cursor += 1;
