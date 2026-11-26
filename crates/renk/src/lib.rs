@@ -172,7 +172,12 @@ struct Emitter {
 }
 
 pub fn transpile(source: &str) -> Result<TranspileOutput, TranspileError> {
-    on_large_stack(|| transpile_source(source))
+    on_large_stack(|| transpile_source(without_bom(source)))
+}
+
+/// `source` without the byte order mark some editors write at its start.
+fn without_bom(source: &str) -> &str {
+    source.strip_prefix('\u{feff}').unwrap_or(source)
 }
 
 fn transpile_source(source: &str) -> Result<TranspileOutput, TranspileError> {
@@ -232,7 +237,7 @@ fn transpile_lines(source: &str) -> Result<TranspileOutput, TranspileError> {
 }
 
 pub fn format_source(source: &str) -> Result<String, TranspileError> {
-    on_large_stack(|| format_lines(source))
+    on_large_stack(|| format_lines(without_bom(source)))
 }
 
 fn format_lines(source: &str) -> Result<String, TranspileError> {
@@ -271,6 +276,7 @@ pub fn format_source_with(
     source: &str,
     rustfmt: &dyn Fn(&str) -> Option<String>,
 ) -> Result<String, TranspileError> {
+    let source = without_bom(source);
     let parts = script::script_parts(source)?;
     let lines = source.split_inclusive('\n').collect::<Vec<_>>();
     let body = lines[parts.body_start..].concat();
@@ -599,7 +605,7 @@ pub fn rust_to_renk_aggressive(source: &str) -> Result<String, TranspileError> {
 }
 
 fn convert_rust_to_renk(source: &str, aggressive: bool) -> Result<String, TranspileError> {
-    on_large_stack(|| with_value_scopes(|| convert_rust_lines(source, aggressive)))
+    on_large_stack(|| with_value_scopes(|| convert_rust_lines(without_bom(source), aggressive)))
 }
 
 fn convert_rust_lines(source: &str, aggressive: bool) -> Result<String, TranspileError> {
