@@ -5190,6 +5190,15 @@ fn type_annotation_spans(chars: &[char]) -> Vec<(usize, usize)> {
             index = end + 1;
             continue;
         }
+        // Generic arguments such as `[(<T as Tr>::Out, usize)]` in `f[...](x)` lower as one type
+        // list in `replace_square_generics`.
+        if is_ident_start(chars[index])
+            && (index == 0 || !is_ident_continue(chars[index - 1]))
+            && let Some((close, _)) = generic_brackets(chars, index, read_ident(chars, index))
+        {
+            index = close + 1;
+            continue;
+        }
         if index > 0 && keyword_at(chars, index, "let") && chars.get(index + 3) == Some(&' ') {
             // A `let` inside a block of a group, as in `f(unsafe {` / `let x: T = ...`.
             let pattern_end = top_level_position(chars, index + 3, |at| {
@@ -6680,44 +6689,22 @@ fn replace_square_generics(text: &str, mode: GenericMode) -> String {
         let in_type_const_expr = mode == GenericMode::Type
             && (curly_depth > 0 || square_const.last().copied().unwrap_or(false));
 
-        // `name[...](` is a generic call and an uppercase `Name[...]` before `::` or `.name` is a
-        // generic path; `(xs[i])(` and `(NAME)[i].name` force indexing.
         if (mode == GenericMode::Expr || in_type_const_expr)
             && is_ident_start(chars[index])
             && (index == 0 || !is_ident_continue(chars[index - 1]))
         {
             let name_end = read_ident(&chars, index);
-            if chars.get(name_end) == Some(&'[')
-                && let Some(close) = matching_bracket(&chars, name_end, '[', ']')
-            {
-                let after = &chars[close + 1..];
-                // A CamelCase segment of a dotted path, as in `std.vec.Vec[u8].new()`, is a type.
-                let name = chars[index..name_end].iter().collect::<String>();
-                let path_head = chars[index].is_uppercase()
-                    && !is_screaming_case(&name)
-                    && (index == 0
-                        || chars[index - 1] != '.'
-                        || (is_camel_case(&name) && {
-                            let mut segments = dotted_segments_before(&chars, index);
-                            segments.push(name);
-                            should_convert_path(&segments, PathMode::Expr, None)
-                        }));
-                let dot_path = path_head
-                    && after.first() == Some(&'.')
-                    && after.get(1).copied().is_some_and(is_ident_start);
-                let colon_path = path_head && after.starts_with(&[':', ':']);
-                if after.first() == Some(&'(') || dot_path || colon_path {
-                    let content: String = chars[name_end + 1..close].iter().collect();
-                    output.extend(chars[index..name_end].iter());
-                    output.push_str("::<");
-                    output.push_str(&lower_generic_content(&content));
-                    output.push('>');
-                    if dot_path {
-                        output.push_str("::");
-                    }
-                    index = close + 1 + usize::from(dot_path);
-                    continue;
+            if let Some((close, dot_path)) = generic_brackets(&chars, index, name_end) {
+                let content: String = chars[name_end + 1..close].iter().collect();
+                output.extend(chars[index..name_end].iter());
+                output.push_str("::<");
+                output.push_str(&lower_generic_content(&content));
+                output.push('>');
+                if dot_path {
+                    output.push_str("::");
                 }
+                index = close + 1 + usize::from(dot_path);
+                continue;
             }
             output.extend(chars[index..name_end].iter());
             index = name_end;
@@ -6759,6 +6746,33 @@ fn replace_square_generics(text: &str, mode: GenericMode) -> String {
         index += 1;
     }
     output
+}
+
+/// The closing `]` of generic arguments after the identifier `chars[start..name_end]`, and
+/// whether a `.` follows them. `name[...](` is a generic call and an uppercase `Name[...]` before
+/// `::` or `.name` is a generic path; `(xs[i])(` and `(NAME)[i].name` force indexing.
+fn generic_brackets(chars: &[char], start: usize, name_end: usize) -> Option<(usize, bool)> {
+    if chars.get(name_end) != Some(&'[') {
+        return None;
+    }
+    let close = matching_bracket(chars, name_end, '[', ']')?;
+    let after = &chars[close + 1..];
+    // A CamelCase segment of a dotted path, as in `std.vec.Vec[u8].new()`, is a type.
+    let name = chars[start..name_end].iter().collect::<String>();
+    let path_head = chars[start].is_uppercase()
+        && !is_screaming_case(&name)
+        && (start == 0
+            || chars[start - 1] != '.'
+            || (is_camel_case(&name) && {
+                let mut segments = dotted_segments_before(chars, start);
+                segments.push(name);
+                should_convert_path(&segments, PathMode::Expr, None)
+            }));
+    let dot_path = path_head
+        && after.first() == Some(&'.')
+        && after.get(1).copied().is_some_and(is_ident_start);
+    let colon_path = path_head && after.starts_with(&[':', ':']);
+    (after.first() == Some(&'(') || dot_path || colon_path).then_some((close, dot_path))
 }
 
 /// The `a.b.` identifiers right before `index`, in order.
