@@ -4,7 +4,7 @@ use std::{
     io::Read,
     net::{IpAddr, Ipv6Addr, SocketAddr},
     path::{Component, Path, PathBuf},
-    process::{Command, Stdio},
+    process::{Child, Command, ExitStatus, Stdio},
     sync::{
         Mutex, PoisonError,
         atomic::{AtomicUsize, Ordering},
@@ -200,9 +200,14 @@ pub async fn main() -> std::io::Result<()> {
     serve(listener, state).await
 }
 
-/// Serves until ctrl-c or SIGTERM, then waits for the open requests.
+/// Serves until ctrl-c or SIGTERM. Then sends SIGTERM to the steps and waits for the open
+/// requests.
 async fn serve(listener: tokio::net::TcpListener, state: AppState) -> std::io::Result<()> {
-    let shutdown = shutdown_signal()?;
+    let signal = shutdown_signal()?;
+    let shutdown = async move {
+        signal.await;
+        terminate_steps();
+    };
     let app = router(state).into_make_service_with_connect_info::<SocketAddr>();
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown)
@@ -643,7 +648,7 @@ fn run_command(command: &str, args: &[&str], cwd: &Path, options: ChildOptions) 
         .stderr(Stdio::from(stderr_file));
     configure_child_process(&mut command, cwd, options);
     let child = {
-        // Keep the lock until the new step is in the list, or `kill_orphans` can kill it.
+        // Keep the lock until the new step is in the list, or `reap_step` can kill it.
         let mut active = ACTIVE_CHILDREN
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
@@ -672,37 +677,15 @@ fn run_command(command: &str, args: &[&str], cwd: &Path, options: ChildOptions) 
     let child_pid = child.id();
 
     let mut timed_out = false;
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => break,
-            Ok(None) if started.elapsed() >= timeout => {
-                timed_out = true;
-                kill_process_tree(child_pid);
-                let _ = child.kill();
-                break;
-            }
-            Ok(None) => thread::sleep(Duration::from_millis(10)),
-            Err(error) => {
-                kill_orphans(child_pid);
-                let _ = fs::remove_file(stdout_path);
-                let _ = fs::remove_file(stderr_path);
-                return CommandResult {
-                    status: None,
-                    stdout: String::new(),
-                    stderr: error.to_string(),
-                    timed_out,
-                    stdout_truncated: false,
-                    stderr_truncated: false,
-                    output_limited: false,
-                    elapsed_ms: elapsed_ms(started),
-                };
-            }
+    while !has_exited(child_pid) {
+        if started.elapsed() >= timeout {
+            timed_out = true;
+            kill_process_tree(child_pid);
+            break;
         }
+        thread::sleep(Duration::from_millis(10));
     }
-
-    let _ = unsafe { libc::kill(-(child_pid as i32), libc::SIGKILL) };
-    let status = child.wait();
-    kill_orphans(child_pid);
+    let status = reap_step(&mut child);
     let (stdout, stdout_truncated) = read_limited_utf8(&stdout_path, MAX_OUTPUT_BYTES);
     let (mut stderr, stderr_truncated) = read_limited_utf8(&stderr_path, MAX_OUTPUT_BYTES);
     let _ = fs::remove_file(stdout_path);
@@ -903,6 +886,11 @@ fn fork_pid_one() -> std::io::Result<()> {
     // `spawn` waits until every copy of its `exec` error pipe is closed. Only PID 1 calls
     // `exec`, so close the copy of this process.
     unsafe { libc::syscall(libc::SYS_close_range, 3, libc::c_uint::MAX, 0) };
+    // This process never calls `exec`, so it still has the signal handlers of the server. With
+    // the default actions, SIGTERM from `terminate_steps` ends it, and PID 1 gets SIGKILL.
+    for signal in 1..libc::SIGRTMIN() {
+        unsafe { libc::signal(signal, libc::SIG_DFL) };
+    }
     let mut status = 0;
     while unsafe { libc::waitpid(pid, &mut status, 0) } == -1
         && std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR)
@@ -910,7 +898,6 @@ fn fork_pid_one() -> std::io::Result<()> {
     unsafe {
         if libc::WIFSIGNALED(status) {
             let signal = libc::WTERMSIG(status);
-            libc::signal(signal, libc::SIG_DFL);
             libc::kill(libc::getpid(), signal);
             libc::_exit(128 + signal);
         }
@@ -968,30 +955,52 @@ fn set_limit(resource: libc::__rlimit_resource_t, soft: u64, hard: u64) -> std::
 }
 
 /// Marks the server as a child subreaper: the kernel makes it the parent of every process that
-/// a step leaves behind, so `kill_orphans` can find them.
+/// a step leaves behind, so `reap_step` can find them.
 fn become_child_subreaper() {
     let _ = unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) };
 }
 
-/// Removes `finished` from the active steps, then kills and reaps every other child of the
-/// server with its descendants, until none is left.
-fn kill_orphans(finished: u32) {
+/// Tells whether the process has exited. It stays a zombie, so its ID cannot belong to another
+/// process yet. An error counts as an exit, and `wait` then reports it.
+fn has_exited(pid: u32) -> bool {
+    let mut info = unsafe { std::mem::zeroed::<libc::siginfo_t>() };
+    let options = libc::WEXITED | libc::WNOHANG | libc::WNOWAIT;
+    let result = unsafe { libc::waitid(libc::P_PID, pid, &mut info, options) };
+    result == -1 || unsafe { info.si_pid() } != 0
+}
+
+/// Kills the process group of `step`, reaps it and removes it from the active steps. Then kills
+/// and reaps every other child of the server with its descendants, until none is left. The lock
+/// keeps `terminate_steps` from signalling the group after `wait`.
+fn reap_step(step: &mut Child) -> std::io::Result<ExitStatus> {
     let mut active = ACTIVE_CHILDREN
         .lock()
         .unwrap_or_else(PoisonError::into_inner);
-    active.retain(|pid| *pid != finished);
+    let _ = unsafe { libc::kill(-(step.id() as i32), libc::SIGKILL) };
+    let status = step.wait();
+    active.retain(|pid| *pid != step.id());
     loop {
         let orphans = child_processes(std::process::id())
             .into_iter()
             .filter(|pid| !active.contains(pid))
             .collect::<Vec<_>>();
         if orphans.is_empty() {
-            return;
+            return status;
         }
         for pid in orphans {
             kill_process_tree(pid);
             let _ = unsafe { libc::waitpid(pid as i32, std::ptr::null_mut(), 0) };
         }
+    }
+}
+
+/// Sends SIGTERM to the process group of every step.
+fn terminate_steps() {
+    let active = ACTIVE_CHILDREN
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    for pid in active.iter() {
+        let _ = unsafe { libc::kill(-(*pid as i32), libc::SIGTERM) };
     }
 }
 
