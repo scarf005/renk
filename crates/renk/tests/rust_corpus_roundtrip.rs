@@ -81,6 +81,10 @@ const CORPUS: &[(&str, &str)] = &[
     ),
     ("exact_text", include_str!("rust_corpus/exact_text.rs")),
     ("visibility", include_str!("rust_corpus/visibility.rs")),
+    (
+        "line_end_continuations",
+        include_str!("rust_corpus/line_end_continuations.rs"),
+    ),
 ];
 
 const RENK_CORPUS: &[(&str, &str)] = &[
