@@ -1050,6 +1050,37 @@ mod tests {
         let _ = fs::remove_dir_all(dir);
     }
 
+    /// Where user namespaces work, `readlink /proc/self/ns/net` prints another network namespace
+    /// than the server's. Where they do not (some containers and sandboxes), the step fails and
+    /// names the namespace step. `RENK_WEB_UNSANDBOXED=1` mode runs it in the server's namespace.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn sandboxed_commands_get_their_own_network_or_fail() {
+        let dir = temp_dir("netns");
+        let server = fs::read_link("/proc/self/ns/net").unwrap();
+        let readlink = |sandbox| {
+            let options = ChildOptions {
+                timeout: Duration::from_secs(5),
+                sandbox,
+            };
+            run_command("readlink", &["/proc/self/ns/net"], &dir, options)
+        };
+        let sandboxed = readlink(Sandbox::Namespaces);
+        if sandboxed.status == Some(0) {
+            assert_ne!(sandboxed.stdout.trim(), server.to_str().unwrap());
+        } else {
+            assert_eq!(sandboxed.status, None);
+            assert!(
+                sandboxed.stderr.starts_with("sandbox step `"),
+                "{}",
+                sandboxed.stderr
+            );
+        }
+        let unsandboxed = readlink(Sandbox::Unsandboxed);
+        assert_eq!(unsandboxed.stdout.trim(), server.to_str().unwrap());
+        let _ = fs::remove_dir_all(dir);
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn commands_are_killed_with_their_process_group_on_timeout() {
