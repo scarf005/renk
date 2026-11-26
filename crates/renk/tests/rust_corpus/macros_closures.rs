@@ -40,10 +40,15 @@ pub fn parameter_lines(limit: u8) -> u8 {
                      third: u8| {
         first * second + third
     };
+    let triple = |first: &mut u8, // |
+                  second: u8,
+                  third: u8| {
+        *first + second + third
+    };
     let text = "|a,";
     let step: fn(u8) -> u8 = match limit {
         0 | 1 => |a| a,
         _ => |a| a + 1,
     };
-    start(add(1, 2), pair((3, 4), step(limit))) + text.len() as u8
+    start(add(1, 2), pair((3, 4), step(limit))) + text.len() as u8 + triple(&mut 1, 2, 3)
 }
