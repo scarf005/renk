@@ -590,12 +590,16 @@ fn run_script(Script { cargo, command }: Script) -> CliResult<i32> {
     let cache_root = cache_root().ok_or("script requires XDG_CACHE_HOME or HOME")?;
     let source_path = fs::canonicalize(&script_path)?;
     let rust_path = script_cache_path(&cache_root.join("scripts"), &source_path);
-    let script = script_rust(
+    let at_script = |error| located(script_path.display(), error);
+    check_manifest(&source).map_err(at_script)?;
+    let mut script = script_rust(
         &source,
         source_syntax(Some(&script_path)),
         &script_package(&rust_path),
     )
-    .map_err(|error| located(script_path.display(), error))?;
+    .map_err(at_script)?;
+    script.rust =
+        absolute_dependency_paths(&script.rust, source_path.parent().unwrap_or(&source_path));
     write_script_cache(&rust_path, &script.rust)?;
     let build_dir = cache_root.join("build");
     let build_dir = script.named_package.then_some(build_dir.as_path());
@@ -1613,6 +1617,40 @@ fn script_frontmatter(source: &str) -> Result<String, TranspileError> {
                 .to_string()
                 + "\n"
         }))
+}
+
+/// The TOML error in the frontmatter manifest of the script `source`, at its script line.
+fn check_manifest(source: &str) -> Result<(), TranspileError> {
+    let Some((start, end)) = script_parts(source)?.frontmatter else {
+        return Ok(());
+    };
+    let manifest = source.split_inclusive('\n').collect::<Vec<_>>()[start + 1..end].concat();
+    let Err(error) = manifest.parse::<toml_edit::DocumentMut>() else {
+        return Ok(());
+    };
+    let before = &manifest[..error.span().map_or(0, |span| span.start)];
+    Err(TranspileError {
+        line: start + 2 + before.matches('\n').count(),
+        message: format!("invalid manifest: {}", error.message().trim_end()),
+    })
+}
+
+/// `rust`, the Rust of a script in `dir`, with each relative dependency `path` in its frontmatter
+/// made absolute: cargo resolves them against the cached copy.
+fn absolute_dependency_paths(rust: &str, dir: &Path) -> String {
+    let Ok(frontmatter) = script_frontmatter(rust) else {
+        return rust.to_string();
+    };
+    let frontmatter = edit_manifest(&frontmatter, |document| {
+        project::visit_dependency_paths(document.as_table_mut(), &mut |path| {
+            if let Some(relative) = path.as_str().filter(|path| Path::new(path).is_relative()) {
+                let decor = path.decor().clone();
+                *path = dir.join(relative).display().to_string().into();
+                *path.decor_mut() = decor;
+            }
+        });
+    });
+    splice_frontmatter(rust, &frontmatter).unwrap_or_else(|_| rust.to_string())
 }
 
 fn write_script_cache(path: &Path, rust: &str) -> io::Result<()> {
