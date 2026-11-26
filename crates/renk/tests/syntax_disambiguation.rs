@@ -1,4 +1,4 @@
-use renk::{format_source, rust_to_renk, transpile};
+use renk::{format_source, format_source_with, rust_to_renk, transpile};
 
 fn rust(source: &str) -> String {
     transpile(source).unwrap().rust
@@ -1942,4 +1942,27 @@ fn view_blocks_keep_colons_only_on_paths_with_value_heads() {
         assert_eq!(renk, expected, "{rust}");
         assert_eq!(self::rust(&renk), rust);
     }
+}
+
+#[test]
+fn a_leading_byte_order_mark_is_ignored() {
+    let bom = |source: &str| format!("\u{feff}{source}");
+    let renk = "fn main():\n    println!(\"hi\")\n";
+    assert_eq!(rust(&bom(renk)), rust(renk));
+    assert_eq!(
+        format_source(&bom(renk)).unwrap(),
+        format_source(renk).unwrap()
+    );
+    let script = "#!/usr/bin/env -S renk script\nprintln!(\"hi\")\n";
+    assert_eq!(
+        format_source_with(&bom(script), &|_| None).unwrap(),
+        format_source_with(script, &|_| None).unwrap()
+    );
+    let source = "fn main() {\n    println!(\"hi\");\n}\n";
+    assert_eq!(
+        rust_to_renk(&bom(source)).unwrap(),
+        rust_to_renk(source).unwrap()
+    );
+    // A mark inside a string stays.
+    assert!(rust("fn main():\n    println!(\"\u{feff}\")\n").contains('\u{feff}'));
 }
