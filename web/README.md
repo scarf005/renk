@@ -14,7 +14,7 @@ deno task dev
 deno task build
 ```
 
-The `wasmbuild` task emits inline browser-compatible bindings to `src/wasm/` before Vite starts or builds.
+The `wasmbuild` task emits browser-compatible bindings and an optimized `renk.wasm` to `src/wasm/` before Vite starts or builds.
 
 ## Self-host with Podman
 

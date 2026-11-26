@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+DENO_VERSION=2.5.6
+
 install_deno() {
   if command -v deno >/dev/null 2>&1; then
     return
   fi
 
-  curl -fsSL https://deno.land/install.sh | sh -s -- -y
+  curl -fsSL https://deno.land/install.sh | sh -s -- -y "v${DENO_VERSION}"
   export DENO_INSTALL="${DENO_INSTALL:-$HOME/.deno}"
   export PATH="$DENO_INSTALL/bin:$PATH"
 }

@@ -1,3 +1,4 @@
+/// <reference lib="deno.ns" />
 import { resolve } from "node:path"
 
 const repoRoot = resolve("..")
