@@ -50,6 +50,8 @@ struct Session {
     messages: Receiver<Value>,
     next_id: u64,
     dir: PathBuf,
+    /// The capabilities renk-lsp answered `initialize` with.
+    capabilities: Value,
 }
 
 impl Session {
@@ -97,6 +99,7 @@ impl Session {
             messages,
             next_id: 1,
             dir,
+            capabilities: Value::Null,
         };
         let folders = (roots.iter())
             .map(|root| json!({"uri": session.uri(root), "name": root}))
@@ -104,10 +107,11 @@ impl Session {
         let root = (folders.len() == 1).then(|| folders[0]["uri"].clone());
         let watching =
             json!({"workspace": {"didChangeWatchedFiles": {"dynamicRegistration": true}}});
-        session.request(
+        session.capabilities = session.request(
             "initialize",
             json!({"processId": null, "rootUri": root, "workspaceFolders": folders, "capabilities": watching}),
-        );
+        )["capabilities"]
+            .take();
         session.notify("initialized", json!({}));
         let (uri, text) = (session.uri(files[0].0), files[0].1);
         session.notify(
@@ -783,6 +787,50 @@ fn signature_help_names_the_parameter_at_the_cursor() {
     // The call in the format string moves behind `g(1)` in the Rust.
     let help = session.request("textDocument/signatureHelp", at(6, 23));
     assert!(help.is_null() || parameter(&help) == f, "{help}");
+}
+
+#[test]
+fn semantic_tokens_lie_only_on_renk_text_that_is_the_same_in_the_rust() {
+    let main = "fn add(a: i32) -> i32 = a + 1\n\nfn main():\n    let s = \"hi\"\n    println!(\"{s} {add(1)}\")\n";
+    let Some(mut session) = Session::open("lsp-semantic-tokens", main) else {
+        return;
+    };
+    let params = json!({"textDocument": {"uri": session.uri("src/main.rk")}});
+    let tokens = session.request_until("textDocument/semanticTokens/full", params, |tokens| {
+        tokens["data"]
+            .as_array()
+            .is_some_and(|data| !data.is_empty())
+    });
+    let types = &session.capabilities["semanticTokensProvider"]["legend"]["tokenTypes"];
+    let data: Vec<_> = (tokens["data"].as_array().into_iter().flatten())
+        .map(|number| number.as_u64().unwrap() as usize)
+        .collect();
+    let (mut line, mut start) = (0, 0);
+    let tokens: Vec<_> = (data.chunks(5))
+        .map(|token| {
+            start = if token[0] == 0 {
+                start + token[1]
+            } else {
+                token[1]
+            };
+            line += token[0];
+            let text = &main.lines().nth(line).unwrap()[start..start + token[2]];
+            (line, text, types[token[3]].as_str().unwrap())
+        })
+        .collect();
+    for token in [
+        (0, "add", "function"),
+        (0, "a", "parameter"),
+        (3, "\"hi\"", "string"),
+    ] {
+        assert!(tokens.contains(&token), "{token:?} in {tokens:?}");
+    }
+    // The Rust is `println!("{} {}", s, add(1));`.
+    let rust: Vec<_> = "println ! ( ) , ; s add 1 {}".split(' ').collect();
+    let differing: Vec<_> = (tokens.iter())
+        .filter(|(line, text, _)| *line == 4 && !rust.contains(text))
+        .collect();
+    assert!(differing.is_empty(), "{differing:?}");
 }
 
 #[test]
