@@ -155,6 +155,36 @@ fn rust_attributes_keep_rust_tokens_in_renk() {
 }
 
 #[test]
+fn macros_under_a_crate_path_keep_their_arguments() {
+    // `defmt::write!` takes its own format syntax, so its arguments stay as written;
+    // `std::write!` and `::core::write!` are the std macros.
+    let source = "pub fn f(fmt: &mut String, hour: u8) -> std::fmt::Result {\n    defmt::write!(fmt, \"{:02}\", hour);\n    let v = log::vec![Vec::<u8>::new()];\n    std::write!(fmt, \"{:02}\", hour)?;\n    ::core::write!(fmt, \"{}\", hour)?;\n    let w = vec![Vec::<u8>::new()];\n    write!(fmt, \"{}\", hour)\n}\n";
+    let renk = rust_to_renk(source).unwrap();
+    for line in [
+        "defmt::write!(fmt, \"{:02}\", hour)",
+        "let v = log::vec![Vec::<u8>::new()]",
+        "std::write!(fmt, \"{hour:02}\")?",
+        "::core::write!(fmt, \"{hour}\")?",
+        "let w = vec![Vec[u8]::new()]",
+        "write!(fmt, \"{hour}\")",
+    ] {
+        assert!(renk.contains(line), "{line}\n{renk}");
+    }
+    let output = rust(
+        "fn f(fmt: &mut F, t: T):\n    defmt::write!(fmt, \"{t.hour}\")\n    log::vec![Vec[u8]::new()]\n    std::write!(fmt, \"{t.hour}\")\n",
+    );
+    assert!(
+        output.contains("defmt::write!(fmt, \"{t.hour}\");"),
+        "{output}"
+    );
+    assert!(output.contains("log::vec![Vec[u8]::new()];"), "{output}");
+    assert!(
+        output.contains("std::write!(fmt, \"{}\", t.hour);"),
+        "{output}"
+    );
+}
+
+#[test]
 fn type_lowering_reenters_expression_context_for_consts() {
     let output = rust(
         "fn bytes() -> [u8; (TABLE)[N].len()] = todo!()\nfn array() -> Array[u8, { size_of[T]() }] = todo!()\n",
