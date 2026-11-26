@@ -1171,7 +1171,7 @@ impl Backend {
                 diagnostics
             }
             Err(error) => vec![Diagnostic {
-                range: line_range(&text, error.line),
+                range: line_range(&text, error.line, error.column),
                 severity: Some(DiagnosticSeverity::ERROR),
                 source: Some("renk".to_string()),
                 message: error.to_string(),
@@ -2791,21 +2791,18 @@ fn symbol_name(node: &SourceMapNode) -> (String, usize) {
     }
 }
 
-fn line_range(text: &str, line: usize) -> Range {
+/// The range of `text` from the 1-based character `column` of the 1-based `line` to its end.
+fn line_range(text: &str, line: usize, column: usize) -> Range {
     let line_index = line.saturating_sub(1);
-    let length = text
-        .lines()
-        .nth(line_index)
-        .map(utf16_len)
-        .unwrap_or_default();
+    let line_text = text.lines().nth(line_index).unwrap_or_default();
     Range {
         start: Position {
             line: line_index as u32,
-            character: 0,
+            character: utf16_column(line_text, column.saturating_sub(1)),
         },
         end: Position {
             line: line_index as u32,
-            character: length,
+            character: utf16_len(line_text),
         },
     }
 }
@@ -3278,7 +3275,7 @@ mod tests {
             ),
             Some(range_for_span(0, 9, 10))
         );
-        assert_eq!(line_range(text, 1).end.character, 27);
+        assert_eq!(line_range(text, 1, 1).end.character, 27);
     }
 
     #[test]
