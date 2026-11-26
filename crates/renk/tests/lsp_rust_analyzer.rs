@@ -277,7 +277,10 @@ fn edits_of(edit: &Value, uri: &str) -> Vec<Value> {
                 .cloned(),
         )
         .collect::<Vec<_>>();
-    edits.sort_by_key(|edit| edit["range"]["start"]["line"].as_u64());
+    edits.sort_by_key(|edit| {
+        let start = &edit["range"]["start"];
+        (start["line"].as_u64(), start["character"].as_u64())
+    });
     edits
 }
 
@@ -460,6 +463,28 @@ fn rename_edits_every_renk_use() {
         "{edit}"
     );
     assert_eq!(edits_of(&edit, &util), [renamed(range(0, 7, 13))], "{edit}");
+}
+
+#[test]
+fn rename_edits_a_lifetime() {
+    let main = "fn first<'a>(text: &'a str) -> &'a str = text\n\nfn main() = println!(\"{}\", first(\"a\"))\n";
+    let Some(mut session) = Session::open("lsp-rename-lifetime", main) else {
+        return;
+    };
+    let main = session.uri("src/main.rk");
+    let at = json!({"textDocument": {"uri": main}, "position": position(0, 10)});
+    session.request_until("textDocument/prepareRename", at.clone(), |response| {
+        !response.is_null()
+    });
+    let mut params = at;
+    params["newName"] = json!("'b");
+    let edit = session.request("textDocument/rename", params);
+    let renamed = |start| json!({"range": range(0, start, start + 2), "newText": "'b"});
+    assert_eq!(
+        edits_of(&edit, &main),
+        [renamed(9), renamed(20), renamed(32)],
+        "{edit}"
+    );
 }
 
 #[test]
