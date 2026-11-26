@@ -10,6 +10,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use ra_ap_parser::{Edition, LexedStr, SyntaxKind};
 use similar::{Algorithm, DiffOp, DiffTag, capture_diff_slices};
 use tokio::{
     io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
@@ -1853,9 +1854,16 @@ fn range_text(text: &str, range: Range) -> &str {
     &text[start..offset(text, range.end).max(start)]
 }
 
-/// Whether `a` and `b` are the same Rust up to whitespace.
+/// Whether `a` and `b` are the same Rust tokens, ignoring the whitespace between tokens.
 fn same_rust(a: &str, b: &str) -> bool {
-    a.split_whitespace().eq(b.split_whitespace())
+    let tokens = |text| {
+        let lexed = LexedStr::new(Edition::Edition2021, text);
+        (0..lexed.len())
+            .filter(|&token| lexed.kind(token) != SyntaxKind::WHITESPACE)
+            .map(|token| lexed.text(token).to_string())
+            .collect::<Vec<_>>()
+    };
+    tokens(a) == tokens(b)
 }
 
 /// An edit of a document's generated Rust as the same edit of the document, when the document
