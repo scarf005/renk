@@ -775,6 +775,10 @@ mod tests {
             },
             dist: dist.to_path_buf(),
             run_deps: dist.join("missing-deps"),
+            hosts: allowed_hosts(
+                "0.0.0.0:8080".parse().unwrap(),
+                "renk.example.com, Other.example:8443",
+            ),
         }
     }
 
@@ -794,12 +798,90 @@ mod tests {
             .unwrap()
     }
 
+    fn run_with_headers(headers: &[(&str, &str)], body: impl Into<Body>) -> Request<Body> {
+        let mut request = Request::builder().method(Method::POST).uri("/api/run");
+        for (name, value) in headers {
+            request = request.header(*name, *value);
+        }
+        request.body(body.into()).unwrap()
+    }
+
     fn run(body: impl Into<Body>) -> Request<Body> {
-        Request::builder()
-            .method(Method::POST)
-            .uri("/api/run")
-            .body(body.into())
-            .unwrap()
+        run_with_headers(
+            &[
+                ("host", "localhost:8080"),
+                ("content-type", "application/json"),
+            ],
+            body,
+        )
+    }
+
+    #[tokio::test]
+    async fn run_requests_need_json_and_a_host_and_origin_of_this_server() {
+        let dist = temp_dir("origin");
+        let app = router(state(&dist, 100));
+        let json = ("content-type", "application/json");
+        let local = ("host", "localhost:8080");
+        let cases: &[(&[(&str, &str)], StatusCode)] = &[
+            (&[json, local], StatusCode::BAD_REQUEST),
+            (&[json, ("host", "0.0.0.0:8080")], StatusCode::BAD_REQUEST),
+            (&[json, ("host", "[::1]:8080")], StatusCode::BAD_REQUEST),
+            (
+                &[
+                    ("content-type", "Application/JSON; charset=utf-8"),
+                    ("host", "127.0.0.1:8080"),
+                    ("origin", "http://127.0.0.1:8080"),
+                ],
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                &[
+                    json,
+                    ("host", "renk.example.com"),
+                    ("origin", "https://renk.example.com"),
+                ],
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                &[json, ("host", "other.example:8443")],
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                &[("content-type", "text/plain"), local],
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                &[("content-type", "application/jsonx"), local],
+                StatusCode::FORBIDDEN,
+            ),
+            (&[local], StatusCode::FORBIDDEN),
+            (&[json], StatusCode::FORBIDDEN),
+            (&[json, ("host", "localhost:9999")], StatusCode::FORBIDDEN),
+            (
+                &[json, ("host", "evil.example:8080")],
+                StatusCode::FORBIDDEN,
+            ),
+            (&[json, ("host", "other.example")], StatusCode::FORBIDDEN),
+            (
+                &[json, local, ("origin", "https://evil.example")],
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                &[json, local, ("origin", "http://localhost:9999")],
+                StatusCode::FORBIDDEN,
+            ),
+            (&[json, local, ("origin", "null")], StatusCode::FORBIDDEN),
+            (
+                &[json, local, ("origin", "http://localhost:8080/x")],
+                StatusCode::FORBIDDEN,
+            ),
+        ];
+        for (headers, expected) in cases {
+            let request = run_with_headers(headers, r#"{"rust": 1}"#);
+            let (status, _, _) = send(&app, request).await;
+            assert_eq!(status, *expected, "{headers:?}");
+        }
+        let _ = fs::remove_dir_all(dist);
     }
 
     #[test]
