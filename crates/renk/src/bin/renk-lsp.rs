@@ -36,8 +36,9 @@ use tower_lsp::{
         InlayHintLabel, InlayHintParams, InsertReplaceEdit, Location, MarkupContent, MarkupKind,
         MessageType, NumberOrString, OneOf, Position, PrepareRenameResponse,
         PublishDiagnosticsParams, Range, ReferenceParams, Registration, RenameOptions,
-        RenameParams, ResourceOp, ServerCapabilities, SymbolKind, TextDocumentContentChangeEvent,
-        TextDocumentEdit, TextDocumentIdentifier, TextDocumentItem, TextDocumentPositionParams,
+        RenameParams, ResourceOp, ServerCapabilities, SignatureHelp, SignatureHelpOptions,
+        SignatureHelpParams, SymbolKind, TextDocumentContentChangeEvent, TextDocumentEdit,
+        TextDocumentIdentifier, TextDocumentItem, TextDocumentPositionParams,
         TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions,
         TextDocumentSyncSaveOptions, TextEdit, Url, VersionedTextDocumentIdentifier, WorkspaceEdit,
         WorkspaceFolder,
@@ -105,6 +106,10 @@ impl LanguageServer for Backend {
                 inlay_hint_provider: Some(OneOf::Left(true)),
                 document_symbol_provider: Some(OneOf::Left(true)),
                 document_formatting_provider: Some(OneOf::Left(true)),
+                signature_help_provider: Some(SignatureHelpOptions {
+                    trigger_characters: Some(vec!["(".into(), ",".into()]),
+                    ..SignatureHelpOptions::default()
+                }),
                 hover_provider: Some(tower_lsp::lsp_types::HoverProviderCapability::Simple(true)),
                 definition_provider: Some(OneOf::Left(true)),
                 completion_provider: Some(CompletionOptions {
@@ -486,6 +491,24 @@ impl LanguageServer for Backend {
         }
 
         Ok(Some(CompletionResponse::Array(completion_items(text))))
+    }
+
+    async fn signature_help(
+        &self,
+        mut params: SignatureHelpParams,
+    ) -> Result<Option<SignatureHelp>> {
+        let position = &mut params.text_document_position_params;
+        let Some((rust_analyzer, rust_uri, ..)) = self
+            .rust_position(&position.text_document.uri, &mut position.position)
+            .await
+        else {
+            return Ok(None);
+        };
+        position.text_document.uri = rust_uri;
+        Ok(rust_analyzer
+            .request("textDocument/signatureHelp", params)
+            .await
+            .and_then(|value| serde_json::from_value(value).ok()))
     }
 
     async fn references(&self, mut params: ReferenceParams) -> Result<Option<Vec<Location>>> {
