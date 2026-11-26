@@ -89,6 +89,10 @@ const CORPUS: &[(&str, &str)] = &[
         "lowercase_struct_literals",
         include_str!("rust_corpus/lowercase_struct_literals.rs"),
     ),
+    (
+        "condition_blocks",
+        include_str!("rust_corpus/condition_blocks.rs"),
+    ),
 ];
 
 const RENK_CORPUS: &[(&str, &str)] = &[
