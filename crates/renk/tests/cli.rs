@@ -152,13 +152,14 @@ fn refuses_to_write_the_output_of_transpile_and_from_rust_over_the_input() {
 fn reports_errors_on_stderr_with_exit_code_one() {
     let dir = temp_dir("errors");
     fs::write(dir.join("bad.rk"), "fn main():\n\tx\n").unwrap();
-    let cases: [(&[&str], i32, &str); 8] = [
+    let cases: [(&[&str], i32, &str); 9] = [
         (
             &["transpile", "bad.rk"],
             1,
-            "renk: line 2: tabs are not supported",
+            "renk: bad.rk:2: tabs are not supported",
         ),
-        (&["transpile", "missing.rk"], 1, "renk: "),
+        (&["transpile", "missing.rk"], 1, "renk: missing.rk: "),
+        (&["from-rust", "missing.rs"], 1, "renk: missing.rs: "),
         (
             &["missing.rk"],
             1,
@@ -328,7 +329,7 @@ fn cargo_wrapper_generates_sources_and_forwards_cargo_exit_codes() {
     let output = run(&["check"]);
     assert_eq!(output.status.code(), Some(1));
     assert!(
-        text(&output.stderr).starts_with("renk: line 2:"),
+        text(&output.stderr).starts_with("renk: src/main.rk:2: tabs are not supported"),
         "{}",
         text(&output.stderr)
     );
@@ -354,6 +355,27 @@ fn fmt_check_prints_a_diff_and_fails_for_unformatted_files() {
         "--- bad.rk\n+++ bad.rk\n@@ -1,3 +1,3 @@\n fn main():\n-  let  x = 1\n-  println!(\"{x}\")\n+    let x = 1\n+    println!(\"{x}\")\n"
     );
     assert_eq!(fs::read_to_string(dir.join("bad.rk")).unwrap(), unformatted);
+
+    fs::write(dir.join("tabbed.rk"), "fn main():\n\tx\n").unwrap();
+    let output = renk(
+        &["fmt", "--check", "tabbed.rk", "missing.rk", "bad.rk"],
+        "",
+        &dir,
+    );
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        text(&output.stdout).starts_with("--- bad.rk\n"),
+        "{}",
+        text(&output.stdout)
+    );
+    let stderr = text(&output.stderr);
+    let lines = stderr.lines().collect::<Vec<_>>();
+    assert_eq!(lines.len(), 2, "{stderr}");
+    assert!(
+        lines[0].starts_with("renk: tabbed.rk:2: tabs are not supported"),
+        "{stderr}"
+    );
+    assert!(lines[1].starts_with("renk: missing.rk: "), "{stderr}");
 
     let output = renk(&["fmt", "--check"], "fn main():\n  f()\n", &dir);
     assert_eq!(output.status.code(), Some(1), "{}", text(&output.stderr));

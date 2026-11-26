@@ -158,7 +158,10 @@ fn script_reports_transpile_errors_with_the_script_path_and_line() {
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert_eq!(output.status.code(), Some(1));
-    assert!(stderr.contains("broken.rk: line 3"), "{stderr}");
+    assert!(
+        stderr.contains("broken.rk:3: tabs are not supported"),
+        "{stderr}"
+    );
     assert!(!dir.join("cache").exists());
     let _ = fs::remove_dir_all(dir);
 }
@@ -452,7 +455,10 @@ fn script_top_level_statements_run_in_a_fallible_main() {
 
     let (code, _, stderr, _) = run("tabbed.rk", "let x = 1\nif x > 0:\n\tprintln!()\n");
     assert_eq!(code, Some(1), "{stderr}");
-    assert!(stderr.contains("tabbed.rk: line 3"), "{stderr}");
+    assert!(
+        stderr.contains("tabbed.rk:3: tabs are not supported"),
+        "{stderr}"
+    );
     let _ = fs::remove_dir_all(dir);
 }
 
