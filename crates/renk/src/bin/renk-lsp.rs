@@ -1620,8 +1620,12 @@ fn transpile_document(uri: &Url, text: &str, script: bool) -> Transpiled {
         let package = script_rust_path(uri)
             .map_or_else(|| "script".to_string(), |path| script_package(&path));
         let script = script_rust(text, SourceSyntax::Renk, &package)?;
+        let dir = uri.to_file_path().ok();
         return Ok(Generated {
-            rust: script.rust,
+            rust: match dir.as_ref().and_then(|path| path.parent()) {
+                Some(dir) => absolute_dependency_paths(&script.rust, dir),
+                None => script.rust,
+            },
             source_lines: script.source_lines,
         });
     }
@@ -1632,6 +1636,31 @@ fn transpile_document(uri: &Url, text: &str, script: bool) -> Transpiled {
             .chain(output.line_origins())
             .collect(),
     })
+}
+
+/// `rust`, the Rust of a script in `dir`, with each relative dependency `path` of its frontmatter
+/// made absolute: rust-analyzer reads the script from renk's cache. It keeps every line where it
+/// was, or returns `rust` unchanged.
+fn absolute_dependency_paths(rust: &str, dir: &Path) -> String {
+    let lines = rust.split_inclusive('\n').collect::<Vec<_>>();
+    let Ok(Some((start, end))) = script_parts(rust).map(|parts| parts.frontmatter) else {
+        return rust.to_string();
+    };
+    let Ok(mut manifest) = lines[start + 1..end].concat().parse::<DocumentMut>() else {
+        return rust.to_string();
+    };
+    project::visit_dependency_paths(manifest.as_table_mut(), &mut |path| {
+        if let Some(relative) = path.as_str().filter(|path| Path::new(path).is_relative()) {
+            let decor = path.decor().clone();
+            *path = dir.join(relative).display().to_string().into();
+            *path.decor_mut() = decor;
+        }
+    });
+    let manifest = manifest.to_string();
+    if manifest.lines().count() != end - start - 1 {
+        return rust.to_string();
+    }
+    lines[..=start].concat() + &manifest + &lines[end..].concat()
 }
 
 /// Whether a renk document runs with `renk script`: it starts with a `#!` line or frontmatter, or
@@ -2926,7 +2955,7 @@ mod tests {
         let rust = generated(&uri, script).unwrap().rust;
         let shared = dir.join("shared");
         let manifest = format!(
-            "---\n[dependencies]\nshared = {{ path = \"{}\" }} # local\nfar = {{ path = \"/opt/far\" }}\n---\n",
+            "---\n[dependencies]\nshared = {{ path = \"{}\" }} # local\nfar = {{ path = \"/opt/far\" }}\n",
             shared.display()
         );
         assert!(rust.contains(&manifest), "{rust}");
