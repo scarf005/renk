@@ -71,7 +71,8 @@ Dependencies go in the `---` frontmatter; `renk add` edits it. A script without
 path is in RENK_SCRIPT. Runs reuse the cached binary; `--cargo` rebuilds through
 cargo to pick up dependency and toolchain updates.
 
-`renk SCRIPT.rk [ARGS]...` is the same as `renk script SCRIPT.rk [ARGS]...`.
+`renk SCRIPT.rk [ARGS]...` is the same as `renk script SCRIPT.rk [ARGS]...`. Every
+argument after the script path goes to the script, `--` included.
 
 Examples:
     renk script tool.rk arg
@@ -85,8 +86,8 @@ Examples:
         disable_help_flag = true,
         after_help = "\
 `build`, `check`, `clippy`, `doc`, `run`, `test`, and `bench` work without the `cargo` prefix.
-The .rk files under src, examples, tests, and benches, and build.rk, are transpiled to
-cached .rs files first.
+The .rk files of every package cargo can build are first transpiled to
+a .rs file beside each one.
 
 Examples:
     renk run
