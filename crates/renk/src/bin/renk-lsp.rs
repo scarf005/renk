@@ -4520,6 +4520,12 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn editor_frames_longer_than_the_input_are_dropped() {
+        let mut input = &b"Content-Length: 18446744073709551615\r\n\r\n{}"[..];
+        assert_eq!(read_lsp_body(&mut input).await, None);
+    }
+
+    #[tokio::test]
     async fn editor_bodies_that_are_not_json_reach_tower_lsp_and_later_frames_follow() {
         let input = "Content-Length: 3\r\n\r\nabc\
                      Content-Length: 2\r\n\r\n{}";
