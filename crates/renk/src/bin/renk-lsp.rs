@@ -1876,8 +1876,7 @@ fn checked_edit(generated: &Generated, text: &str, edit: TextEdit) -> Option<Tex
 
 /// A completion of a document's generated Rust with its edits at the document's positions, or
 /// `None` when an edit does not map. renk-lsp converts the extra edits, such as a new `use` line,
-/// with [`renk_edits`], and drops the item when one of them changes a line that the completion's
-/// own edit changes.
+/// with [`renk_edits`], and drops the item when one of them overlaps the completion's own edit.
 fn completion_item(
     generated: &Generated,
     text: &str,
@@ -1906,10 +1905,9 @@ fn completion_item(
         Some(CompletionTextEdit::InsertAndReplace(edit)) => vec![edit.insert, edit.replace],
         None => Vec::new(),
     };
+    // The protocol counts an insertion at the same position as an overlap.
     let overlaps = |edit: &TextEdit| {
-        edited.iter().any(|range| {
-            edit.range.start.line <= range.end.line && range.start.line < edit.range.end.line
-        })
+        (edited.iter()).any(|range| edit.range.start <= range.end && range.start <= edit.range.end)
     };
     let additional_text_edits = item
         .additional_text_edits
