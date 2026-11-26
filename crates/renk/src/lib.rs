@@ -2957,9 +2957,9 @@ fn without_trailing_line_comment(text: &str) -> &str {
     text
 }
 
-/// A trailing `{` after an uppercase path, or after a path of several segments such as
-/// `c.sockaddr_in`, opens a struct literal, which stays Rust syntax like a `(`/`[` group; item,
-/// control, and return-type headers own blocks instead.
+/// A trailing `{` after a path such as `Point`, `c.sockaddr_in` or `timeval` opens a struct
+/// literal, which stays Rust syntax like a `(`/`[` group; keyword blocks such as `unsafe {` and
+/// item, control, and return-type headers own blocks instead.
 fn opens_struct_literal(text: &str) -> bool {
     let Some(head) = text.trim_end().strip_suffix('{') else {
         return false;
@@ -2975,9 +2975,12 @@ fn opens_struct_literal(text: &str) -> bool {
     let name = path.rsplit([':', '.']).next().unwrap_or_default();
     let header = without_visibility(text.lines().next().unwrap_or_default().trim_start());
     (name.starts_with(|character: char| character.is_ascii_uppercase())
-        || (name.len() < path.len()
-            && path.starts_with(is_ident_start)
-            && name.starts_with(is_ident_start)))
+        || (path.starts_with(is_ident_start)
+            && name.starts_with(is_ident_start)
+            && !matches!(
+                name,
+                "async" | "break" | "const" | "else" | "loop" | "move" | "return" | "unsafe"
+            )))
         && !head[..path_start].trim_end().ends_with("->")
         && !ends_in_condition(&head[..path_start])
         && ![
@@ -2995,6 +2998,7 @@ fn opens_struct_literal(text: &str) -> bool {
             "async ",
             "const fn ",
             "extern ",
+            "macro_rules!",
         ]
         .iter()
         .any(|keyword| header.starts_with(keyword))
