@@ -1462,6 +1462,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn sigterm_shuts_the_server_down() {
+        let shutdown = shutdown_signal().unwrap();
+        unsafe { libc::kill(libc::getpid(), libc::SIGTERM) };
+        let stopped = tokio::time::timeout(Duration::from_secs(5), shutdown).await;
+        assert!(stopped.is_ok(), "no shutdown 5 s after SIGTERM");
+    }
+
+    /// The run timeout is 5 s. Removes `renk-run-1-old`, modified 10 s ago. Keeps a fresh run
+    /// directory, an old file with the same prefix, and an old directory with another name.
+    #[test]
+    fn startup_removes_only_old_run_directories() {
+        let dir = temp_dir("stale");
+        let old = dir.join("renk-run-1-old");
+        let fresh = dir.join("renk-run-1-fresh");
+        let file = dir.join("renk-run-1-file");
+        let other = dir.join("other");
+        for path in [&old, &fresh, &other] {
+            fs::create_dir(path).unwrap();
+        }
+        fs::write(old.join("main.rs"), "").unwrap();
+        fs::write(&file, "").unwrap();
+        let ten_seconds_ago = SystemTime::now() - Duration::from_secs(10);
+        for path in [&old, &file, &other] {
+            let path = fs::File::open(path).unwrap();
+            path.set_modified(ten_seconds_ago).unwrap();
+        }
+
+        remove_stale_run_dirs(&dir, Duration::from_secs(5));
+        let exists = [&old, &fresh, &file, &other].map(|path| path.exists());
+        assert_eq!(exists, [false, true, true, true]);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
     async fn static_files_are_served_inside_dist_only() {
         let dist = temp_dir("static");
         fs::write(dist.join("index.html"), "<p>app</p>").unwrap();
