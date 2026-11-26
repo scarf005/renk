@@ -70,7 +70,9 @@ bool tree_sitter_renk_external_scanner_scan(void *payload, TSLexer *lexer, const
   while (lexer->lookahead == ' ' || lexer->lookahead == '\t' || lexer->lookahead == '\r' || lexer->lookahead == '\n') {
     lexer->advance(lexer, true);
   }
-  if (valid_symbols[BLOCK_COMMENT] && lexer->lookahead == '/' && scan_block_comment(lexer)) {
+  if (valid_symbols[BLOCK_COMMENT] && lexer->lookahead == '/') {
+    // The lexer is past the `/` now, so a failed scan must not fall through to the raw string scan.
+    if (!scan_block_comment(lexer)) return false;
     lexer->result_symbol = BLOCK_COMMENT;
     return true;
   }
