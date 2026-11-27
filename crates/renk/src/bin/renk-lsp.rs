@@ -74,6 +74,10 @@ const TOKEN_MODIFIERS: &str = "async documentation declaration static defaultLib
     associated attribute callable constant consuming controlFlow crateRoot injected intraDocLink \
     library macro mutable procMacro public reference trait unsafe";
 
+/// The rust-analyzer that published diagnostics, and the diagnostics.
+type PublishedDiagnostics = (Weak<RustAnalyzerClient>, PublishDiagnosticsParams);
+type OpenedDocument = (Arc<RustAnalyzerClient>, Url);
+
 #[derive(Debug, Clone)]
 struct Backend {
     client: Client,
@@ -81,8 +85,7 @@ struct Backend {
     /// The latest cargo check diagnostics rust-analyzer published of each Renk document's generated
     /// Rust, which map to the document's text when published: rust-analyzer does not publish
     /// diagnostics again that did not change. Each comes with the rust-analyzer that published it.
-    rust_diagnostics:
-        Arc<RwLock<HashMap<Url, (Weak<RustAnalyzerClient>, PublishDiagnosticsParams)>>>,
+    rust_diagnostics: Arc<RwLock<HashMap<Url, PublishedDiagnostics>>>,
     /// rust-analyzer's own diagnostics of each Renk document's generated Rust, from the latest pull
     /// that answered, and the number of the latest pull sent: only its answer counts.
     pulled_diagnostics: Arc<RwLock<HashMap<Url, (u64, PublishDiagnosticsParams)>>>,
@@ -91,7 +94,7 @@ struct Backend {
     workspaces: Arc<RwLock<HashMap<PathBuf, Arc<RustAnalyzerClient>>>>,
     /// The rust-analyzer each open document's generated Rust is open in, and that Rust's URI.
     /// A script's own rust-analyzer lives only here, so it exits when its entry goes.
-    opened: Arc<RwLock<HashMap<Url, (Arc<RustAnalyzerClient>, Url)>>>,
+    opened: Arc<RwLock<HashMap<Url, OpenedDocument>>>,
     /// Serializes document syncs: tower-lsp runs notifications concurrently, which would start
     /// two rust-analyzers for one script or reorder its `didOpen` and `didChange`.
     sync: Arc<Mutex<()>>,
@@ -160,7 +163,7 @@ impl LanguageServer for Backend {
 
     async fn initialized(&self, params: InitializedParams) {
         for rust_analyzer in self.workspaces.read().await.values() {
-            rust_analyzer.notify("initialized", params.clone()).await;
+            rust_analyzer.notify("initialized", params).await;
         }
         let watches = (self.initialize_params.read().await.as_ref()).and_then(|params| {
             let workspace = params.capabilities.workspace.as_ref()?;
@@ -1184,11 +1187,13 @@ impl Backend {
     }
 }
 
+type PendingReplies = Arc<Mutex<Option<HashMap<u64, oneshot::Sender<serde_json::Value>>>>>;
+
 #[derive(Debug)]
 struct RustAnalyzerClient {
     sender: mpsc::UnboundedSender<serde_json::Value>,
     /// Where the responses to our requests go, until rust-analyzer's output ends.
-    pending: Arc<Mutex<Option<HashMap<u64, oneshot::Sender<serde_json::Value>>>>>,
+    pending: PendingReplies,
     next_id: AtomicU64,
     child: Arc<Mutex<tokio::process::Child>>,
     started: Instant,
@@ -1400,7 +1405,7 @@ fn script_initialization_options(
 /// response fail, and later requests are not sent.
 async fn read_rust_analyzer_messages(
     stdout: impl tokio::io::AsyncRead + Unpin,
-    pending: Arc<Mutex<Option<HashMap<u64, oneshot::Sender<serde_json::Value>>>>>,
+    pending: PendingReplies,
     replies: mpsc::UnboundedSender<serde_json::Value>,
     notifications: mpsc::UnboundedSender<serde_json::Value>,
     config: serde_json::Value,
@@ -1824,9 +1829,10 @@ thread_local! {
 }
 
 type Transpiled = std::result::Result<Generated, TranspileError>;
+type GeneratedDocument = (String, bool, Transpiled);
 
 /// Each document's last text, whether it was a script, and what it transpiled to.
-static GENERATED: LazyLock<std::sync::Mutex<HashMap<Url, (String, bool, Transpiled)>>> =
+static GENERATED: LazyLock<std::sync::Mutex<HashMap<Url, GeneratedDocument>>> =
     LazyLock::new(Default::default);
 
 /// [`transpile_document`] of a document, transpiling each of its versions once.
@@ -3180,6 +3186,16 @@ fn range_for_span(line: u32, start: usize, end: usize) -> Range {
     }
 }
 
+#[tokio::main]
+async fn main() {
+    let (input, server_input) = tokio::io::duplex(1 << 16);
+    tokio::spawn(forward_editor_messages(tokio::io::stdin(), input));
+    let (service, socket) = LspService::new(Backend::new);
+    Server::new(server_input, tokio::io::stdout(), socket)
+        .serve(service)
+        .await;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3977,7 +3993,8 @@ mod tests {
     #[tokio::test]
     async fn outlines_each_item_with_its_body_and_its_name() {
         let symbols = document_symbols("pub struct 사용자:\n    pub 이름: String\n\nimpl Named for 사용자:\n    fn name(&self) -> &str:\n        &self.이름\n\npub fn destructure():\n    println!(\"{}\", 1)\n").await;
-        fn outline(symbols: &[DocumentSymbol]) -> Vec<(String, [u32; 4], [u32; 4], Vec<String>)> {
+        type Outline = Vec<(String, [u32; 4], [u32; 4], Vec<String>)>;
+        fn outline(symbols: &[DocumentSymbol]) -> Outline {
             let span = |range: Range| {
                 [
                     range.start.line,
@@ -4793,14 +4810,4 @@ mod tests {
         let input = "Content-Length: 99999999999\r\n\r\n{}";
         assert_eq!(forwarded(input.as_bytes()).await, "");
     }
-}
-
-#[tokio::main]
-async fn main() {
-    let (input, server_input) = tokio::io::duplex(1 << 16);
-    tokio::spawn(forward_editor_messages(tokio::io::stdin(), input));
-    let (service, socket) = LspService::new(Backend::new);
-    Server::new(server_input, tokio::io::stdout(), socket)
-        .serve(service)
-        .await;
 }

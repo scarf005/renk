@@ -52,7 +52,7 @@ pub(crate) struct RustLayout {
     /// For each node walked, its element and the latest body start of it and its ancestors up to
     /// that element, so a deep chain such as `x` / `.a(|y| {` ... is walked once. A block's list
     /// becomes a container before the blocks inside it are read, so neither changes later.
-    elements: RefCell<HashMap<SyntaxNode, (Option<SyntaxNode>, Option<TextSize>)>>,
+    elements: RefCell<HashMap<SyntaxNode, WalkedNode>>,
     /// For each element, its first token.
     first_tokens: RefCell<HashMap<SyntaxNode, Option<SyntaxToken>>>,
     /// The attributes, in source order.
@@ -62,6 +62,9 @@ pub(crate) struct RustLayout {
     /// `.a(|y| {` ... on a small WebAssembly stack.
     _green: Vec<rowan::GreenNode>,
 }
+
+/// A node's element and the latest body start of it and its ancestors up to that element.
+type WalkedNode = (Option<SyntaxNode>, Option<TextSize>);
 
 /// The delimiters open after the scanned tokens, and whether a line break falls inside them;
 /// `None` for a Renk block. Also the line closing the last group spanning lines.

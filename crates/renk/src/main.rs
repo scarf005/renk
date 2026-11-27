@@ -1800,6 +1800,8 @@ mod tests {
         assert_eq!(generated, vec![rust_path.clone()]);
 
         let mut permissions = fs::metadata(&rust_path).unwrap().permissions();
+        // `set_mode` does not exist on Windows, which the test also runs on.
+        #[allow(clippy::permissions_set_readonly_false)]
         permissions.set_readonly(false);
         fs::set_permissions(&rust_path, permissions).unwrap();
         fs::write(&source_path, "pub fn main():\n    println!(\"cached\")\n").unwrap();

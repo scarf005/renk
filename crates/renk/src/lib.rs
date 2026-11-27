@@ -764,7 +764,7 @@ fn convert_rust_lines(source: &str, aggressive: bool) -> Result<String, Transpil
         while let Some(rest) = text.strip_prefix('}') {
             closes_group |= !closed && stack.pop().is_some_and(|block| block.in_group);
             closed = true;
-            text = rest.trim_start_matches(|character| matches!(character, ',' | ';' | ' '));
+            text = rest.trim_start_matches([',', ';', ' ']);
         }
         if closes_group && let Some(argument) = argument {
             text = argument;
@@ -1332,7 +1332,7 @@ fn equivalent_rewrites(
         match item_rounds(lines, trials, expected, items) {
             Ok(checked) => return checked,
             Err(state) => {
-                items.ranges = vec![0..lines.len()];
+                items.ranges = std::iter::once(0..lines.len()).collect();
                 state
             }
         }
@@ -1343,6 +1343,7 @@ fn equivalent_rewrites(
 }
 
 type Trial = (Rewrite, String);
+type RoundsResult = Result<(Vec<Rewrite>, Vec<Rewrite>), (Vec<Trial>, Vec<Rewrite>)>;
 
 /// The rewrite of a trial with the text it asks for.
 fn wanted((rewrite, text): Trial) -> Rewrite {
@@ -1409,7 +1410,7 @@ fn item_rounds(
     trials: Vec<Trial>,
     expected: &str,
     items: &mut Items,
-) -> Result<(Vec<Rewrite>, Vec<Rewrite>), (Vec<Trial>, Vec<Rewrite>)> {
+) -> RoundsResult {
     let rewrites = trials
         .iter()
         .map(|(rewrite, _)| rewrite.clone())
@@ -1962,13 +1963,11 @@ fn convert_rust_statement(text: &str, parent: Option<RustBlockKind>) -> Converte
 
     let mut text = text.to_string();
     let had_semicolon = text.ends_with(';');
-    if had_semicolon {
-        text.pop();
-        text = text.trim_end().to_string();
-    } else if matches!(
-        parent,
-        Some(RustBlockKind::StructLike | RustBlockKind::Enum | RustBlockKind::Match)
-    ) && text.ends_with(',')
+    if had_semicolon
+        || matches!(
+            parent,
+            Some(RustBlockKind::StructLike | RustBlockKind::Enum | RustBlockKind::Match)
+        ) && text.ends_with(',')
     {
         text.pop();
         text = text.trim_end().to_string();
@@ -2006,9 +2005,9 @@ fn classify_rust_block_header(header: &str, parent: Option<RustBlockKind>) -> Ru
         RustBlockKind::Function
     } else if is_macro_item(header) {
         RustBlockKind::Macro
-    } else if is_trait_item(header) || is_rust_impl_or_mod_item(header) {
-        RustBlockKind::Item
-    } else if is_control(header)
+    } else if is_trait_item(header)
+        || is_rust_impl_or_mod_item(header)
+        || is_control(header)
         || is_trailing_if(header)
         || header == "else"
         || header.starts_with("else ")
@@ -4111,9 +4110,7 @@ fn validate_statement_node(node: &Node) -> Result<(), TranspileError> {
 
     let (text, _) = strip_explicit_semicolon(node.text.trim());
     let (block_text, _) = strip_block_marker(text);
-    if are_continuations(&node.children) {
-        validate_nodes(&node.children, Context::Block)
-    } else if is_multiline_closure_head(text) {
+    if are_continuations(&node.children) || is_multiline_closure_head(text) {
         validate_nodes(&node.children, Context::Block)
     } else if let Some((_, rhs)) = split_once_top_level(text, '=')
         && is_multiline_closure_head(rhs.trim())
@@ -7188,15 +7185,11 @@ fn skip_whitespace(text: &str, index: &mut usize) {
 fn lower_if_then_else(text: &str) -> Option<String> {
     let (prefix, condition_and_body) = if let Some(rest) = text.strip_prefix("if ") {
         ("if", rest)
-    } else if let Some(rest) = text.strip_prefix("else if ") {
-        ("else if", rest)
     } else {
-        return None;
+        ("else if", text.strip_prefix("else if ")?)
     };
 
-    let Some(then_index) = find_top_level_keyword(condition_and_body, "then") else {
-        return None;
-    };
+    let then_index = find_top_level_keyword(condition_and_body, "then")?;
 
     let condition = condition_and_body[..then_index].trim();
     let body = condition_and_body[then_index + "then".len()..].trim();
