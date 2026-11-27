@@ -747,6 +747,13 @@ fn canonical_format_macros_skip_a_quote_in_a_comment_or_a_lifetime() {
 }
 
 #[test]
+fn canonical_format_macros_keep_an_integer_argument_positional() {
+    // `"{1}"` reads the argument at position 1, so it must not compare equal to `"{}", 1`.
+    let rust = "println!(\"{}\", 1);\n";
+    assert_eq!(canonical_format_macros(rust), rust);
+}
+
+#[test]
 fn emits_source_map_json() {
     let output = transpile("fn id(x: i32) -> i32 = x\n").unwrap();
     assert_eq!(output.source_map[0].source_line, 1);

@@ -36,5 +36,21 @@ pub fn format_args(cli: &Cli, index: usize, name: &str, out: &mut String) -> std
     let sizes = vec![NAME.len(); 2];
     debug_assert_eq!(sizes, vec![NAMES.len(), NAME.len()].iter().copied().collect::<Vec<_>>());
     assert!(matches!(std::cmp::Ordering::Less.reverse(), std::cmp::Ordering::Greater));
+    // Renk reads `{1}` as the argument at position 1, so an integer argument stays positional.
+    println!("{}", 1); // "{}"
+    println!("{} {}", 2, name);
+    println!("{:>8} {}", 0, NAME);
+    println!(r"{} {}", 1_000, (5));
+    write!(out, "{}", 3)?;
+    writeln!(
+        out,
+        "{} {}",
+        4,
+        index
+    )?;
+    assert!(index < 9, "{:?}", 6);
+    if index > 9 {
+        panic!("{}", 7);
+    }
     Ok(())
 }
