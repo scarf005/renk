@@ -724,8 +724,8 @@ fn lower_format_invocation(arguments: &str, prefix: usize) -> Option<String> {
     Some(lowered_arguments.join(", "))
 }
 
-/// Lowers `{expr}` placeholders to positional markers; plain identifiers other than `self` stay as
-/// Rust's captured or named arguments unless `captures` lowers them too.
+/// Lowers `{expr}` placeholders to positional markers; plain identifiers other than `self`, `true`
+/// and `false` stay as Rust's captured or named arguments unless `captures` lowers them too.
 pub(crate) fn lower_format_string(
     content: &str,
     captures: bool,
@@ -747,7 +747,7 @@ pub(crate) fn lower_format_string(
             let expression = split_format_specifier(body).0;
             if is_standard_format_placeholder(body)
                 || (!captures
-                    && expression != "self"
+                    && !matches!(expression, "self" | "true" | "false")
                     && expression.starts_with(is_ident_start)
                     && expression.chars().all(is_ident_continue))
             {
