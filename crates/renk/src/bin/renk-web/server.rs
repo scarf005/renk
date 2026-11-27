@@ -1742,7 +1742,8 @@ mod tests {
     }
 
     /// Masks `/proc` and includes `/proc/<test pid>/environ` in the program at compile time. The
-    /// compile step must fail, because it must not see the processes of the server.
+    /// compile step sees the server in `/proc`, but the kernel refuses the read, because the step
+    /// runs in another user namespace and has no `CAP_SYS_PTRACE` over the server.
     #[tokio::test]
     #[ignore = "needs unprivileged user namespaces"]
     async fn compile_steps_cannot_read_server_processes_with_proc_hidden() {
@@ -1751,8 +1752,11 @@ mod tests {
             r#"fn main() {{ print!("{{}}", include_bytes!("/proc/{pid}/environ").len()) }}"#
         );
         let body = run_in_namespaces(Proc::Masked, &rust).await;
-        let result = (&body["ok"], &body["stage"]);
-        assert_eq!(result, (&json!(false), &json!("compile")), "{body}");
+        let denied = body["stderr"]
+            .as_str()
+            .is_some_and(|stderr| stderr.contains("Permission denied"));
+        let result = (&body["ok"], &body["stage"], denied);
+        assert_eq!(result, (&json!(false), &json!("compile"), true), "{body}");
     }
 
     /// Reads `/proc/1/environ` and lists the process directories in `/proc`. The program must
