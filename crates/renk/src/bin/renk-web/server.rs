@@ -1,7 +1,7 @@
 use std::{
     collections::BTreeMap,
     env, fs,
-    io::Read,
+    io::{Read, Seek},
     net::{IpAddr, Ipv6Addr, SocketAddr},
     path::{Component, Path, PathBuf},
     process::{Child, Command, ExitStatus, Stdio},
@@ -670,11 +670,8 @@ fn temp_run_dir() -> PathBuf {
 fn run_command(command: &str, args: &[&str], cwd: &Path, options: ChildOptions) -> CommandResult {
     let timeout = options.timeout;
     let started = Instant::now();
-    let stdout_path = temp_output_path(cwd, "stdout");
-    let stderr_path = temp_output_path(cwd, "stderr");
-    let stdout_file = fs::File::create(&stdout_path);
-    let stderr_file = fs::File::create(&stderr_path);
-    let (Ok(stdout_file), Ok(stderr_file)) = (stdout_file, stderr_file) else {
+    let outputs = (output_file(cwd, "stdout"), output_file(cwd, "stderr"));
+    let (Ok((mut stdout_file, stdout_step)), Ok((mut stderr_file, stderr_step))) = outputs else {
         return CommandResult {
             status: None,
             stdout: String::new(),
@@ -699,8 +696,8 @@ fn run_command(command: &str, args: &[&str], cwd: &Path, options: ChildOptions) 
         .args(args)
         .current_dir(cwd)
         .stdin(Stdio::null())
-        .stdout(Stdio::from(stdout_file))
-        .stderr(Stdio::from(stderr_file));
+        .stdout(Stdio::from(stdout_step))
+        .stderr(Stdio::from(stderr_step));
     configure_child_process(&mut command, cwd, options);
     let child = {
         // Keep the lock until the new step is in the list, or `reap_step` can kill it.
@@ -715,9 +712,7 @@ fn run_command(command: &str, args: &[&str], cwd: &Path, options: ChildOptions) 
     };
     let Ok(mut child) = child else {
         // A failed sandbox step writes its name to the stderr file before `spawn` fails.
-        let (step, _) = read_limited_utf8(&stderr_path, MAX_OUTPUT_BYTES);
-        let _ = fs::remove_file(stdout_path);
-        let _ = fs::remove_file(stderr_path);
+        let (step, _) = read_limited_utf8(&mut stderr_file, MAX_OUTPUT_BYTES);
         return CommandResult {
             status: None,
             stdout: String::new(),
@@ -741,10 +736,8 @@ fn run_command(command: &str, args: &[&str], cwd: &Path, options: ChildOptions) 
         thread::sleep(Duration::from_millis(10));
     }
     let status = reap_step(&mut child);
-    let (stdout, stdout_truncated) = read_limited_utf8(&stdout_path, MAX_OUTPUT_BYTES);
-    let (mut stderr, stderr_truncated) = read_limited_utf8(&stderr_path, MAX_OUTPUT_BYTES);
-    let _ = fs::remove_file(stdout_path);
-    let _ = fs::remove_file(stderr_path);
+    let (stdout, stdout_truncated) = read_limited_utf8(&mut stdout_file, MAX_OUTPUT_BYTES);
+    let (mut stderr, stderr_truncated) = read_limited_utf8(&mut stderr_file, MAX_OUTPUT_BYTES);
     match status {
         Ok(status) => CommandResult {
             status: status.code(),
@@ -775,6 +768,19 @@ fn run_command(command: &str, args: &[&str], cwd: &Path, options: ChildOptions) 
     }
 }
 
+/// Creates an output file of a step in `cwd` and removes its name at once, so the step cannot put
+/// a link in its place. Returns the handle that the server reads and the handle for the step.
+fn output_file(cwd: &Path, name: &str) -> std::io::Result<(fs::File, fs::File)> {
+    let path = temp_output_path(cwd, name);
+    let file = fs::File::options()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .open(&path)?;
+    fs::remove_file(&path)?;
+    Ok((file.try_clone()?, file))
+}
+
 fn temp_output_path(cwd: &Path, name: &str) -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -783,12 +789,13 @@ fn temp_output_path(cwd: &Path, name: &str) -> PathBuf {
     cwd.join(format!("{name}-{}-{nanos}.txt", std::process::id()))
 }
 
-fn read_limited_utf8(path: &Path, limit: usize) -> (String, bool) {
-    let Ok(mut file) = fs::File::open(path) else {
-        return (String::new(), false);
-    };
+/// Reads from the start of `file`, which the step wrote through a copy of the handle.
+fn read_limited_utf8(file: &mut fs::File, limit: usize) -> (String, bool) {
     let mut buffer = vec![0; limit.saturating_add(1)];
-    let bytes_read = file.read(&mut buffer).unwrap_or_default();
+    let bytes_read = file
+        .rewind()
+        .and_then(|()| file.read(&mut buffer))
+        .unwrap_or_default();
     let truncated = bytes_read > limit;
     buffer.truncate(bytes_read.min(limit));
     (String::from_utf8_lossy(&buffer).to_string(), truncated)
@@ -1476,17 +1483,27 @@ mod tests {
 
     #[test]
     fn limited_reads_flag_truncation_exactly_past_the_limit() {
+        use std::io::Write;
         let dir = temp_dir("limited");
-        let path = dir.join("out.txt");
-        fs::write(&path, "12345").unwrap();
-        assert_eq!(read_limited_utf8(&path, 5), ("12345".to_string(), false));
-        assert_eq!(read_limited_utf8(&path, 4), ("1234".to_string(), true));
-        fs::write(&path, "é").unwrap();
-        assert_eq!(read_limited_utf8(&path, 1), ("\u{fffd}".to_string(), true));
+        let file = |text: &str| {
+            let (file, mut step) = output_file(&dir, "out").unwrap();
+            step.write_all(text.as_bytes()).unwrap();
+            file
+        };
+        let mut digits = file("12345");
         assert_eq!(
-            read_limited_utf8(&dir.join("missing"), 4),
-            (String::new(), false)
+            read_limited_utf8(&mut digits, 5),
+            ("12345".to_string(), false)
         );
+        assert_eq!(
+            read_limited_utf8(&mut digits, 4),
+            ("1234".to_string(), true)
+        );
+        assert_eq!(
+            read_limited_utf8(&mut file("é"), 1),
+            ("\u{fffd}".to_string(), true)
+        );
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 0);
         let _ = fs::remove_dir_all(dir);
     }
 
