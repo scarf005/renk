@@ -26,7 +26,8 @@ pub fn report(name: &str, values: &[i32], tags: &[&str]) {
 }
 ```
 
-A string whose placeholders are all plain identifiers, positions, or `{}` is left as Rust. When
+A string whose placeholders are all plain identifiers, positions, or `{}` is left as Rust.
+`{self}`, `{true}`, and `{false}` are expressions and become arguments. When
 a string with an inline expression has no explicit arguments, its plain identifiers become
 arguments too, so the arguments keep the string's order.
 

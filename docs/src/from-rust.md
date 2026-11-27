@@ -10,7 +10,8 @@ renk from-rust src/lib.rs -o src/lib.rk --aggressive
 The output uses dotted paths, `[T]` generics, `fn f() -> T = expr`, inferred `;`, and
 `if c then a else b` only where the result transpiles back to the same Rust tokens. Format
 arguments that each fill one placeholder in order are inlined: `format!("{}", cli.url)` becomes
-`format!("{cli.url}")`. `::` paths become dotted paths where that reads back the same:
+`format!("{cli.url}")`. An integer argument stays positional, because `{1}` is the argument at
+position 1. `::` paths become dotted paths where that reads back the same:
 `std::env::args()` becomes `std.env.args()`, while `Config::DEFAULT.len()` keeps its `::`. A
 turbofish call becomes `name[...](`, as in `s.parse[i32]()`, and a turbofish on a CamelCase path
 becomes `Name[...]`, as in `Vec[String].new()`; other turbofish stays Rust.

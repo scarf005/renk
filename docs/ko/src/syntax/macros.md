@@ -26,7 +26,8 @@ pub fn report(name: &str, values: &[i32], tags: &[&str]) {
 }
 ```
 
-자리표시자가 모두 단순 식별자, 위치, `{}`뿐인 문자열은 Rust 그대로 둔다. 인라인 표현식이 있는
+자리표시자가 모두 단순 식별자, 위치, `{}`뿐인 문자열은 Rust 그대로 둔다. `{self}`, `{true}`,
+`{false}`는 표현식이라 인자가 된다. 인라인 표현식이 있는
 문자열에 명시적 인자가 없으면 단순 식별자도 인자가 되어, 인자가 문자열의 순서를 따른다.
 
 적용되는 매크로는 `format!`, `print!`, `println!`, `eprint!`, `eprintln!`, `write!`, `writeln!`,

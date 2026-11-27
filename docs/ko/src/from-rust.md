@@ -10,6 +10,7 @@ renk from-rust src/lib.rs -o src/lib.rk --aggressive
 출력은 다시 트랜스파일했을 때 같은 Rust 토큰이 나오는 곳에서만 점 경로, `[T]` 제네릭,
 `fn f() -> T = expr`, 추론된 `;`, `if c then a else b`를 쓴다. 각각 자리표시자 하나를 순서대로
 채우는 포맷 인자는 인라인으로 바뀐다: `format!("{}", cli.url)`은 `format!("{cli.url}")`이 된다.
+`{1}`은 1번 위치의 인자이므로 정수 인자는 위치 인자로 남는다.
 `::` 경로는 같은 의미로 읽히는 곳에서 점 경로가 된다: `std::env::args()`는 `std.env.args()`가
 되지만 `Config::DEFAULT.len()`은 `::`를 유지한다. 터보피시 호출은 `s.parse[i32]()`처럼
 `name[...](`가 되고, CamelCase 경로의 터보피시는 `Vec[String].new()`처럼 `Name[...]`가 된다.
