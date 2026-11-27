@@ -4,9 +4,27 @@ use renk::{rust_to_renk, transpile};
 // little load besides their own.
 static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-/// The fastest of three runs, so other load on the machine skews a time ratio less.
-fn fastest(run: impl Fn() -> std::time::Duration) -> std::time::Duration {
-    (0..3).map(|_| run()).min().unwrap()
+/// The fastest of three runs of each of two inputs, run in turns (short, long, short, ...). Other
+/// load on the machine then slows both inputs alike and skews a time ratio less.
+fn fastest(
+    short: impl Fn() -> std::time::Duration,
+    long: impl Fn() -> std::time::Duration,
+) -> (std::time::Duration, std::time::Duration) {
+    (0..3)
+        .map(|_| (short(), long()))
+        .reduce(|(a, b), (c, d)| (a.min(c), b.min(d)))
+        .unwrap()
+}
+
+#[test]
+fn runs_the_two_inputs_of_fastest_in_turns() {
+    let order = std::cell::RefCell::new(Vec::new());
+    let run = |input| {
+        order.borrow_mut().push(input);
+        std::time::Duration::ZERO
+    };
+    fastest(|| run("short"), || run("long"));
+    assert_eq!(*order.borrow(), ["short", "long"].repeat(3));
 }
 
 #[test]
@@ -23,7 +41,7 @@ fn long_groups_convert_in_linear_time() {
         transpile(&rust_to_renk(&rust).unwrap()).unwrap();
         start.elapsed()
     };
-    let (short, long) = (fastest(|| convert(5_000)), fastest(|| convert(20_000)));
+    let (short, long) = fastest(|| convert(5_000), || convert(20_000));
     // Four times the rows take about four times as long, not sixteen.
     assert!(long < short * 8, "{short:?} {long:?}");
 }
@@ -40,7 +58,7 @@ fn long_tables_of_raw_strings_convert_in_linear_time() {
         transpile(&rust_to_renk(&rust).unwrap()).unwrap();
         start.elapsed()
     };
-    let (short, long) = (fastest(|| convert(500)), fastest(|| convert(2_000)));
+    let (short, long) = fastest(|| convert(500), || convert(2_000));
     // Four times the rows take about four times as long, not sixteen.
     assert!(long < short * 8, "{short:?} {long:?}");
 }
@@ -59,7 +77,7 @@ fn long_block_argument_chains_convert_in_linear_time() {
         rust_to_renk(&rust).unwrap();
         start.elapsed()
     };
-    let (short, long) = (fastest(|| convert(1_000)), fastest(|| convert(4_000)));
+    let (short, long) = fastest(|| convert(1_000), || convert(4_000));
     // Four times the links take about four times as long, not sixteen.
     assert!(long < short * 8, "{short:?} {long:?}");
 }
@@ -79,7 +97,7 @@ fn long_view_chains_of_struct_literals_transpile_in_linear_time() {
         transpile(&renk).unwrap();
         start.elapsed()
     };
-    let (short, long) = (fastest(|| convert(250)), fastest(|| convert(1_000)));
+    let (short, long) = fastest(|| convert(250), || convert(1_000));
     // Four times the links take about four times as long, not sixty-four.
     assert!(long < short * 8, "{short:?} {long:?}");
 }
@@ -97,7 +115,7 @@ fn long_view_lists_of_multi_line_literals_transpile_in_linear_time() {
         transpile(&renk).unwrap();
         start.elapsed()
     };
-    let (short, long) = (fastest(|| convert(250)), fastest(|| convert(1_000)));
+    let (short, long) = fastest(|| convert(250), || convert(1_000));
     // Four times the items take about four times as long, not sixteen.
     assert!(long < short * 8, "{short:?} {long:?}");
 }
@@ -114,7 +132,7 @@ fn long_view_lines_of_keyword_tags_transpile_in_linear_time() {
         transpile(&renk).unwrap();
         start.elapsed()
     };
-    let (short, long) = (fastest(|| convert(5_000)), fastest(|| convert(20_000)));
+    let (short, long) = fastest(|| convert(5_000), || convert(20_000));
     // Four times the tags take about four times as long, not sixteen.
     assert!(long < short * 8, "{short:?} {long:?}");
 }
@@ -136,7 +154,7 @@ fn deep_closures_convert_in_time_linear_in_their_text() {
     };
     // Twice the depth is four times the indented text, so it should take about four times as
     // long, not eight; six sits between them.
-    let (short, long) = (fastest(|| convert(200)), fastest(|| convert(400)));
+    let (short, long) = fastest(|| convert(200), || convert(400));
     assert!(long < short * 6, "{short:?} {long:?}");
 }
 
@@ -158,7 +176,7 @@ fn long_view_blocks_convert_in_linear_time() {
         rust_to_renk(&rust).unwrap();
         start.elapsed()
     };
-    let (short, long) = (fastest(|| convert(50)), fastest(|| convert(200)));
+    let (short, long) = fastest(|| convert(50), || convert(200));
     // Four times the statements take about four times as long, not sixteen.
     assert!(long < short * 8, "{short:?} {long:?}");
 }
@@ -179,10 +197,7 @@ fn view_blocks_with_a_kept_last_semicolon_convert_about_as_fast_as_others() {
         rust_to_renk(&rust).unwrap();
         start.elapsed()
     };
-    let (value, statement) = (
-        fastest(|| convert("n.get()")),
-        fastest(|| convert("n.set(0);")),
-    );
+    let (value, statement) = fastest(|| convert("n.get()"), || convert("n.set(0);"));
     // The last `n.set(0);` keeps its `;`, as without it the block returns a value. Finding that
     // line takes one more lowering of the block, not one per halving of its 201 lines.
     assert!(statement < value * 2, "{value:?} {statement:?}");
@@ -213,7 +228,7 @@ fn many_view_blocks_with_colon_paths_convert_in_linear_time() {
         );
         elapsed
     };
-    let (short, long) = (fastest(|| convert(25)), fastest(|| convert(100)));
+    let (short, long) = fastest(|| convert(25), || convert(100));
     // Four times the statements take about four times as long, not sixteen.
     assert!(long < short * 8, "{short:?} {long:?}");
 }
@@ -240,9 +255,9 @@ fn long_view_bodies_of_closure_attributes_convert_in_linear_time() {
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     // Each `move |_| a` body ends at the next `,`, `;`, or closing bracket, and markup has none.
     let tag = "<b on:click=move |_| a></b>";
-    let (short, long) = (
-        fastest(|| convert_view_tags(tag, 50)),
-        fastest(|| convert_view_tags(tag, 200)),
+    let (short, long) = fastest(
+        || convert_view_tags(tag, 50),
+        || convert_view_tags(tag, 200),
     );
     // Four times the tags take about four times as long, not sixteen.
     assert!(long < short * 8, "{short:?} {long:?}");
@@ -254,9 +269,9 @@ fn long_view_bodies_of_nested_elements_convert_in_linear_time() {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let tag = "<p><i><b>x</b></i></p>";
-    let (short, long) = (
-        fastest(|| convert_view_tags(tag, 100)),
-        fastest(|| convert_view_tags(tag, 400)),
+    let (short, long) = fastest(
+        || convert_view_tags(tag, 100),
+        || convert_view_tags(tag, 400),
     );
     // Four times the tags take about four times as long, not sixteen.
     assert!(long < short * 8, "{short:?} {long:?}");
@@ -270,9 +285,9 @@ fn long_view_bodies_of_spaced_tag_ends_convert_in_linear_time() {
     // Each tag ends at the spaced `>` after its closure value, and the text after it holds a
     // bare `>`.
     let tag = "<b on:click=move |_| go() > Count > more </b>";
-    let (short, long) = (
-        fastest(|| convert_view_tags(tag, 50)),
-        fastest(|| convert_view_tags(tag, 200)),
+    let (short, long) = fastest(
+        || convert_view_tags(tag, 50),
+        || convert_view_tags(tag, 200),
     );
     // Four times the tags take about four times as long, not sixteen.
     assert!(long < short * 8, "{short:?} {long:?}");
@@ -286,9 +301,9 @@ fn long_view_bodies_of_closures_starting_with_literals_convert_in_linear_time() 
     // Each body of `move ||"a"` starts with a string. The body scan skips the string and tests
     // no index inside it, so a scan from an earlier body must find a memo past the string.
     let tag = "<b class=move ||\"a\"></b>";
-    let (short, long) = (
-        fastest(|| convert_view_tags(tag, 50)),
-        fastest(|| convert_view_tags(tag, 200)),
+    let (short, long) = fastest(
+        || convert_view_tags(tag, 50),
+        || convert_view_tags(tag, 200),
     );
     // Four times the tags take about four times as long, not sixteen.
     assert!(long < short * 8, "{short:?} {long:?}");
@@ -308,7 +323,7 @@ fn long_comment_blocks_transpile_in_linear_time() {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let convert = |lines| transpile_repeated("fn main():\n", "    // a\n", "    f()\n", lines);
-    let (short, long) = (fastest(|| convert(5_000)), fastest(|| convert(20_000)));
+    let (short, long) = fastest(|| convert(5_000), || convert(20_000));
     // Four times the lines take about four times as long, not sixteen.
     assert!(long < short * 8, "{short:?} {long:?}");
 }
@@ -331,7 +346,7 @@ fn comment_lines_inside_a_continued_line_transpile_in_linear_time() {
             lines,
         )
     };
-    let (short, long) = (fastest(|| convert(2_000)), fastest(|| convert(8_000)));
+    let (short, long) = fastest(|| convert(2_000), || convert(8_000));
     // Four times the lines take about four times as long, not sixteen.
     assert!(long < short * 8, "{short:?} {long:?}");
 }
@@ -345,7 +360,7 @@ fn closure_parameters_over_many_lines_transpile_in_linear_time() {
         let head = "fn main():\n    let f = |a: u8,\n";
         transpile_repeated(head, "        a: u8,\n", "        z: u8| z\n", lines)
     };
-    let (short, long) = (fastest(|| convert(2_000)), fastest(|| convert(8_000)));
+    let (short, long) = fastest(|| convert(2_000), || convert(8_000));
     // Four times the lines take about four times as long, not sixteen.
     assert!(long < short * 8, "{short:?} {long:?}");
 }
@@ -368,7 +383,7 @@ fn many_functions_with_wrapped_asserts_convert_in_linear_time() {
         rust_to_renk(&rust).unwrap();
         start.elapsed()
     };
-    let (short, long) = (fastest(|| convert(10)), fastest(|| convert(40)));
+    let (short, long) = fastest(|| convert(10), || convert(40));
     // Four times the functions take about four times as long, not sixteen.
     assert!(long < short * 8, "{short:?} {long:?}");
 }
@@ -384,7 +399,7 @@ fn where_clauses_over_many_lines_transpile_in_linear_time() {
         let head = format!("fn f[T](\n{})\nwhere\n", "    a: T,\n".repeat(lines));
         transpile_repeated(&head, "    T: Clone,\n", "    T: Copy:\n    ()\n", lines)
     };
-    let (short, long) = (fastest(|| convert(1_000)), fastest(|| convert(4_000)));
+    let (short, long) = fastest(|| convert(1_000), || convert(4_000));
     // Four times the lines take about four times as long, not sixteen.
     assert!(long < short * 8, "{short:?} {long:?}");
 }
@@ -398,7 +413,7 @@ fn macro_matchers_over_many_lines_transpile_in_linear_time() {
         let head = "macro_rules! m:\n    ($a:ident\n";
         transpile_repeated(head, "        $b:ident\n", "    ) => 1\n", lines)
     };
-    let (short, long) = (fastest(|| convert(1_000)), fastest(|| convert(4_000)));
+    let (short, long) = fastest(|| convert(1_000), || convert(4_000));
     // Four times the lines take about four times as long, not sixteen.
     assert!(long < short * 8, "{short:?} {long:?}");
 }
