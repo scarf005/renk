@@ -5,7 +5,7 @@
 Renk is an indentation-based syntax for [Rust](https://rust-lang.org).
 It is inspired by the post [Rust's Ugly Syntax](https://matklad.github.io/2023/01/26/rusts-ugly-syntax.html).
 
-Documentation: <https://scarf005.github.io/renk/> ([한국어](https://scarf005.github.io/renk/ko/))
+Documentation: <https://scarf005.github.io/renk/> ([한국어](https://scarf005.github.io/renk/ko/)) · [Changelog](CHANGELOG.md)
 
 > [!NOTE]
 > why this syntax?
