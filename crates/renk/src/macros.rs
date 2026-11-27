@@ -813,6 +813,7 @@ pub(crate) fn inline_format_arguments(arguments: &str, prefix: usize) -> Option<
         return None;
     }
     let content = &literal[start..end];
+    let escaped = !literal[..start].contains('r');
     let (mut inlined, mut used, mut implicit, mut explicit) = (String::new(), 0, false, false);
     let mut captured = false;
     let mut index = 0;
@@ -854,13 +855,14 @@ pub(crate) fn inline_format_arguments(arguments: &str, prefix: usize) -> Option<
         if captured {
             return None;
         }
-        inlined.push('{');
-        inlined.push_str(values.get(used)?);
-        if let Some(specifier) = specifier {
-            inlined.push(':');
-            inlined.push_str(specifier);
+        let value = values.get(used)?;
+        let placeholder = specifier.map_or(format!("{{{value}}}"), |s| format!("{{{value}:{s}}}"));
+        // Renk reads `{1}` as the argument at position 1, so move a value into the string only
+        // when its placeholder lowers back to that value.
+        if lower_format_string(&placeholder, true, escaped)?.1 != [value.clone()] {
+            return None;
         }
-        inlined.push('}');
+        inlined.push_str(&placeholder);
         used += 1;
         index = close + 1;
     }
