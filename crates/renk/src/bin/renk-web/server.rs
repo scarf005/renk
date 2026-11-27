@@ -919,7 +919,8 @@ fn enter_namespaces(setup: &NamespaceSetup) -> std::io::Result<()> {
 
 /// Mounts a new tmpfs over the directory of the run directories and binds the run directory of
 /// this step back. The working directory is the run directory, so `.` still reaches it below
-/// the tmpfs. `/` turns private first, so the mounts stay in this namespace.
+/// the tmpfs. `/` turns private first, so the mounts stay in this namespace. Then each mount
+/// turns read-only except the run directory.
 #[cfg(target_os = "linux")]
 fn hide_other_run_dirs(setup: &NamespaceSetup) -> std::io::Result<()> {
     let (run_dir, temp_dir) = (&setup.run_dir, &setup.temp_dir);
@@ -937,9 +938,41 @@ fn hide_other_run_dirs(setup: &NamespaceSetup) -> std::io::Result<()> {
     sandbox_step("make run directory", mkdir == 0)?;
     let bind = libc::MS_BIND | libc::MS_REC;
     mount_step("bind run directory", Some(c"."), run_dir, None, bind)?;
-    let read_only = libc::MS_REMOUNT | libc::MS_BIND | libc::MS_RDONLY | flags;
-    mount_step("make tmpfs read-only", None, temp_dir, None, read_only)?;
+    let read_only = libc::MOUNT_ATTR_RDONLY;
+    let recursive = libc::AT_RECURSIVE as libc::c_uint;
+    set_mount_attrs("make mounts read-only", c"/", recursive, read_only, 0)?;
+    set_mount_attrs("make run directory writable", run_dir, 0, 0, read_only)?;
     sandbox_step("chdir", unsafe { libc::chdir(run_dir.as_ptr()) } == 0)
+}
+
+/// Sets the attributes `set` and clears the attributes `clear` of the mount at `path`. With
+/// `AT_RECURSIVE`, changes each mount below it too.
+#[cfg(target_os = "linux")]
+fn set_mount_attrs(
+    step: &str,
+    path: &CStr,
+    flags: libc::c_uint,
+    set: u64,
+    clear: u64,
+) -> std::io::Result<()> {
+    let attrs = libc::mount_attr {
+        attr_set: set,
+        attr_clr: clear,
+        propagation: 0,
+        userns_fd: 0,
+    };
+    let size = std::mem::size_of::<libc::mount_attr>();
+    let changed = unsafe {
+        libc::syscall(
+            libc::SYS_mount_setattr,
+            libc::AT_FDCWD,
+            path.as_ptr(),
+            flags,
+            &attrs,
+            size,
+        )
+    };
+    sandbox_step(step, changed == 0)
 }
 
 #[cfg(target_os = "linux")]
