@@ -19,12 +19,16 @@ fn fastest(
 #[test]
 fn runs_the_two_inputs_of_fastest_in_turns() {
     let order = std::cell::RefCell::new(Vec::new());
-    let run = |input| {
-        order.borrow_mut().push(input);
-        std::time::Duration::ZERO
+    let run = |input, millis: [u64; 3]| {
+        let mut order = order.borrow_mut();
+        let turn = order.iter().filter(|&&done| done == input).count();
+        order.push(input);
+        std::time::Duration::from_millis(millis[turn])
     };
-    fastest(|| run("short"), || run("long"));
+    let times = fastest(|| run("short", [3, 1, 2]), || run("long", [6, 4, 5]));
     assert_eq!(*order.borrow(), ["short", "long"].repeat(3));
+    let ms = std::time::Duration::from_millis;
+    assert_eq!(times, (ms(1), ms(4)));
 }
 
 #[test]
