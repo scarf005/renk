@@ -1608,24 +1608,34 @@ fn rust_root(root: &Path) -> PathBuf {
 /// paths. Inside the mirror, they become members of its workspace.
 const OUTSIDE: &str = ".outside";
 
-/// Where the mirror of the workspace at `root` keeps its copy of the file at `path`.
+/// Where the mirror of the workspace at `root` keeps its copy of the file at `path`. A path in
+/// `root` whose first name starts with a dot gets one more there, so none of them is [`OUTSIDE`].
 fn mirror_path(root: &Path, path: &Path) -> PathBuf {
-    match path.strip_prefix(root) {
-        Ok(relative) => rust_root(root).join(relative),
-        Err(_) => rust_root(root).join(OUTSIDE).join(
+    let Ok(relative) = path.strip_prefix(root) else {
+        return rust_root(root).join(OUTSIDE).join(
             (path.components())
                 .filter(|component| matches!(component, Component::Normal(_)))
                 .collect::<PathBuf>(),
-        ),
+        );
+    };
+    let mut rest = relative.components();
+    match rest.next().and_then(|first| first.as_os_str().to_str()) {
+        Some(first) if first.starts_with('.') => {
+            rust_root(root).join(format!(".{first}")).join(rest)
+        }
+        _ => rust_root(root).join(relative),
     }
 }
 
 /// The file that `path` in the mirror of the workspace at `root` is a copy of.
 fn mirrored_path(root: &Path, path: &Path) -> Option<PathBuf> {
     let relative = path.strip_prefix(rust_root(root)).ok()?;
-    Some(match relative.strip_prefix(OUTSIDE) {
-        Ok(outside) => Path::new(std::path::MAIN_SEPARATOR_STR).join(outside),
-        Err(_) => root.join(relative),
+    let mut rest = relative.components();
+    let first = rest.next()?.as_os_str();
+    Some(match first.to_str() {
+        _ if first == OUTSIDE => Path::new(std::path::MAIN_SEPARATOR_STR).join(rest),
+        Some(name) if name.starts_with("..") => root.join(&name[1..]).join(rest),
+        _ => root.join(relative),
     })
 }
 
