@@ -42,5 +42,11 @@ editor from a checkout.
   `/tmp`, where snippets are compiled and run under `RENK_RUN_TIMEOUT_MS`.
 - Run requests are limited by default to 64 KiB of Rust source, 256 KiB of captured output, two
   concurrent runs, and ten runs per minute.
+- Each compile and run step gets new user, mount, PID, network, IPC and UTS namespaces. The step
+  can write only its own run directory. The server needs unprivileged user namespaces and Linux
+  5.12 or later. At startup it logs whether the namespaces work. If they do not, the server still
+  starts and each run fails. `RENK_WEB_UNSANDBOXED=1` runs code without namespaces.
+- A program can read each file that the server user can read, except the run directories of
+  other runs. Run a public server in the container.
 - Behind a Cloudflare Tunnel, put Cloudflare Access and a `/api/run` rate limit in front of the
   service.
