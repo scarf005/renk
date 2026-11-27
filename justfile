@@ -9,6 +9,10 @@ test:
 fmt-check:
     cargo fmt --all --check
 
+# Lint the workspace, the same command as CI.
+clippy:
+    cargo clippy --workspace --all-targets -- -D warnings
+
 # Run the tree-sitter grammar corpus tests.
 grammar-test:
     cd editors/zed/tree-sitter-renk && tree-sitter test
