@@ -52,5 +52,7 @@ pub fn format_args(cli: &Cli, index: usize, name: &str, out: &mut String) -> std
     if index > 9 {
         panic!("{}", 7);
     }
+    // Rust does not capture `{true}`, so Renk lowers it to an argument.
+    println!("{} {:>6}", true, false);
     Ok(())
 }
