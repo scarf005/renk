@@ -342,10 +342,12 @@ fn remove_stale_run_dirs(dir: &Path, max_age: Duration) {
 
 /// Removes a run directory in rounds, with one file descriptor at a time and no recursion.
 /// `fs::remove_dir_all` holds a file descriptor and a stack frame for each level, and a program
-/// can make a tree thousands of levels deep. Each round gives the owner full access to each
-/// directory of the first level, because a program can leave mode 0o000. Then it moves the
-/// directories in them up to the first level under new names and removes the rest. The removal
-/// stops after a round that changes nothing. Call it only when no process of the run is left,
+/// can make a tree thousands of levels deep. A program can also leave mode 0o000, so the removal
+/// gives the owner full access to each directory before it lists or moves that directory. Each
+/// round moves the directories in each first-level directory up to the first level under new
+/// names and removes the rest. The removal stops after a round that changes nothing. On a full
+/// block file system, but not on tmpfs, `fs::rename` into the run directory can fail with
+/// `ENOSPC`, and then the tree stays. Call it only when no process of the run is left,
 /// because `set_permissions` follows a link that a program puts in place of a directory.
 fn remove_run_dir(dir: &Path) {
     let full_access = || fs::Permissions::from_mode(0o700);
@@ -2135,8 +2137,11 @@ mod tests {
     /// Builds `t/t/...` with 20000 levels by moving the tree into a new directory 20000 times,
     /// because one path cannot name that many levels. Level 10000 has mode 0o000. The last level
     /// holds a link to a directory outside with mode 0o500. Removes the tree on the 2 MiB stack of
-    /// the test thread with fewer file descriptors than levels, and checks that the directory
-    /// behind the link keeps its file and its mode.
+    /// the test thread, where `fs::remove_dir_all` overflows the stack on 20000 levels. The mode
+    /// 0o000 level is deeper than a path can name, so a permission pass that walks paths stops
+    /// above it. Checks that the directory behind the link keeps its file and its mode. The test
+    /// keeps the file descriptor limit of the process, so it checks the number of open file
+    /// descriptors only where the soft limit is below 20000.
     #[test]
     fn removes_run_directories_that_hold_very_deep_trees() {
         let dir = temp_dir("deep");
