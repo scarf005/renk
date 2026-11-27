@@ -108,6 +108,15 @@ fn rust_conversion_parenthesizes_camel_case_path_value_receivers() {
 }
 
 #[test]
+fn rust_conversion_dots_paths_in_items_after_a_joined_format_string() {
+    // Inlining puts the wrapped `panic!` of `a` on fewer lines, and the other items still take
+    // their later rewrites.
+    let source = "fn z() -> u8 {\n    std::cmp::max(1, 2)\n}\n\nfn a(x: u8) {\n    panic!(\n        \"a {} \\\n         b {}\",\n        x,\n        x,\n    );\n}\n\nfn b() -> u8 {\n    std::cmp::max(1, 2)\n}\nfn c() -> u8 {\n    std::cmp::max(1, 2)\n}\n";
+    let renk = rust_to_renk(source).unwrap();
+    assert_eq!(renk.matches("std.cmp.max(1, 2)").count(), 3, "{renk}");
+}
+
+#[test]
 fn macro_attribute_and_literal_tokens_are_opaque() {
     let output = rust(
         r##"#[query(table.column, Vec<T>)]
