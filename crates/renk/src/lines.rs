@@ -1020,13 +1020,20 @@ fn opens_struct_literal(text: &str) -> bool {
     let path = &head[path_start..];
     let name = path.rsplit([':', '.']).next().unwrap_or_default();
     let header = without_visibility(text.lines().next().unwrap_or_default().trim_start());
+    // Read a strict or reserved keyword before `{`, as in `try {` or `yield {`, as a block. The
+    // raw identifier `r#try` can name a struct.
+    let keyword = !head[..path_start].ends_with("r#")
+        && [
+            "abstract", "as", "async", "await", "become", "box", "break", "const", "continue",
+            "crate", "do", "dyn", "else", "enum", "extern", "false", "final", "fn", "for", "gen",
+            "if", "impl", "in", "let", "loop", "macro", "match", "mod", "move", "mut", "override",
+            "priv", "pub", "ref", "return", "self", "static", "struct", "super", "trait", "true",
+            "try", "type", "typeof", "unsafe", "unsized", "use", "virtual", "where", "while",
+            "yield",
+        ]
+        .contains(&name);
     (name.starts_with(|character: char| character.is_ascii_uppercase())
-        || (path.starts_with(is_ident_start)
-            && name.starts_with(is_ident_start)
-            && !matches!(
-                name,
-                "async" | "break" | "const" | "else" | "loop" | "move" | "return" | "unsafe"
-            )))
+        || (path.starts_with(is_ident_start) && name.starts_with(is_ident_start) && !keyword))
         && !head[..path_start].trim_end().ends_with("->")
         && !ends_in_condition(&head[..path_start])
         && ![
