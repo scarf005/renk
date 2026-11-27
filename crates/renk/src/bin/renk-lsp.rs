@@ -201,9 +201,11 @@ impl LanguageServer for Backend {
                 rust_analyzers.push(rust_analyzer.clone());
             }
         }
+        let mut stops = tokio::task::JoinSet::new();
         for rust_analyzer in rust_analyzers {
-            rust_analyzer.stop().await;
+            stops.spawn(async move { rust_analyzer.stop().await });
         }
+        stops.join_all().await;
         Ok(())
     }
 

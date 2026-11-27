@@ -195,6 +195,29 @@ fn edits_go_on_while_a_hover_waits_for_rust_analyzer() {
     assert!(published);
 }
 
+/// The workspace and a script each have a rust-analyzer that never answers `shutdown`. Both get
+/// it before the first `exit`.
+#[test]
+fn shutdown_stops_rust_analyzers_at_the_same_time() {
+    let (dir, main) = package("lsp-shutdown");
+    let script = format!("file://{}", dir.join("tool.rk").display());
+    let (mut server, mut stdin, received) = start(&dir, ANSWERS_INITIALIZE);
+    notify(&mut stdin, "textDocument/didOpen", opened(&main, MODULE));
+    notify(&mut stdin, "textDocument/didOpen", opened(&script, SCRIPT));
+    wait_for_publishes(&received, 2);
+    let shutdown = json!({"jsonrpc": "2.0", "id": 2, "method": "shutdown", "params": null});
+    send(&mut stdin, shutdown);
+    response(&received, 2);
+    let log = fs::read_to_string(dir.join("received")).unwrap();
+    let _ = server.kill();
+    let _ = server.wait();
+    let _ = fs::remove_dir_all(&dir);
+    let stops = (log.lines())
+        .filter(|method| ["shutdown", "exit"].contains(method))
+        .collect::<Vec<_>>();
+    assert_eq!(stops, ["shutdown", "shutdown", "exit", "exit"]);
+}
+
 /// Opens a script with the first text, sends the rest as edits right away, and hovers
 /// `String.from` in `SCRIPT`, which the last text must be. The first rust-analyzer starts two
 /// seconds late, so the edits reach renk-lsp while it waits for it, and any second one would be
