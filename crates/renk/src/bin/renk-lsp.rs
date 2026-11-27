@@ -420,10 +420,11 @@ impl LanguageServer for Backend {
             .uri
             .clone();
         let position = params.text_document_position_params.position;
-        let documents = self.documents.read().await;
-        let Some(text) = documents.get(&uri) else {
+        // Not borrowed from `documents`, so edits go on while rust-analyzer answers.
+        let Some(text) = self.documents.read().await.get(&uri).cloned() else {
             return Ok(None);
         };
+        let text = &text;
 
         let mut rust_params = params.clone();
         if let Some((rust_analyzer, rust_uri, generated)) = self.rust_document(&uri, text).await
@@ -489,10 +490,11 @@ impl LanguageServer for Backend {
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
         let uri = params.text_document_position.text_document.uri.clone();
-        let documents = self.documents.read().await;
-        let Some(text) = documents.get(&uri) else {
+        // Not borrowed from `documents`, so edits go on while rust-analyzer answers.
+        let Some(text) = self.documents.read().await.get(&uri).cloned() else {
             return Ok(None);
         };
+        let text = &text;
 
         let mut rust_params = params.clone();
         if let Some((rust_analyzer, rust_uri, generated)) = self.rust_document(&uri, text).await

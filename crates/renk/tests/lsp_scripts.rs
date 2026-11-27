@@ -172,6 +172,29 @@ fn keeps_generated_rust_without_its_module_on_disk_and_out_of_the_mirror() {
     assert_eq!(mirrored, [true, false]);
 }
 
+/// A hover waits five seconds for a rust-analyzer that does not answer, and an edit sent after
+/// it must not wait for it.
+#[test]
+fn edits_go_on_while_a_hover_waits_for_rust_analyzer() {
+    let (dir, main) = package("lsp-hover-wait");
+    let (mut server, mut stdin, received) = start(&dir, ANSWERS_INITIALIZE);
+    notify(&mut stdin, "textDocument/didOpen", opened(&main, MODULE));
+    wait_for_publishes(&received, 1);
+    let at = json!({"textDocument": {"uri": main}, "position": {"line": 1, "character": 6}});
+    let hover = json!({"jsonrpc": "2.0", "id": 2, "method": "textDocument/hover", "params": at});
+    send(&mut stdin, hover);
+    let document = json!({"uri": main, "version": 2});
+    let edit = json!({"textDocument": document, "contentChanges": [{"text": MODULE}]});
+    notify(&mut stdin, "textDocument/didChange", edit);
+    // Three seconds, well before rust-analyzer's five run out.
+    let published = std::iter::from_fn(|| received.recv_timeout(Duration::from_secs(3)).ok())
+        .any(|message| message["method"] == "textDocument/publishDiagnostics");
+    let _ = server.kill();
+    let _ = server.wait();
+    let _ = fs::remove_dir_all(&dir);
+    assert!(published);
+}
+
 /// Opens a script with the first text, sends the rest as edits right away, and hovers
 /// `String.from` in `SCRIPT`, which the last text must be. The first rust-analyzer starts two
 /// seconds late, so the edits reach renk-lsp while it waits for it, and any second one would be
