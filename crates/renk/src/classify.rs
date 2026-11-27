@@ -268,11 +268,15 @@ pub(crate) fn is_let(text: &str) -> bool {
 }
 
 /// Whether `text` starts an item with a body Renk keeps as Rust, as in `default fn`,
-/// `auto trait`, or `extern crate a; fn f() {`, unlike `default const K: S = S {};`.
+/// `auto trait`, `extern "C" {`, or `extern crate a; fn f() {`, unlike
+/// `default const K: S = S {};` or `extern "C" fn f() {`.
 pub(crate) fn starts_raw_item(text: &str) -> bool {
-    let text = without_visibility(text);
+    let text = without_visibility(without_attributes(text));
     let text = text.strip_prefix("unsafe ").unwrap_or(text);
     text.starts_with("auto trait ")
+        || (text.starts_with("extern ") || text.starts_with("extern{"))
+            && !text.starts_with("extern crate ")
+            && !is_function(text)
         || text
             .strip_prefix("extern crate ")
             .and_then(|rest| rest.split_once(';'))
