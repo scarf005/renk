@@ -22,7 +22,7 @@ wasm-bindgen = "=0.2.102"
 
 [features]
 default = ["cli", "lsp", "web"]
-# The `project` and `script` modules, which read Cargo manifests and script frontmatter.
+# Adds the modules `project` and `script`, which read Cargo manifests and script frontmatter, and the function `format_source_with`.
 project-files = ["dep:similar", "dep:toml_edit"]
 cli = ["project-files", "dep:annotate-snippets", "dep:clap", "dep:libc", "dep:serde_json"]
 lsp = ["project-files", "dep:serde", "dep:serde_json", "dep:tokio", "dep:tower-lsp"]

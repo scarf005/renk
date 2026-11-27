@@ -1,7 +1,8 @@
 //! Transpiles Renk to Rust and back.
 //!
 //! The `cli`, `lsp` and `web` features build the binaries and their dependencies. To use only the
-//! library, depend on `renk = { version = "...", default-features = false }`.
+//! library, depend on `renk = { version = "...", default-features = false }`. The `project-files`
+//! feature adds the modules `project` and `script` and the function `format_source_with`.
 
 use std::fmt;
 
