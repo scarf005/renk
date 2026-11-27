@@ -2108,6 +2108,37 @@ mod tests {
         let _ = fs::remove_dir_all(dir);
     }
 
+    /// Builds `t/t/...` with 20000 levels by moving the tree into a new directory 20000 times,
+    /// because one path cannot name that many levels. Level 10000 has mode 0o000. The last level
+    /// holds a link to a directory outside with mode 0o500. Removes the tree on the 2 MiB stack of
+    /// the test thread with fewer file descriptors than levels, and checks that the directory
+    /// behind the link keeps its file and its mode.
+    #[test]
+    fn removes_run_directories_that_hold_very_deep_trees() {
+        let dir = temp_dir("deep");
+        let (tree, wrap, outside) = (dir.join("t"), dir.join("w"), dir.join("outside"));
+        fs::create_dir(&tree).unwrap();
+        fs::create_dir(&outside).unwrap();
+        fs::write(outside.join("file"), "").unwrap();
+        fs::set_permissions(&outside, fs::Permissions::from_mode(0o500)).unwrap();
+        std::os::unix::fs::symlink(&outside, tree.join("link")).unwrap();
+        for level in 0..20_000 {
+            fs::create_dir(&wrap).unwrap();
+            fs::rename(&tree, wrap.join("t")).unwrap();
+            fs::rename(&wrap, &tree).unwrap();
+            if level == 10_000 {
+                fs::set_permissions(tree.join("t"), fs::Permissions::from_mode(0)).unwrap();
+            }
+        }
+
+        remove_run_dir(&tree);
+        assert!(!tree.exists());
+        assert!(outside.join("file").exists());
+        let mode = fs::metadata(&outside).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o500);
+        remove_run_dir(&dir);
+    }
+
     #[test]
     fn default_run_deps_match_the_image() {
         let containerfile = include_str!("../../../../../Containerfile");
