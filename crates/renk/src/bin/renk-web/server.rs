@@ -1544,6 +1544,27 @@ mod tests {
         let _ = fs::remove_dir_all(dir);
     }
 
+    /// The program replaces its stdout file with a link to `/proc/self/environ`. The answer must
+    /// hold no `NAME=VALUE` pair of a server variable that the program does not get.
+    #[test]
+    fn programs_cannot_link_their_output_file_to_a_server_file() {
+        let dir = temp_dir("output-link");
+        let script = r#"for f in stdout-*.txt; do rm "$f"; ln -s /proc/self/environ "$f"; done"#;
+        let options = unsandboxed(Duration::from_secs(5));
+        let stdout = run_command("sh", &["-c", script], &dir, options).stdout;
+        let server_only = env::vars()
+            .filter(|(name, value)| !CHILD_ENV.contains(&name.as_str()) && !value.is_empty())
+            .collect::<Vec<_>>();
+        assert!(!server_only.is_empty());
+        let leaked = server_only
+            .iter()
+            .filter(|(name, value)| stdout.contains(&format!("{name}={value}")))
+            .map(|(name, _)| name)
+            .collect::<Vec<_>>();
+        assert!(leaked.is_empty(), "{leaked:?}");
+        let _ = fs::remove_dir_all(dir);
+    }
+
     /// Where user namespaces work, `readlink /proc/self/ns/net` prints another network namespace
     /// than the server's. Where they do not (some containers and sandboxes), the step fails and
     /// names the namespace step. `RENK_WEB_UNSANDBOXED=1` mode runs it in the server's namespace.
