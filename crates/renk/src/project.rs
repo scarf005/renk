@@ -315,6 +315,11 @@ fn package_files(package: &Path) -> io::Result<(Vec<PathBuf>, Vec<PathBuf>)> {
     Ok((renk, rust))
 }
 
+/// The `.rk` files of `package`, found as `package_files` does.
+pub fn renk_sources(package: &Path) -> io::Result<Vec<PathBuf>> {
+    Ok(package_files(package)?.0)
+}
+
 /// The `.rk` files of `package`, found as `package_files` does. It deletes each generated `.rs`
 /// file there that has no `.rk` file with the same stem beside it.
 pub fn sources(package: &Path) -> io::Result<Vec<PathBuf>> {

@@ -1729,7 +1729,7 @@ fn mirror_workspace(workspace: &Workspace, documents: &HashMap<Url, String>) {
         let copies = (hand_written.iter())
             .map(|path| mirror_path(root, path))
             .collect::<HashSet<_>>();
-        for path in project::sources(package).unwrap_or_default() {
+        for path in project::renk_sources(package).unwrap_or_default() {
             let rust = mirror_path(root, &path).with_extension("rs");
             kept.insert(rust.clone());
             // A hand-written file beside the module wins.
