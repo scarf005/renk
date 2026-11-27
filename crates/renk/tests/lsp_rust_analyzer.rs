@@ -451,9 +451,10 @@ fn rename_edits_every_renk_use() {
         "{prepared}"
     );
 
-    let edit = session.request(
+    let edit = session.request_until(
         "textDocument/rename",
         json!({"textDocument": {"uri": main}, "position": position(6, 13), "newName": "assist"}),
+        |edit| !edits_of(edit, &util).is_empty(),
     );
     let renamed = |range: Value| json!({"range": range, "newText": "assist"});
     assert_eq!(
