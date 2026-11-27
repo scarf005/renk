@@ -479,6 +479,12 @@ async fn handle_run_request(
             json!({ "error": format!("rust source exceeds {MAX_RUN_SOURCE_KIB} KiB run limit") }),
         );
     }
+    let Some(permit) = try_acquire(state.active_runs, state.config.max_concurrent_runs) else {
+        return json_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({ "error": "too many active runs" }),
+        );
+    };
     let max_runs = state.config.run_rate_limit_per_minute;
     if !try_run_rate_limit(state.run_rates, client.ip(), max_runs) {
         return json_response(
@@ -486,12 +492,6 @@ async fn handle_run_request(
             json!({ "error": "run rate limit exceeded" }),
         );
     }
-    let Some(permit) = try_acquire(state.active_runs, state.config.max_concurrent_runs) else {
-        return json_response(
-            StatusCode::SERVICE_UNAVAILABLE,
-            json!({ "error": "too many active runs" }),
-        );
-    };
 
     let rust = rust.to_string();
     let options = ChildOptions {
