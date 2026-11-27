@@ -1767,6 +1767,28 @@ mod tests {
         assert_eq!(result, (&json!(true), &json!("")), "{body}");
     }
 
+    /// Prints the `CapEff` and `CapBnd` lines of `/proc/self/status`. Both must be zero. With a
+    /// full bounding set, a program started by a server of uid 0 keeps every capability at
+    /// `exec` and can make its mounts writable again.
+    #[tokio::test]
+    #[ignore = "needs unprivileged user namespaces"]
+    async fn programs_hold_no_capabilities() {
+        let body = run_in_namespaces(
+            Proc::Own,
+            r#"fn main() {
+                for line in std::fs::read_to_string("/proc/self/status").unwrap().lines() {
+                    if line.starts_with("CapEff") || line.starts_with("CapBnd") {
+                        println!("{line}");
+                    }
+                }
+            }"#,
+        )
+        .await;
+        let zero = "0000000000000000";
+        let expected = format!("CapEff:\t{zero}\nCapBnd:\t{zero}\n");
+        assert_eq!(body["stdout"], json!(expected), "{body}");
+    }
+
     /// Masks `/proc` and includes `/proc/<test pid>/environ` in the program at compile time. The
     /// compile step sees the server in `/proc`, but the kernel refuses the read, because the step
     /// runs in another user namespace and has no `CAP_SYS_PTRACE` over the server.
