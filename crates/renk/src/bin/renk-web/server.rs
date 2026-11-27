@@ -16,7 +16,10 @@ use std::{
 #[cfg(target_os = "linux")]
 use std::ffi::{CStr, CString};
 #[cfg(unix)]
-use std::os::unix::process::{CommandExt, ExitStatusExt};
+use std::os::unix::{
+    fs::PermissionsExt,
+    process::{CommandExt, ExitStatusExt},
+};
 
 use axum::{
     Json, Router,
@@ -278,7 +281,7 @@ fn probe_namespaces(sandbox: Sandbox) -> std::io::Result<Sandbox> {
         ),
         Some(own) => (Proc::Own, format!("namespaces do not work ({own})")),
     };
-    let _ = fs::remove_dir_all(dir);
+    remove_run_dir(&dir);
     let mode = match sandbox {
         Sandbox::Namespaces(_) => "runs need them",
         Sandbox::Unsandboxed => "RENK_WEB_UNSANDBOXED=1 runs code without them",
@@ -334,7 +337,27 @@ fn remove_stale_run_dirs(dir: &Path, max_age: Duration) {
             .ok()
             .and_then(|modified| modified.elapsed().ok());
         if run_dir && age.is_some_and(|age| age > max_age) {
-            let _ = fs::remove_dir_all(entry.path());
+            remove_run_dir(&entry.path());
+        }
+    }
+}
+
+/// Removes a run directory. If that fails, gives the owner full access to each directory in it
+/// and tries again, because a program can leave a directory with mode 0o000. Call it only when no
+/// process of the run is left, because `set_permissions` follows a link that a program puts in
+/// place of a directory.
+fn remove_run_dir(dir: &Path) {
+    if fs::remove_dir_all(dir).is_err() {
+        allow_removal(dir);
+        let _ = fs::remove_dir_all(dir);
+    }
+}
+
+fn allow_removal(dir: &Path) {
+    let _ = fs::set_permissions(dir, fs::Permissions::from_mode(0o700));
+    for entry in fs::read_dir(dir).into_iter().flatten().flatten() {
+        if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            allow_removal(&entry.path());
         }
     }
 }
@@ -577,7 +600,7 @@ fn compile_and_run_rust(
     if compile.status != Some(0) || compile.timed_out {
         let total_ms = elapsed_ms(started);
         let compile_ms = compile.elapsed_ms;
-        let _ = fs::remove_dir_all(dir);
+        remove_run_dir(&dir);
         return Ok(RunResponse {
             result: compile,
             ok: false,
@@ -593,7 +616,7 @@ fn compile_and_run_rust(
     let compile_ms = compile.elapsed_ms;
     let run_ms = run.elapsed_ms;
     let ok = run.status == Some(0) && !run.timed_out;
-    let _ = fs::remove_dir_all(dir);
+    remove_run_dir(&dir);
     Ok(RunResponse {
         result: run,
         ok,
@@ -1281,7 +1304,7 @@ mod tests {
 
     fn temp_dir(name: &str) -> PathBuf {
         let path = env::temp_dir().join(format!("renk-web-{name}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&path);
+        remove_run_dir(&path);
         fs::create_dir_all(&path).unwrap();
         path
     }
@@ -1937,7 +1960,6 @@ mod tests {
     /// Makes `locked/inner/file` in `dir` and sets the modes 0o400, 0o500 and 0o000 from the file
     /// up. Only a `chmod` by the owner lets the owner remove them.
     fn lock_directories(dir: &Path) {
-        use std::os::unix::fs::PermissionsExt;
         let (locked, inner) = (dir.join("locked"), dir.join("locked/inner"));
         fs::create_dir_all(&inner).unwrap();
         fs::write(inner.join("file"), "").unwrap();
