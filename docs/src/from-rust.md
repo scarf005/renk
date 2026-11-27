@@ -35,5 +35,6 @@ with every feature, and for the unit tests, wherever the original builds that wa
 cargo test -p renk --test real_crates -- --ignored --nocapture
 ```
 
-The test downloads the crates from crates.io and needs a nightly toolchain for
+The test downloads the crates from crates.io. It needs the nightly toolchain that `NIGHTLY` in
+`crates/renk/tests/real_crates.rs` names, installed with `rustup toolchain install`, for
 `--emit=mir`.

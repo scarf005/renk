@@ -33,4 +33,5 @@ Renk에 들여쓰기 형태가 없는 것은 Rust 문법으로 남는다.
 cargo test -p renk --test real_crates -- --ignored --nocapture
 ```
 
-이 테스트는 crates.io에서 크레이트를 내려받으며, `--emit=mir`에 nightly 툴체인이 필요하다.
+이 테스트는 crates.io에서 크레이트를 내려받는다. `--emit=mir`에는 `crates/renk/tests/real_crates.rs`의
+`NIGHTLY`가 가리키는 nightly 툴체인이 필요하며, `rustup toolchain install`로 설치한다.
