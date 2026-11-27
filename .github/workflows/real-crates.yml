@@ -13,7 +13,7 @@ env: { CARGO_TERM_COLOR: always }
 jobs:
   real-crates:
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 32
     steps:
       - uses: actions/checkout@v7
       # The test compares the MIR that nightly emits. Keep NIGHTLY in tests/real_crates.rs equal to it.
