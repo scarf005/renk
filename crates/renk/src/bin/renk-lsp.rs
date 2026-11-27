@@ -3306,6 +3306,19 @@ mod tests {
                 "/w/shared/src/lib.rs",
                 "/w/app/target/renk/.outside/w/shared/src/lib.rs",
             ),
+            (
+                "/w/app/.outside/w/shared/src/lib.rs",
+                "/w/app/target/renk/..outside/w/shared/src/lib.rs",
+            ),
+            (
+                "/w/app/..outside/src/lib.rs",
+                "/w/app/target/renk/...outside/src/lib.rs",
+            ),
+            (
+                "/.outside/lib.rs",
+                "/w/app/target/renk/.outside/.outside/lib.rs",
+            ),
+            ("/w/app/src/.hidden.rs", "/w/app/target/renk/src/.hidden.rs"),
         ] {
             assert_eq!(mirror_path(root, Path::new(path)), Path::new(copy));
             assert_eq!(
