@@ -45,8 +45,9 @@ editor from a checkout.
 - Each compile and run step gets new user, mount, PID, network, IPC and UTS namespaces. The step
   can write only its own run directory. The server needs unprivileged user namespaces and Linux
   5.12 or later. At startup it runs `rustc --version` in a step and logs whether the step worked.
-  A missing `rustc` gives the same log line as namespaces that do not work. If the step fails,
-  the server still starts and each run fails. `RENK_WEB_UNSANDBOXED=1` runs code without
+  If the step fails, the log line starts with `renk-web: namespaces do not work` and holds the
+  error text of the step. A missing `rustc` is logged in the same way. The server starts in each
+  case. Runs fail while the namespaces do not work. `RENK_WEB_UNSANDBOXED=1` runs code without
   namespaces.
 - A program can read each file that the server user can read, except the files in the temp
   directory (`TMPDIR`, usually `/tmp`). A step sees only its own run directory there, so the
