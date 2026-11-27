@@ -39,6 +39,17 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --workspace --all-targets -- -D warnings
 
+  features:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install stable --profile minimal
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check -p renk --no-default-features --lib
+      - run: cargo check -p renk --no-default-features --features cli --bin renk
+      - run: cargo check -p renk --no-default-features --features lsp --bin renk-lsp
+      - run: cargo check -p renk --no-default-features --features web --bin renk-web
+
   cross-check:
     runs-on: ubuntu-latest
     strategy:
