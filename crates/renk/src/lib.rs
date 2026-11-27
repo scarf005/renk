@@ -1,3 +1,8 @@
+//! Transpiles Renk to Rust and back.
+//!
+//! The `cli`, `lsp` and `web` features build the binaries and their dependencies. To use only the
+//! library, depend on `renk = { version = "...", default-features = false }`.
+
 use std::{cell::RefCell, fmt};
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "project-files"))]
