@@ -44,12 +44,16 @@ editor from a checkout.
   concurrent runs, and ten runs per minute.
 - Each compile and run step gets new user, mount, PID, network, IPC and UTS namespaces. The step
   can write only its own run directory. The server needs unprivileged user namespaces and Linux
-  5.12 or later. At startup it logs whether the namespaces work. If they do not, the server still
-  starts and each run fails. `RENK_WEB_UNSANDBOXED=1` runs code without namespaces.
-- A program can read each file that the server user can read, except the run directories of
-  other runs. It can also connect to each Unix socket with a path that the server user can
-  connect to, such as `/run/user/<uid>/bus`, and write to each device node that the server user
-  can write to. The network namespace hides only the network and abstract sockets. Run a public
-  server in the container.
+  5.12 or later. At startup it runs `rustc --version` in a step and logs whether the step worked.
+  A missing `rustc` gives the same log line as namespaces that do not work. If the step fails,
+  the server still starts and each run fails. `RENK_WEB_UNSANDBOXED=1` runs code without
+  namespaces.
+- A program can read each file that the server user can read, except the files in the temp
+  directory (`TMPDIR`, usually `/tmp`). A step sees only its own run directory there, so the
+  other files and Unix sockets in the temp directory are hidden from it. It can also connect to
+  each Unix socket with a path that the server user can connect to, such as
+  `/run/user/<uid>/bus`, and write to each device node that the server user can write to. The
+  network namespace hides only the network and abstract sockets. Run a public server in the
+  container.
 - Behind a Cloudflare Tunnel, put Cloudflare Access and a `/api/run` rate limit in front of the
   service.
