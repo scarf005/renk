@@ -49,6 +49,7 @@
 - `renk from-rust` and `renk fmt` keep an integer format argument positional, as in `println!("{}", 1)`, because Rust reads `{1}` as a position. `{true}` and `{false}` in a format string become arguments.
 - Rust attributes keep their tokens when converted to Renk.
 - `renk from-rust` keeps the closing `}` of an `extern` block, and `renk transpile` no longer writes `};` after the block.
+- `renk from-rust` writes `std.cmp.max` and the other Renk forms in every item of a file, also after it puts a wrapped format string of one item on fewer lines.
 - `renk-lsp` accepts any-case `Content-Length` headers and reads bodies as they arrive.
 - `renk-lsp` maps completions, symbols and positions at the end of a line to Renk text.
 - `renk-lsp` mirrors the workspace that `renk::project` finds for each file.

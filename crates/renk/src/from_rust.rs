@@ -391,6 +391,7 @@ fn idiomatic_renk(lines: Vec<String>, aggressive: bool) -> Vec<String> {
         |lines| line_rewrites(lines, |line| view_blocks_as_renk(line, true)),
     ];
     let rewrite = |by_items: bool| {
+        let mut expected = expected.clone();
         passes
             .iter()
             .enumerate()
@@ -399,6 +400,7 @@ fn idiomatic_renk(lines: Vec<String>, aggressive: bool) -> Vec<String> {
                 let mut items = Items::new(&lines, &rewrites, by_items);
                 let (mut accepted, rejected) =
                     equivalent_rewrites(&lines, rewrites, &expected, &mut items);
+                let mut by_tokens = false;
                 // Inlining rejoins wrapped format invocations, so that pass is also checked by
                 // tokens.
                 if (aggressive || index == 1) && expected_tokens.is_some() {
@@ -406,10 +408,17 @@ fn idiomatic_renk(lines: Vec<String>, aggressive: bool) -> Vec<String> {
                         if items.keeps_tokens(&lines, &accepted, &rewrite, &expected_tokens) {
                             let at = accepted.partition_point(|kept| kept.start < rewrite.start);
                             accepted.insert(at, rewrite);
+                            by_tokens = true;
                         }
                     }
                 }
-                apply_rewrites(&lines, &accepted).0
+                let lines = apply_rewrites(&lines, &accepted).0;
+                // A rewrite kept by its tokens changes the Rust text, so the next passes compare
+                // with the Rust of these lines, and a difference in one item stays in that item.
+                if by_tokens && let Ok(output) = transpile_file(&lines) {
+                    expected = canonical_format_macros(&output.rust);
+                }
+                lines
             })
     };
     #[cfg(test)]
