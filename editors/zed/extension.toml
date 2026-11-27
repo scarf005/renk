@@ -1,7 +1,7 @@
 id = "renk"
 name = "Renk"
 description = "Renk language support."
-version = "0.1.0"
+version = "0.2.0"
 schema_version = 1
 authors = ["scarf005"]
 languages = ["languages/renk"]
@@ -16,5 +16,5 @@ languages = ["Renk"]
 
 [grammars.renk]
 repository = "https://github.com/scarf005/renk"
-rev = "19ec887926c5cf07eb4ef6be287fb934bfbf6d3c"
+rev = "bc5058a6ecdfe259bb55f3a8284fb555362cc1b1"
 path = "editors/zed/tree-sitter-renk"
