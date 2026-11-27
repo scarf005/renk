@@ -2197,6 +2197,23 @@ mod tests {
         assert!(!try_run_rate_limit(&rates, address("192.0.2.1"), 1));
     }
 
+    /// The test holds the only run permit, so the first valid run gets 503. The quota is 1 run per
+    /// minute. The second run must pass the rate limit and get 500, because `trpl` is missing.
+    #[tokio::test]
+    async fn busy_answers_use_no_run_quota() {
+        let dist = temp_dir("busy");
+        let state = state(&dist, 1);
+        let permit = try_acquire(state.active_runs, 1);
+        let app = router(state);
+        let valid = r#"{"rust": "fn main() {}"}"#.to_string();
+        let (status, _, _) = send(&app, run(valid.clone())).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        drop(permit);
+        let (status, _, _) = send(&app, run(valid)).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        let _ = fs::remove_dir_all(dist);
+    }
+
     /// The first request times out after 100 ms while its program sleeps until the 1 s run
     /// timeout. The second request must not start a run before the first program is gone.
     #[tokio::test]
