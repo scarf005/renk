@@ -21,7 +21,7 @@
 - `renk fmt --check` names a file with a byte order mark or CRLF line endings.
 - `renk script` stops with `tool.rk:LINE: message` on an invalid frontmatter manifest.
 - A relative `path` dependency in a script's frontmatter resolves from the script's directory.
-- The `renk` crate has the features `cli`, `lsp` and `web`, all on by default. Use `default-features = false` to depend on the library alone.
+- The `renk` crate has the features `cli`, `lsp`, `web` and `project-files`. The first three are on by default, and `cli` and `lsp` turn on `project-files`, which adds the `project` and `script` modules. Use `default-features = false` to depend on the library alone.
 - `renk::rustfmt` and the `renk::project` module are public.
 - `renk-lsp` answers signature help, document highlights and semantic tokens through `rust-analyzer`.
 - `renk-lsp` formats documents as `renk fmt --write` does, and watches `.rk` files for changes and deletions.
