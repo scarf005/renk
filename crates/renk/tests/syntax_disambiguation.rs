@@ -155,6 +155,19 @@ fn rust_attributes_keep_rust_tokens_in_renk() {
 }
 
 #[test]
+fn rust_conversion_keeps_extern_blocks_of_older_editions() {
+    // Edition 2024 rejects these forms, so the compiled corpus has only `unsafe extern`.
+    for block in [
+        "extern \"C\" {\n    fn abs(value: i32) -> i32;\n}\n",
+        "extern {\n    fn abs(value: i32) -> i32;\n}\n",
+        "extern \"C\" { fn abs(value: i32) -> i32; }\n",
+    ] {
+        let renk = rust_to_renk(block).unwrap();
+        assert_eq!(rust(&renk), block, "via Renk:\n{renk}");
+    }
+}
+
+#[test]
 fn macros_under_a_crate_path_keep_their_arguments() {
     // `defmt::write!` takes its own format syntax, so its arguments stay as written;
     // `std::write!` and `::core::write!` are the std macros.

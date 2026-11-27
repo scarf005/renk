@@ -98,6 +98,10 @@ const CORPUS: &[(&str, &str)] = &[
         include_str!("rust_corpus/qualified_turbofish.rs"),
     ),
     ("pipe_arms", include_str!("rust_corpus/pipe_arms.rs")),
+    (
+        "extern_blocks",
+        include_str!("rust_corpus/extern_blocks.rs"),
+    ),
 ];
 
 const RENK_CORPUS: &[(&str, &str)] = &[
