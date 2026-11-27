@@ -1,0 +1,20 @@
+#[allow(non_camel_case_types)]
+pub struct trying:
+    pub a: i32
+
+#[allow(non_camel_case_types)]
+pub struct r#try:
+    pub a: i32
+
+pub fn names() -> i32:
+    let one = trying { a: 1 }
+    let raw = r#try { a: 2 }
+    let many = trying {
+        a: 3,
+    }
+    let raw_many = r#try {
+        a: 4,
+    }
+    // trying {
+    let text = "r#try {"
+    one.a + raw.a + many.a + raw_many.a + text.len() as i32

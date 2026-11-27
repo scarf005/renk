@@ -142,6 +142,10 @@ const RENK_CORPUS: &[(&str, &str)] = &[
     ),
     ("index_calls", include_str!("renk_corpus/index_calls.rk")),
     ("root_macros", include_str!("renk_corpus/root_macros.rk")),
+    (
+        "keyword_names",
+        include_str!("renk_corpus/keyword_names.rk"),
+    ),
 ];
 
 #[test]

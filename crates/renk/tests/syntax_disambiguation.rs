@@ -1067,6 +1067,25 @@ fn statics_are_values() {
 }
 
 #[test]
+fn statements_in_keyword_blocks_end_with_semicolons() {
+    for head in [
+        "let x = try",
+        "let x = gen",
+        "let x = async gen",
+        "let x = box",
+        "let x = do",
+        "let x = in",
+        "yield",
+        "become",
+    ] {
+        let output = rust(&format!(
+            "fn main():\n    {head} {{\n        let y = f()\n        g(y)\n    }}\n"
+        ));
+        assert_lines(&output, &["        let y = f();\n        g(y)\n    };"]);
+    }
+}
+
+#[test]
 fn closure_parameters_in_std_macros_lower_their_types() {
     let output = rust("fn f():\n    let v = vec![|a: u8, b: Vec[u8]| b.len()]\n");
     assert_lines(&output, &["vec![|a: u8, b: Vec<u8>| b.len()]"]);
