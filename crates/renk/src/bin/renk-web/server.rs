@@ -1912,8 +1912,43 @@ mod tests {
         assert!(stopped.is_ok(), "no shutdown 5 s after SIGTERM");
     }
 
-    /// The run timeout is 5 s. Removes `renk-run-1-old`, modified 10 s ago. Keeps a fresh run
-    /// directory, an old file with the same prefix, and an old directory with another name.
+    /// The program makes the directories of `lock_directories` and prints its working directory.
+    /// The run directory must be gone after the run.
+    #[test]
+    fn runs_remove_directories_that_the_program_locked() {
+        let deps = temp_dir("locked-deps");
+        fs::write(deps.join("libtrpl-0.rlib"), "").unwrap();
+        let rust = r#"use std::{fs, os::unix::fs::PermissionsExt};
+            fn main() {
+                fs::create_dir_all("locked/inner").unwrap();
+                fs::write("locked/inner/file", "").unwrap();
+                for (path, mode) in [("locked/inner/file", 0o400), ("locked/inner", 0o500), ("locked", 0)] {
+                    fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
+                }
+                print!("{}", std::env::current_dir().unwrap().display());
+            }"#;
+        let options = unsandboxed(Duration::from_secs(10));
+        let response = compile_and_run_rust(rust, options, &deps).unwrap();
+        assert!(response.ok, "{response:?}");
+        assert!(!Path::new(&response.result.stdout).exists());
+        let _ = fs::remove_dir_all(deps);
+    }
+
+    /// Makes `locked/inner/file` in `dir` and sets the modes 0o400, 0o500 and 0o000 from the file
+    /// up. Only a `chmod` by the owner lets the owner remove them.
+    fn lock_directories(dir: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+        let (locked, inner) = (dir.join("locked"), dir.join("locked/inner"));
+        fs::create_dir_all(&inner).unwrap();
+        fs::write(inner.join("file"), "").unwrap();
+        for (path, mode) in [(inner.join("file"), 0o400), (inner, 0o500), (locked, 0)] {
+            fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
+        }
+    }
+
+    /// The run timeout is 5 s. Removes `renk-run-1-old`, modified 10 s ago, with the directories
+    /// of `lock_directories` in it. Keeps a fresh run directory, an old file with the same prefix,
+    /// and an old directory with another name.
     #[test]
     fn startup_removes_only_old_run_directories() {
         let dir = temp_dir("stale");
@@ -1925,6 +1960,7 @@ mod tests {
             fs::create_dir(path).unwrap();
         }
         fs::write(old.join("main.rs"), "").unwrap();
+        lock_directories(&old);
         fs::write(&file, "").unwrap();
         let ten_seconds_ago = SystemTime::now() - Duration::from_secs(10);
         for path in [&old, &file, &other] {
