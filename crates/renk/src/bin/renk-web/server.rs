@@ -256,8 +256,7 @@ async fn serve(listener: tokio::net::TcpListener, state: AppState) -> std::io::R
 /// step and `true` as a run step with `/proc` masked. Logs the result and gives `sandbox` the
 /// first form that worked.
 fn probe_namespaces(sandbox: Sandbox) -> std::io::Result<Sandbox> {
-    let dir = temp_run_dir();
-    fs::create_dir_all(&dir)?;
+    let dir = RunDir::create()?;
     let error = |proc, run_step, command: &str, args: &[&str]| {
         let options = ChildOptions {
             timeout: Duration::from_secs(5),
@@ -265,7 +264,7 @@ fn probe_namespaces(sandbox: Sandbox) -> std::io::Result<Sandbox> {
             max_file_bytes: COMPILE_FILE_SIZE_BYTES,
             run_step,
         };
-        let probe = run_command(command, args, &dir, options);
+        let probe = run_command(command, args, &dir.0, options);
         (probe.status != Some(0)).then(|| probe.stderr.trim().to_string())
     };
     let masked = || {
@@ -281,7 +280,6 @@ fn probe_namespaces(sandbox: Sandbox) -> std::io::Result<Sandbox> {
         ),
         Some(own) => (Proc::Own, format!("namespaces do not work ({own})")),
     };
-    remove_run_dir(&dir);
     let mode = match sandbox {
         Sandbox::Namespaces(_) => "runs need them",
         Sandbox::Unsandboxed => "RENK_WEB_UNSANDBOXED=1 runs code without them",
@@ -567,8 +565,8 @@ fn compile_and_run_rust(
     options: ChildOptions,
     run_deps: &Path,
 ) -> std::io::Result<RunResponse> {
-    let dir = temp_run_dir();
-    fs::create_dir_all(&dir)?;
+    let run_dir = RunDir::create()?;
+    let dir = &run_dir.0;
     let started = Instant::now();
     let source_path = dir.join("main.rs");
     let binary_path = dir.join("main");
@@ -596,11 +594,10 @@ fn compile_and_run_rust(
         run_step: false,
         ..options
     };
-    let compile = run_command("rustc", &compile_args, &dir, compile_options);
+    let compile = run_command("rustc", &compile_args, dir, compile_options);
     if compile.status != Some(0) || compile.timed_out {
         let total_ms = elapsed_ms(started);
         let compile_ms = compile.elapsed_ms;
-        remove_run_dir(&dir);
         return Ok(RunResponse {
             result: compile,
             ok: false,
@@ -611,12 +608,11 @@ fn compile_and_run_rust(
         });
     }
 
-    let run = run_command(binary_path.to_str().unwrap(), &[], &dir, options);
+    let run = run_command(binary_path.to_str().unwrap(), &[], dir, options);
     let total_ms = elapsed_ms(started);
     let compile_ms = compile.elapsed_ms;
     let run_ms = run.elapsed_ms;
     let ok = run.status == Some(0) && !run.timed_out;
-    remove_run_dir(&dir);
     Ok(RunResponse {
         result: run,
         ok,
@@ -682,12 +678,26 @@ fn native_dependency_dirs(run_deps: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
-fn temp_run_dir() -> PathBuf {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or_default();
-    env::temp_dir().join(format!("renk-run-{}-{nanos}", std::process::id()))
+/// A run directory in the temp directory. Dropping it removes the directory, so keep it until each
+/// step of the run has ended.
+struct RunDir(PathBuf);
+
+impl RunDir {
+    fn create() -> std::io::Result<Self> {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or_default();
+        let dir = env::temp_dir().join(format!("renk-run-{}-{nanos}", std::process::id()));
+        fs::create_dir_all(&dir)?;
+        Ok(Self(dir))
+    }
+}
+
+impl Drop for RunDir {
+    fn drop(&mut self) {
+        remove_run_dir(&self.0);
+    }
 }
 
 fn run_command(command: &str, args: &[&str], cwd: &Path, options: ChildOptions) -> CommandResult {
