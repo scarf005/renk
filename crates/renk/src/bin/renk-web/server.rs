@@ -1678,6 +1678,50 @@ mod tests {
         assert!(lines.len() == 2 && lines[0] == lines[1], "{body}");
     }
 
+    /// Creates a file in `/dev/shm` and in the target directory, which the server user can write.
+    /// The program must write neither, because only its run directory is writable.
+    #[tokio::test]
+    #[ignore = "needs unprivileged user namespaces"]
+    async fn programs_write_only_their_run_directory() {
+        let name = format!("renk-web-escape-{}", std::process::id());
+        let target = env::current_exe()
+            .unwrap()
+            .ancestors()
+            .nth(2)
+            .unwrap()
+            .join(&name);
+        let paths = [Path::new("/dev/shm").join(&name), target];
+        let rust = format!(
+            r#"fn main() {{
+                for path in {paths:?} {{
+                    if std::fs::write(path, "").is_ok() {{
+                        println!("wrote {{path}}");
+                    }}
+                }}
+            }}"#
+        );
+        let body = run_in_namespaces(Proc::Own, &rust).await;
+        for path in paths {
+            let _ = fs::remove_file(path);
+        }
+        let result = (&body["ok"], &body["stdout"]);
+        assert_eq!(result, (&json!(true), &json!("")), "{body}");
+    }
+
+    /// Masks `/proc` and includes `/proc/<test pid>/environ` in the program at compile time. The
+    /// compile step must fail, because it must not see the processes of the server.
+    #[tokio::test]
+    #[ignore = "needs unprivileged user namespaces"]
+    async fn compile_steps_cannot_read_server_processes_with_proc_hidden() {
+        let pid = std::process::id();
+        let rust = format!(
+            r#"fn main() {{ print!("{{}}", include_bytes!("/proc/{pid}/environ").len()) }}"#
+        );
+        let body = run_in_namespaces(Proc::Masked, &rust).await;
+        let result = (&body["ok"], &body["stage"]);
+        assert_eq!(result, (&json!(false), &json!("compile")), "{body}");
+    }
+
     /// Reads `/proc/1/environ` and lists the process directories in `/proc`. The program must
     /// find its own `TMPDIR` there and no process but PID 1, itself.
     #[tokio::test]
