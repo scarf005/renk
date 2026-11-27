@@ -1039,10 +1039,10 @@ fn fork_pid_one(setup: &NamespaceSetup) -> std::io::Result<()> {
         }
         unsafe { libc::close(parent) };
         let flags = libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOEXEC;
-        return match (setup.proc, setup.run_step) {
+        match (setup.proc, setup.run_step) {
             // A new `proc` shows the processes of the new PID namespace only.
             (Proc::Own, _) => {
-                mount_step("mount /proc", Some(c"proc"), c"/proc", Some(c"proc"), flags)
+                mount_step("mount /proc", Some(c"proc"), c"/proc", Some(c"proc"), flags)?
             }
             (Proc::Masked, true) => {
                 let flags = flags | libc::MS_RDONLY;
@@ -1052,10 +1052,11 @@ fn fork_pid_one(setup: &NamespaceSetup) -> std::io::Result<()> {
                     c"/proc",
                     Some(c"tmpfs"),
                     flags,
-                )
+                )?
             }
-            (Proc::Masked, false) => Ok(()),
-        };
+            (Proc::Masked, false) => {}
+        }
+        return drop_capabilities();
     }
     // `spawn` waits until every copy of its `exec` error pipe is closed. Only PID 1 calls
     // `exec`, so close the copy of this process.
@@ -1077,6 +1078,20 @@ fn fork_pid_one(setup: &NamespaceSetup) -> std::io::Result<()> {
         }
         libc::_exit(libc::WEXITSTATUS(status))
     }
+}
+
+/// Empties the capability bounding set, so the step gets no capability at `exec`. A server user
+/// of uid 0 is root in the user namespace and would keep them all. The inheritable and ambient
+/// sets are already empty, because `unshare(CLONE_NEWUSER)` clears them. The first number past
+/// the last capability gives `EINVAL`.
+#[cfg(target_os = "linux")]
+fn drop_capabilities() -> std::io::Result<()> {
+    let mut cap: libc::c_ulong = 0;
+    while unsafe { libc::prctl(libc::PR_CAPBSET_DROP, cap, 0, 0, 0) } == 0 {
+        cap += 1;
+    }
+    let past_last = std::io::Error::last_os_error().raw_os_error() == Some(libc::EINVAL);
+    sandbox_step("drop capabilities", past_last)
 }
 
 #[cfg(target_os = "linux")]
