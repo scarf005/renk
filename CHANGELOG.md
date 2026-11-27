@@ -56,7 +56,7 @@
 - `renk-lsp` drops code actions that change nothing or do not transpile back.
 - `renk-web` hides `/proc` from the run step when the container masks it.
 - `renk-web` reads program output through files it opened before the run, so a program cannot link its output to a server file such as `/proc/self/environ`.
-- `renk-web` removes run directories after a failed run and after a program locks them with `chmod 000`, so they do not fill `/tmp`. A run can write only its own directory.
+- `renk-web` removes run directories after a failed run, after a program locks them with `chmod 000`, and after a program makes a tree thousands of levels deep in them, so they do not fill `/tmp`. A run can write only its own directory.
 
 ### Performance
 

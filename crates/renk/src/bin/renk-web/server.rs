@@ -340,24 +340,48 @@ fn remove_stale_run_dirs(dir: &Path, max_age: Duration) {
     }
 }
 
-/// Removes a run directory. If that fails, gives the owner full access to each directory in it
-/// and tries again, because a program can leave a directory with mode 0o000. Call it only when no
-/// process of the run is left, because `set_permissions` follows a link that a program puts in
-/// place of a directory.
+/// Removes a run directory in rounds, with one file descriptor at a time and no recursion.
+/// `fs::remove_dir_all` holds a file descriptor and a stack frame for each level, and a program
+/// can make a tree thousands of levels deep. Each round gives the owner full access to each
+/// directory of the first level, because a program can leave mode 0o000. Then it moves the
+/// directories in them up to the first level under new names and removes the rest. The removal
+/// stops after a round that changes nothing. Call it only when no process of the run is left,
+/// because `set_permissions` follows a link that a program puts in place of a directory.
 fn remove_run_dir(dir: &Path) {
-    if fs::remove_dir_all(dir).is_err() {
-        allow_removal(dir);
-        let _ = fs::remove_dir_all(dir);
-    }
-}
-
-fn allow_removal(dir: &Path) {
-    let _ = fs::set_permissions(dir, fs::Permissions::from_mode(0o700));
-    for entry in fs::read_dir(dir).into_iter().flatten().flatten() {
-        if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
-            allow_removal(&entry.path());
+    let full_access = || fs::Permissions::from_mode(0o700);
+    let _ = fs::set_permissions(dir, full_access());
+    let mut names = 0_u64;
+    let mut changed = true;
+    while changed {
+        changed = false;
+        let entries: Vec<_> = fs::read_dir(dir).into_iter().flatten().flatten().collect();
+        for entry in entries {
+            let path = entry.path();
+            if !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                changed |= fs::remove_file(&path).is_ok();
+                continue;
+            }
+            let _ = fs::set_permissions(&path, full_access());
+            for inner in fs::read_dir(&path).into_iter().flatten().flatten() {
+                if !inner.file_type().is_ok_and(|kind| kind.is_dir()) {
+                    changed |= fs::remove_file(inner.path()).is_ok();
+                    continue;
+                }
+                // Moving a directory to another parent rewrites its `..`, so it needs write access.
+                let _ = fs::set_permissions(inner.path(), full_access());
+                let target = loop {
+                    names += 1;
+                    let target = dir.join(names.to_string());
+                    if fs::symlink_metadata(&target).is_err() {
+                        break target;
+                    }
+                };
+                changed |= fs::rename(inner.path(), target).is_ok();
+            }
+            changed |= fs::remove_dir(&path).is_ok();
         }
     }
+    let _ = fs::remove_dir(dir);
 }
 
 fn read_u64_env(name: &str, default: u64) -> u64 {
@@ -2127,7 +2151,7 @@ mod tests {
             fs::rename(&tree, wrap.join("t")).unwrap();
             fs::rename(&wrap, &tree).unwrap();
             if level == 10_000 {
-                fs::set_permissions(tree.join("t"), fs::Permissions::from_mode(0)).unwrap();
+                fs::set_permissions(tree.join("t"), fs::Permissions::from_mode(0o000)).unwrap();
             }
         }
 
