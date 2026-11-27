@@ -1957,6 +1957,27 @@ mod tests {
         let _ = fs::remove_dir_all(deps);
     }
 
+    /// The dependency directory holds no `trpl`, so the run fails before the compile step. No
+    /// `renk-run-*` directory with this source may stay in the temp directory.
+    #[test]
+    fn failed_runs_remove_their_directory() {
+        let deps = temp_dir("failed-deps");
+        let rust = format!("fn main() {{}} // failed run {}", std::process::id());
+        let options = unsandboxed(Duration::from_secs(5));
+        assert!(compile_and_run_rust(&rust, options, &deps).is_err());
+        let left = fs::read_dir(env::temp_dir())
+            .unwrap()
+            .flatten()
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with("renk-run-"))
+            .filter(|entry| {
+                fs::read_to_string(entry.path().join("main.rs")).is_ok_and(|source| source == rust)
+            })
+            .map(|entry| entry.path())
+            .collect::<Vec<_>>();
+        assert!(left.is_empty(), "{left:?}");
+        let _ = fs::remove_dir_all(deps);
+    }
+
     /// Makes `locked/inner/file` in `dir` and sets the modes 0o400, 0o500 and 0o000 from the file
     /// up. Only a `chmod` by the owner lets the owner remove them.
     fn lock_directories(dir: &Path) {
